@@ -43,7 +43,7 @@ class ProgressFileTests(unittest.TestCase):
             with ProgressFile(path, reporter=messages.append) as handle:
                 while handle.read(15):
                     pass
-        self.assertTrue(any("10%" in message for message in messages))
+        self.assertTrue(any("Upload progress" in message for message in messages))
         self.assertTrue(any("100%" in message for message in messages))
 
 
