@@ -57,6 +57,8 @@ def normalize_memory_key(line: str) -> str:
     """Normalize a memory line for de-duplication and conflict resolution."""
 
     cleaned = re.sub(r"^[-*+]\s+", "", line.strip())
+    if ":" in cleaned:
+        cleaned = cleaned.split(":", 1)[0]
     return re.sub(r"\s+", " ", cleaned).lower()
 
 
