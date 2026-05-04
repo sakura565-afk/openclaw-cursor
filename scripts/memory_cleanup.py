@@ -1,593 +1,549 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
 import json
 import re
-import shutil
 import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
+from typing import Iterable, Sequence
 
 
-HEADING_RE = re.compile(r"^#{2,6}\s+")
-DATE_LINE_RE = re.compile(
-    r"(?im)^\s*(?:last\s*updated|updated|created|date)\s*[:=]\s*(\d{4}-\d{2}-\d{2})\s*$"
+RESET = "\033[0m"
+RED = "\033[31m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+BLUE = "\033[34m"
+CYAN = "\033[36m"
+
+DATE_METADATA_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:last\s+updated|updated|created|date)\s*[:\-]\s*(\d{4}-\d{2}-\d{2})\s*$",
+    re.IGNORECASE,
 )
-JSON_DATE_RE = re.compile(
-    r'(?i)"(?:last_updated|updated|created|date)"\s*:\s*"(\d{4}-\d{2}-\d{2})"'
-)
-COMMENT_DATE_RE = re.compile(
-    r"(?i)<!--\s*(?:last\s*updated|updated|created|date)\s*:\s*(\d{4}-\d{2}-\d{2})\s*-->"
-)
-FILENAME_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
-ANSI_COLORS = {
-    "red": "\033[31m",
-    "green": "\033[32m",
-    "yellow": "\033[33m",
-    "blue": "\033[34m",
-    "cyan": "\033[36m",
-    "bold": "\033[1m",
-    "reset": "\033[0m",
-}
+ANY_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+COMPACT_DATE_RE = re.compile(r"\b(\d{4})(\d{2})(\d{2})\b")
+SECTION_HEADING_RE = re.compile(r"^\s{0,3}##+\s+")
+
+
+@dataclass
+class Entry:
+    source_path: Path
+    heading_line: str
+    raw_text: str
+    body_text: str
+    last_updated: date
+    semantic_text: str
+    synthetic: bool = False
+    archived: bool = False
+    duplicate_of: str | None = None
+    merged_into: str | None = None
+    notes: list[str] = field(default_factory=list)
+
+    @property
+    def entry_id(self) -> str:
+        label = self.heading_line.strip() or "entry"
+        return f"{self.source_path.as_posix()}::{label}"
+
+    def render(self) -> str:
+        if not self.synthetic:
+            return self.raw_text.rstrip() + "\n"
+
+        blocks: list[str] = []
+        if self.heading_line.strip():
+            blocks.append(self.heading_line.rstrip())
+        blocks.append(f"Updated: {self.last_updated.isoformat()}")
+        if self.notes:
+            blocks.extend(self.notes)
+        if self.body_text.strip():
+            blocks.append("")
+            blocks.append(self.body_text.strip())
+        return "\n".join(blocks).rstrip() + "\n"
 
 
 @dataclass
 class ParsedFile:
     path: Path
     preamble: str
-    entries: list[str]
+    entries: list[Entry]
+    original_text: str
 
 
-@dataclass
-class MemoryEntry:
-    source: Path
-    index: int
-    text: str
-    updated_at: date
-    entry_id: str
-    active: bool = True
-    action: str | None = None
-    action_target: str | None = None
-    normalized: str = field(init=False)
-
-    def __post_init__(self) -> None:
-        self.refresh()
-
-    def refresh(self) -> None:
-        self.normalized = normalize_entry(self.text)
+def colorize(color: str, text: str) -> str:
+    return f"{color}{text}{RESET}"
 
 
-def colorize(text: str, color: str) -> str:
-    prefix = ANSI_COLORS.get(color, "")
-    if not prefix:
-        return text
-    return f"{prefix}{text}{ANSI_COLORS['reset']}"
+def human_bytes(size: int) -> str:
+    units = ["B", "KB", "MB", "GB"]
+    value = float(size)
+    for unit in units:
+        if value < 1024.0 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.2f} {unit}"
+        value /= 1024.0
+    return f"{int(size)} B"
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Clean up OpenClaw memory notes.")
-    parser.add_argument("--days", type=int, default=90, help="Archive threshold in days.")
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Preview cleanup without rewriting memory or archive files.",
-    )
-    parser.add_argument(
-        "--backup",
-        action="store_true",
-        help="Create backups before applying cleanup changes.",
-    )
-    return parser.parse_args(argv)
-
-
-def discover_memory_files(root: Path) -> tuple[Path | None, list[Path]]:
-    primary = root / "MEMORY.md"
-    memory_dir = root / "memory"
-    fallback_primary = memory_dir / "MEMORY.md"
-    if not primary.exists() and fallback_primary.exists():
-        primary = fallback_primary
-    if not primary.exists():
-        primary = None
-
-    files: list[Path] = []
-    if primary is not None:
-        files.append(primary)
-
-    if memory_dir.exists():
-        for path in sorted(memory_dir.rglob("*.md")):
-            if path == primary:
-                continue
-            if "archive" in path.parts:
-                continue
-            if ".backup_" in path.name:
-                continue
-            files.append(path)
-
-    return primary, files
-
-
-def load_parsed_file(path: Path) -> ParsedFile:
-    text = path.read_text(encoding="utf-8") if path.exists() else ""
-    normalized = text.replace("\r\n", "\n")
-    if not normalized.strip():
-        return ParsedFile(path=path, preamble="", entries=[])
-
-    lines = normalized.split("\n")
-    heading_indexes = [index for index, line in enumerate(lines) if HEADING_RE.match(line)]
-    if heading_indexes:
-        preamble = "\n".join(lines[: heading_indexes[0]]).strip()
-        entries: list[str] = []
-        for position, start in enumerate(heading_indexes):
-            end = heading_indexes[position + 1] if position + 1 < len(heading_indexes) else len(lines)
-            block = "\n".join(lines[start:end]).strip()
-            if block:
-                entries.append(block)
-        return ParsedFile(path=path, preamble=preamble, entries=entries)
-
-    blocks = [block.strip() for block in re.split(r"\n\s*\n+", normalized.strip()) if block.strip()]
-    return ParsedFile(path=path, preamble="", entries=blocks)
-
-
-def render_file(parsed_file: ParsedFile, entries: list[str]) -> str:
-    parts: list[str] = []
-    if parsed_file.preamble:
-        parts.append(parsed_file.preamble.strip())
-    parts.extend(entry.strip() for entry in entries if entry.strip())
-    if not parts:
-        return ""
-    return "\n\n".join(parts).strip() + "\n"
-
-
-def parse_entry_date(path: Path, text: str) -> date:
-    matches: list[date] = []
-    for pattern in (DATE_LINE_RE, JSON_DATE_RE, COMMENT_DATE_RE):
-        for raw_date in pattern.findall(text):
-            try:
-                matches.append(date.fromisoformat(raw_date))
-            except ValueError:
-                continue
-
-    if matches:
-        return max(matches)
-
-    stem_match = FILENAME_DATE_RE.search(path.stem)
-    if stem_match:
-        try:
-            return date.fromisoformat(stem_match.group(1))
-        except ValueError:
-            pass
-
-    return datetime.fromtimestamp(path.stat().st_mtime).date()
-
-
-def is_metadata_line(line: str) -> bool:
-    stripped = line.strip()
-    if not stripped:
-        return True
-    if DATE_LINE_RE.match(stripped):
-        return True
-    if JSON_DATE_RE.search(stripped):
-        return True
-    if COMMENT_DATE_RE.search(stripped):
-        return True
-    return False
-
-
-def is_heading_line(line: str) -> bool:
-    return bool(HEADING_RE.match(line.strip()))
-
-
-def content_lines(text: str) -> list[str]:
-    lines: list[str] = []
+def normalize_lines(text: str) -> list[str]:
+    cleaned: list[str] = []
     for line in text.splitlines():
         stripped = line.strip()
         if not stripped:
             continue
-        if is_metadata_line(stripped):
+        if stripped.startswith("#"):
             continue
-        if is_heading_line(stripped):
+        if DATE_METADATA_RE.match(stripped):
             continue
-        lines.append(" ".join(stripped.split()).lower())
-    return lines
+        cleaned.append(re.sub(r"\s+", " ", stripped))
+    return cleaned
 
 
-def normalize_entry(text: str) -> str:
-    normalized_lines = content_lines(text)
-    normalized = "\n".join(line for line in normalized_lines if line).strip()
-    if normalized:
-        return normalized
-    return " ".join(text.split()).lower()
+def semantic_text(text: str) -> str:
+    return "\n".join(normalize_lines(text)).strip()
 
 
-def merge_entry_texts(keeper: str, other: str) -> str:
-    keeper_lines = keeper.rstrip().splitlines()
-    existing = {
-        " ".join(line.strip().split()).lower()
-        for line in keeper_lines
-        if line.strip() and not is_metadata_line(line) and not is_heading_line(line)
-    }
+def merge_bodies(primary: str, secondary: str) -> str:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for line in normalize_lines(primary) + normalize_lines(secondary):
+        if line not in seen:
+            seen.add(line)
+            merged.append(line)
+    return "\n".join(merged).strip()
 
-    extras: list[str] = []
-    for line in other.splitlines():
-        stripped = line.strip()
-        if not stripped or is_metadata_line(line) or is_heading_line(line):
+
+def parse_date_candidate(value: str) -> date | None:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def dates_from_text(text: str) -> list[date]:
+    values: list[date] = []
+    for match in DATE_METADATA_RE.finditer(text):
+        parsed = parse_date_candidate(match.group(1))
+        if parsed is not None:
+            values.append(parsed)
+    for match in ANY_DATE_RE.finditer(text):
+        parsed = parse_date_candidate(match.group(1))
+        if parsed is not None:
+            values.append(parsed)
+    return values
+
+
+def date_from_stem(path: Path) -> date | None:
+    stem = path.stem
+    for candidate in (stem, stem.replace("_", "-")):
+        parsed = parse_date_candidate(candidate)
+        if parsed is not None:
+            return parsed
+    compact_match = COMPACT_DATE_RE.fullmatch(stem)
+    if compact_match:
+        compact = "-".join(compact_match.groups())
+        return parse_date_candidate(compact)
+    return None
+
+
+def infer_last_updated(section_text: str, path: Path) -> date:
+    matches = dates_from_text(section_text)
+    if matches:
+        return max(matches)
+    stem_date = date_from_stem(path)
+    if stem_date is not None:
+        return stem_date
+    return datetime.fromtimestamp(path.stat().st_mtime).date()
+
+
+def split_sections(text: str) -> tuple[str, list[str]]:
+    if not text.strip():
+        return "", []
+
+    lines = text.splitlines(keepends=True)
+    preamble: list[str] = []
+    sections: list[str] = []
+    current: list[str] = []
+    in_section = False
+
+    for line in lines:
+        if SECTION_HEADING_RE.match(line):
+            if in_section and current:
+                sections.append("".join(current))
+            elif not in_section and preamble:
+                pass
+            current = [line]
+            in_section = True
             continue
-        canonical = " ".join(stripped.split()).lower()
-        if canonical in existing:
-            continue
-        extras.append(line.rstrip())
-        existing.add(canonical)
 
-    if not extras:
-        return keeper.strip()
+        if in_section:
+            current.append(line)
+        else:
+            preamble.append(line)
 
-    merged = keeper.rstrip()
-    if merged:
-        merged += "\n"
-    merged += "\n".join(extras)
-    return merged.strip()
+    if in_section and current:
+        sections.append("".join(current))
+    elif not sections and not in_section and text.strip():
+        sections.append(text)
+        preamble = []
 
-
-def build_archive_filename(root: Path, source: Path, now: datetime) -> str:
-    relative_parts = list(source.relative_to(root).parts)
-    safe_parts = [part.replace(".", "_") for part in relative_parts]
-    return f"{'_'.join(safe_parts)}.archive_{now.strftime('%Y%m%d_%H%M%S')}.md"
+    return "".join(preamble), sections
 
 
-def build_archive_content(root: Path, source: Path, entries: list[MemoryEntry], today: date) -> str:
-    lines = [
-        f"# Archived entries from {source.name}",
-        "",
-        f"- Cleanup date: {today.isoformat()}",
-        f"- Original file: {source.relative_to(root).as_posix()}",
-        "",
-    ]
-    for entry in sorted(entries, key=lambda item: (item.updated_at, item.index)):
-        lines.append("## Archived entry")
-        lines.append("")
-        lines.append(f"- Last updated: {entry.updated_at.isoformat()}")
-        lines.append("")
-        lines.append(entry.text.strip())
-        lines.append("")
-    return "\n".join(lines).strip() + "\n"
+def split_heading_and_body(section: str) -> tuple[str, str]:
+    lines = section.splitlines()
+    if not lines:
+        return "", ""
+
+    first = lines[0]
+    if SECTION_HEADING_RE.match(first):
+        body_lines = [line for line in lines[1:] if not DATE_METADATA_RE.match(line.strip())]
+        body = "\n".join(body_lines).strip()
+        return first.rstrip(), body
+
+    body_lines = [line for line in lines if not DATE_METADATA_RE.match(line.strip())]
+    body = "\n".join(body_lines).strip()
+    return "", body
 
 
-def create_backup(source: Path, backup_path: Path) -> None:
-    backup_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, backup_path)
-    if not backup_path.exists():
-        raise RuntimeError(f"Backup was not created for {source}")
-    if source.read_bytes() != backup_path.read_bytes():
-        raise RuntimeError(f"Backup content mismatch for {source}")
+def parse_file(path: Path) -> ParsedFile:
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    preamble, sections = split_sections(text)
+    entries: list[Entry] = []
+    for section in sections:
+        heading_line, body_text = split_heading_and_body(section)
+        entries.append(
+            Entry(
+                source_path=path,
+                heading_line=heading_line,
+                raw_text=section,
+                body_text=body_text,
+                last_updated=infer_last_updated(section, path),
+                semantic_text=semantic_text(section),
+            )
+        )
+    return ParsedFile(path=path, preamble=preamble, entries=entries, original_text=text)
 
 
-def write_json(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+def discover_memory_files(root: Path) -> tuple[Path | None, list[Path]]:
+    root_memory = root / "MEMORY.md"
+    nested_memory = root / "memory" / "MEMORY.md"
+    main_memory = root_memory if root_memory.exists() else nested_memory if nested_memory.exists() else None
+
+    daily_dir = root / "memory"
+    daily_files: list[Path] = []
+    if daily_dir.exists():
+        for path in sorted(daily_dir.glob("*.md")):
+            if path.name == "MEMORY.md":
+                continue
+            if ".backup_" in path.name:
+                continue
+            daily_files.append(path)
+
+    return main_memory, daily_files
 
 
-def write_text(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+def rebuild_file(parsed: ParsedFile, active_entries: Iterable[Entry]) -> str:
+    pieces: list[str] = []
+    if parsed.preamble.strip():
+        pieces.append(parsed.preamble.rstrip())
+    rendered = [entry.render().rstrip() for entry in active_entries if entry.render().strip()]
+    if rendered:
+        pieces.extend(rendered)
+    if not pieces:
+        return ""
+    return "\n\n".join(pieces).rstrip() + "\n"
 
 
-def update_weekly_summary(summary_path: Path, run_summary: dict) -> None:
-    runs: list[dict] = []
-    if summary_path.exists():
-        try:
-            existing = json.loads(summary_path.read_text(encoding="utf-8"))
-            if isinstance(existing, dict) and isinstance(existing.get("runs"), list):
-                runs = existing["runs"]
-        except json.JSONDecodeError:
-            runs = []
-
-    runs.append(run_summary)
-    aggregate = {
-        "runs": len(runs),
-        "archived_entries": sum(item.get("archived_entries", 0) for item in runs),
-        "duplicates_removed": sum(item.get("duplicates_removed", 0) for item in runs),
-        "similar_entries_compacted": sum(item.get("similar_entries_compacted", 0) for item in runs),
-        "size_before": sum(item.get("size_before", 0) for item in runs),
-        "size_after": sum(item.get("size_after", 0) for item in runs),
-        "bytes_saved": sum(item.get("bytes_saved", 0) for item in runs),
-    }
-    payload = {
-        "week": run_summary["week"],
-        "updated_at": run_summary["run_at"],
-        "aggregate": aggregate,
-        "runs": runs,
-    }
-    write_json(summary_path, payload)
+def archive_path_for(root: Path, source: Path, stamp: str) -> Path:
+    archive_dir = root / "memory" / "archive"
+    safe_name = source.stem.replace("/", "_")
+    return archive_dir / f"{safe_name}_archive_{stamp}.md"
 
 
-def build_text_report(report: dict) -> str:
-    archived = ", ".join(report["archived_files"]) if report["archived_files"] else "none"
-    backups = ", ".join(report["backup_files"]) if report["backup_files"] else "none"
-    lines = [
-        f"Run at: {report['run_at']}",
-        f"Dry run: {report['dry_run']}",
-        f"Days threshold: {report['days_threshold']}",
-        f"Entries before: {report['entries_before']}",
-        f"Entries after: {report['entries_after']}",
-        f"Archived entries: {report['archived_entries']}",
-        f"Duplicates removed: {report['duplicates_removed']}",
-        f"Similar entries compacted: {report['similar_entries_compacted']}",
-        f"Source size before: {report['size_before']}",
-        f"Source size after: {report['size_after']}",
-        f"Bytes saved: {report['bytes_saved']}",
-        f"Backups: {backups}",
-        f"Archive files: {archived}",
-        "",
-        "Cleaned items:",
-    ]
-    if report["cleaned_items"]:
-        lines.extend(f"- {item}" for item in report["cleaned_items"])
-    else:
-        lines.append("- none")
-    return "\n".join(lines) + "\n"
+def ensure_unique_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    counter = 1
+    while True:
+        candidate = path.with_name(f"{path.stem}_{counter}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+        counter += 1
 
 
-def cleanup_memory(
+def backup_path_for(root: Path, path: Path, stamp: str, main_memory: Path | None) -> Path:
+    backup_root = root / "memory"
+    if main_memory is not None and path == main_memory:
+        return backup_root / f"MEMORY.md.backup_{stamp}"
+
+    relative_name = path.relative_to(root).as_posix().replace("/", "__")
+    return backup_root / "backups" / f"{relative_name}.backup_{stamp}"
+
+
+def backup_file(source: Path, destination: Path) -> bool:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    original_bytes = source.read_bytes()
+    destination.write_bytes(original_bytes)
+    return destination.exists() and destination.read_bytes() == original_bytes
+
+
+def build_weekly_summary(report: dict[str, object]) -> str:
+    return (
+        f"- Run: {report['timestamp']}\n"
+        f"- Dry run: {report['dry_run']}\n"
+        f"- Threshold: {report['days_threshold']} days\n"
+        f"- Files processed: {report['files_processed']}\n"
+        f"- Archived entries: {len(report['archived_entries'])}\n"
+        f"- Duplicates removed: {len(report['removed_duplicates'])}\n"
+        f"- Similar entries merged: {len(report['merged_entries'])}\n"
+        f"- Active size: {report['size_before_bytes']} -> {report['size_after_bytes']} bytes\n"
+    )
+
+
+def run_cleanup(
     root: Path,
     days: int = 90,
     dry_run: bool = False,
     backup: bool = False,
     today: date | None = None,
-    now: datetime | None = None,
-) -> dict:
-    today = today or date.today()
-    now = now or datetime.now()
-    primary_file, memory_files = discover_memory_files(root)
-    parsed_files = {path: load_parsed_file(path) for path in memory_files}
-    original_contents = {
-        path: path.read_text(encoding="utf-8") if path.exists() else "" for path in memory_files
-    }
+) -> dict[str, object]:
+    current_day = today or date.today()
+    timestamp = datetime.combine(current_day, datetime.min.time()).isoformat()
+    stamp = current_day.strftime("%Y%m%d")
+    cutoff = current_day - timedelta(days=days)
 
-    entries: list[MemoryEntry] = []
-    for path in memory_files:
-        parsed_file = parsed_files[path]
-        for index, entry_text in enumerate(parsed_file.entries):
-            entries.append(
-                MemoryEntry(
-                    source=path,
-                    index=index,
-                    text=entry_text.strip(),
-                    updated_at=parse_entry_date(path, entry_text),
-                    entry_id=f"{path.name}:{index}",
-                )
+    main_memory, daily_files = discover_memory_files(root)
+    target_files = [path for path in [main_memory, *daily_files] if path is not None]
+
+    parsed_files = [parse_file(path) for path in target_files]
+    all_entries: list[Entry] = [entry for parsed in parsed_files for entry in parsed.entries]
+
+    archived_entries: list[dict[str, object]] = []
+    for entry in all_entries:
+        if entry.last_updated < cutoff:
+            entry.archived = True
+            archived_entries.append(
+                {
+                    "entry_id": entry.entry_id,
+                    "source": entry.source_path.as_posix(),
+                    "updated": entry.last_updated.isoformat(),
+                }
             )
 
-    cleaned_items: list[str] = []
-    duplicates_removed = 0
-    similar_entries_compacted = 0
-    archived_entries = 0
+    active_entries = [entry for entry in all_entries if not entry.archived]
+    active_entries.sort(key=lambda item: (item.last_updated, item.entry_id), reverse=True)
 
-    groups: dict[str, list[MemoryEntry]] = {}
-    for entry in entries:
-        groups.setdefault(entry.normalized, []).append(entry)
-
-    def sort_key(item: MemoryEntry) -> tuple[date, int, str, int]:
-        return (item.updated_at, len(item.normalized), item.source.as_posix(), -item.index)
-
-    for group_entries in groups.values():
-        if len(group_entries) < 2:
+    duplicate_map: dict[str, Entry] = {}
+    removed_duplicates: list[dict[str, object]] = []
+    deduped_entries: list[Entry] = []
+    for entry in active_entries:
+        if not entry.semantic_text:
+            deduped_entries.append(entry)
             continue
-        ranked = sorted(group_entries, key=sort_key, reverse=True)
-        keeper = ranked[0]
-        for duplicate in ranked[1:]:
-            duplicate.active = False
-            duplicate.action = "duplicate_removed"
-            duplicate.action_target = keeper.entry_id
-            duplicates_removed += 1
-            cleaned_items.append(
-                f"Removed duplicate {duplicate.entry_id} from {duplicate.source.name}; kept {keeper.entry_id}"
-            )
-
-    active_entries = sorted((entry for entry in entries if entry.active), key=sort_key, reverse=True)
-    for index, keeper in enumerate(active_entries):
-        if not keeper.active:
+        existing = duplicate_map.get(entry.semantic_text)
+        if existing is None:
+            duplicate_map[entry.semantic_text] = entry
+            deduped_entries.append(entry)
             continue
-        for other in active_entries[index + 1 :]:
-            if not other.active:
-                continue
-            ratio = SequenceMatcher(
-                None,
-                "\n".join(content_lines(keeper.text)),
-                "\n".join(content_lines(other.text)),
-            ).ratio()
-            if ratio < 0.90 or keeper.normalized == other.normalized:
-                continue
-            keeper.text = merge_entry_texts(keeper.text, other.text)
-            keeper.updated_at = max(keeper.updated_at, other.updated_at)
-            keeper.refresh()
-            other.active = False
-            other.action = "similarity_compacted"
-            other.action_target = keeper.entry_id
-            similar_entries_compacted += 1
-            cleaned_items.append(
-                f"Compacted similar entry {other.entry_id} into {keeper.entry_id} ({ratio:.2%} overlap)"
-            )
-
-    archive_dir = root / "memory" / "archive"
-    archive_map: dict[Path, list[MemoryEntry]] = {}
-    threshold = timedelta(days=days)
-    for entry in entries:
-        if not entry.active:
-            continue
-        if today - entry.updated_at <= threshold:
-            continue
-        archive_map.setdefault(entry.source, []).append(entry)
-        entry.active = False
-        entry.action = "archived"
-        archived_entries += 1
-        cleaned_items.append(
-            f"Archived stale entry {entry.entry_id} from {entry.source.name} last updated {entry.updated_at.isoformat()}"
+        entry.duplicate_of = existing.entry_id
+        removed_duplicates.append(
+            {
+                "entry_id": entry.entry_id,
+                "kept": existing.entry_id,
+                "source": entry.source_path.as_posix(),
+            }
         )
 
-    final_entries_by_path: dict[Path, list[str]] = {path: [] for path in memory_files}
-    for path in memory_files:
-        file_entries = sorted(
-            (entry for entry in entries if entry.active and entry.source == path),
-            key=lambda item: item.index,
-        )
-        final_entries_by_path[path] = [entry.text for entry in file_entries]
-
-    rendered_files = {
-        path: render_file(parsed_files[path], final_entries_by_path[path]) for path in memory_files
-    }
-
-    archive_payloads: list[tuple[Path, str]] = []
-    for source, source_entries in archive_map.items():
-        archive_path = archive_dir / build_archive_filename(root, source, now)
-        archive_content = build_archive_content(root, source, source_entries, today)
-        archive_payloads.append((archive_path, archive_content))
-
-    changed_sources = {
-        path for path, rendered in rendered_files.items() if rendered != original_contents.get(path, "")
-    }
-
-    backup_paths: list[Path] = []
-    if backup and primary_file is not None and primary_file.exists():
-        backup_paths.append(root / "memory" / f"MEMORY.md.backup_{today.strftime('%Y%m%d')}")
-    for source in sorted(changed_sources, key=lambda path: path.as_posix()):
-        if primary_file is not None and source == primary_file:
+    merged_entries: list[dict[str, object]] = []
+    compacted_entries: list[Entry] = []
+    for entry in deduped_entries:
+        target: Entry | None = None
+        for candidate in compacted_entries:
+            if not entry.semantic_text or not candidate.semantic_text:
+                continue
+            overlap = SequenceMatcher(None, candidate.semantic_text, entry.semantic_text).ratio()
+            if overlap >= 0.90:
+                target = candidate
+                break
+        if target is None:
+            compacted_entries.append(entry)
             continue
-        backup_paths.append(source.with_name(f"{source.name}.backup_{today.strftime('%Y%m%d')}"))
 
+        target.body_text = merge_bodies(target.body_text, entry.body_text)
+        target.last_updated = max(target.last_updated, entry.last_updated)
+        target.semantic_text = semantic_text(target.body_text)
+        target.synthetic = True
+        if entry.heading_line and not target.heading_line:
+            target.heading_line = entry.heading_line
+        note = f"- Merged duplicate context from {entry.source_path.as_posix()}"
+        if note not in target.notes:
+            target.notes.append(note)
+        entry.merged_into = target.entry_id
+        merged_entries.append(
+            {
+                "entry_id": entry.entry_id,
+                "merged_into": target.entry_id,
+                "source": entry.source_path.as_posix(),
+            }
+        )
+
+    final_entries_by_file: dict[Path, list[Entry]] = {parsed.path: [] for parsed in parsed_files}
+    for entry in compacted_entries:
+        final_entries_by_file.setdefault(entry.source_path, []).append(entry)
+
+    size_before = sum(len(parsed.original_text.encode("utf-8")) for parsed in parsed_files)
+    rendered_by_file: dict[Path, str] = {}
+    changed_files: list[Path] = []
+    for parsed in parsed_files:
+        rendered = rebuild_file(parsed, final_entries_by_file.get(parsed.path, []))
+        rendered_by_file[parsed.path] = rendered
+        if rendered != parsed.original_text:
+            changed_files.append(parsed.path)
+    size_after = sum(len(rendered.encode("utf-8")) for rendered in rendered_by_file.values())
+
+    backups: list[str] = []
+    backup_failures: list[str] = []
     if backup:
-        backup_sources: list[tuple[Path, Path]] = []
-        seen_targets: set[Path] = set()
-        if primary_file is not None and primary_file.exists():
-            primary_backup = root / "memory" / f"MEMORY.md.backup_{today.strftime('%Y%m%d')}"
-            backup_sources.append((primary_file, primary_backup))
-            seen_targets.add(primary_backup)
-        for source in sorted(changed_sources, key=lambda path: path.as_posix()):
-            if not source.exists():
-                continue
-            backup_path = source.with_name(f"{source.name}.backup_{today.strftime('%Y%m%d')}")
-            if backup_path in seen_targets:
-                continue
-            backup_sources.append((source, backup_path))
-            seen_targets.add(backup_path)
-        for source, backup_path in backup_sources:
-            create_backup(source, backup_path)
+        for path in target_files:
+            destination = backup_path_for(root, path, stamp, main_memory)
+            if backup_file(path, destination):
+                backups.append(destination.as_posix())
+            else:
+                backup_failures.append(path.as_posix())
+
+    archive_writes: list[dict[str, object]] = []
+    archive_manifest: list[dict[str, object]] = []
+    grouped_archives: dict[Path, list[Entry]] = {}
+    for entry in all_entries:
+        if entry.archived:
+            grouped_archives.setdefault(entry.source_path, []).append(entry)
+
+    for source_path, entries in grouped_archives.items():
+        archive_target = ensure_unique_path(archive_path_for(root, source_path, stamp))
+        archive_body: list[str] = [
+            f"# Archived from {source_path.relative_to(root).as_posix()}",
+            f"Generated: {timestamp}",
+            "",
+        ]
+        for entry in entries:
+            archive_body.append(entry.render().rstrip())
+            archive_body.append("")
+        archive_text = "\n".join(archive_body).rstrip() + "\n"
+        archive_manifest.append(
+            {
+                "archive_file": archive_target.as_posix(),
+                "source": source_path.as_posix(),
+                "entries": [entry.entry_id for entry in entries],
+            }
+        )
+        archive_writes.append({"path": archive_target, "content": archive_text})
+
+    if backup and backup_failures:
+        raise RuntimeError(f"Backup verification failed for: {', '.join(backup_failures)}")
 
     if not dry_run:
-        for archive_path, archive_content in archive_payloads:
-            write_text(archive_path, archive_content)
-        for path, rendered in rendered_files.items():
-            if path not in changed_sources:
-                continue
-            write_text(path, rendered)
+        for write in archive_writes:
+            write["path"].parent.mkdir(parents=True, exist_ok=True)
+            write["path"].write_text(write["content"], encoding="utf-8")
 
-    size_before = sum(len(content.encode("utf-8")) for content in original_contents.values())
-    size_after = sum(len(rendered.encode("utf-8")) for rendered in rendered_files.values())
-    run_at = now.isoformat(timespec="seconds")
-    week = today.isocalendar()
-    week_key = f"{week.year}-W{week.week:02d}"
+        for path, rendered in rendered_by_file.items():
+            path.write_text(rendered, encoding="utf-8")
 
     logs_dir = root / "logs"
-    report_slug = now.strftime("%Y%m%d_%H%M%S")
-    report_path = logs_dir / f"cleanup_report_{report_slug}.json"
-    text_report_path = logs_dir / f"cleanup_report_{report_slug}.txt"
-    archive_manifest_path = logs_dir / f"archive_manifest_{report_slug}.json"
-    weekly_summary_path = logs_dir / f"weekly_summary_{week_key}.json"
-
-    report = {
-        "run_at": run_at,
-        "days_threshold": days,
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    report: dict[str, object] = {
+        "timestamp": timestamp,
         "dry_run": dry_run,
-        "backup_requested": backup,
-        "memory_files": [path.relative_to(root).as_posix() for path in memory_files],
-        "entries_before": len(entries),
-        "entries_after": sum(1 for entry in entries if entry.active),
+        "days_threshold": days,
+        "files_processed": len(target_files),
+        "size_before_bytes": size_before,
+        "size_after_bytes": size_after,
+        "backups": backups,
+        "changed_files": [path.as_posix() for path in changed_files],
         "archived_entries": archived_entries,
-        "duplicates_removed": duplicates_removed,
-        "similar_entries_compacted": similar_entries_compacted,
-        "size_before": size_before,
-        "size_after": size_after,
-        "bytes_saved": size_before - size_after,
-        "backup_files": [path.relative_to(root).as_posix() for path in backup_paths if path.exists()],
-        "archived_files": [path.relative_to(root).as_posix() for path, _ in archive_payloads],
-        "cleaned_items": cleaned_items,
-        "report_path": report_path.relative_to(root).as_posix(),
-        "text_report_path": text_report_path.relative_to(root).as_posix(),
-        "archive_manifest_path": archive_manifest_path.relative_to(root).as_posix(),
-        "weekly_summary_path": weekly_summary_path.relative_to(root).as_posix(),
+        "removed_duplicates": removed_duplicates,
+        "merged_entries": merged_entries,
+        "archive_files": [item["archive_file"] for item in archive_manifest],
     }
 
-    write_json(report_path, report)
-    write_text(text_report_path, build_text_report(report))
-    write_json(
-        archive_manifest_path,
-        {
-            "generated_at": run_at,
-            "dry_run": dry_run,
-            "archived_files": report["archived_files"],
-        },
-    )
-    update_weekly_summary(
-        weekly_summary_path,
-        {
-            "run_at": run_at,
-            "week": week_key,
-            "dry_run": dry_run,
-            "archived_entries": archived_entries,
-            "duplicates_removed": duplicates_removed,
-            "similar_entries_compacted": similar_entries_compacted,
-            "size_before": size_before,
-            "size_after": size_after,
-            "bytes_saved": size_before - size_after,
-            "cleaned_items": cleaned_items,
-        },
-    )
+    report_path = logs_dir / f"memory_cleanup_report_{stamp}.json"
+    report_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
 
+    archive_log_path = logs_dir / f"memory_cleanup_archives_{stamp}.json"
+    archive_log_path.write_text(json.dumps(archive_manifest, indent=2, sort_keys=True), encoding="utf-8")
+
+    weekly_summary_path = logs_dir / f"memory_cleanup_weekly_summary_{current_day.isocalendar().year}-W{current_day.isocalendar().week:02d}.md"
+    weekly_summary = build_weekly_summary(report)
+    prefix = f"# Memory cleanup summary for {current_day.isocalendar().year}-W{current_day.isocalendar().week:02d}\n\n"
+    if weekly_summary_path.exists():
+        existing = weekly_summary_path.read_text(encoding="utf-8")
+    else:
+        existing = prefix
+    if not existing.endswith("\n"):
+        existing += "\n"
+    weekly_summary_path.write_text(existing + weekly_summary + "\n", encoding="utf-8")
+
+    report["report_path"] = report_path.as_posix()
+    report["archive_log_path"] = archive_log_path.as_posix()
+    report["weekly_summary_path"] = weekly_summary_path.as_posix()
     return report
 
 
-def print_console_report(report: dict) -> None:
-    title = "OpenClaw memory cleanup"
-    print(colorize(title, "bold"))
-    print(colorize(f"Days threshold: {report['days_threshold']}", "cyan"))
-    run_mode = "DRY RUN" if report["dry_run"] else "APPLIED"
-    mode_color = "yellow" if report["dry_run"] else "green"
-    print(colorize(f"Mode: {run_mode}", mode_color))
-    print(colorize(f"Archived entries: {report['archived_entries']}", "blue"))
-    print(colorize(f"Duplicates removed: {report['duplicates_removed']}", "blue"))
-    print(colorize(f"Similar entries compacted: {report['similar_entries_compacted']}", "blue"))
-    print(colorize(f"Size before: {report['size_before']} bytes", "cyan"))
-    print(colorize(f"Size after: {report['size_after']} bytes", "cyan"))
-    print(colorize(f"Bytes saved: {report['bytes_saved']} bytes", "green"))
-    print(colorize(f"Cleanup report: {report['report_path']}", "green"))
-    print(colorize(f"Weekly summary: {report['weekly_summary_path']}", "green"))
-    if report["backup_files"]:
-        print(colorize("Backups:", "yellow"))
-        for backup_path in report["backup_files"]:
-            print(colorize(f"  - {backup_path}", "yellow"))
-    if report["archived_files"]:
-        print(colorize("Archive files:", "green"))
-        for archive_path in report["archived_files"]:
-            print(colorize(f"  - {archive_path}", "green"))
-    if report["cleaned_items"]:
-        print(colorize("Cleaned items:", "bold"))
-        for item in report["cleaned_items"]:
-            print(f"  - {item}")
+def print_report(report: dict[str, object]) -> None:
+    archived = len(report["archived_entries"])
+    duplicates = len(report["removed_duplicates"])
+    merged = len(report["merged_entries"])
+    backups = len(report["backups"])
+
+    print(colorize(CYAN, "OpenClaw memory cleanup"))
+    print(colorize(BLUE, f"  Threshold: {report['days_threshold']} days"))
+    print(colorize(BLUE, f"  Files processed: {report['files_processed']}"))
+    print(colorize(BLUE, f"  Active size: {human_bytes(int(report['size_before_bytes']))} -> {human_bytes(int(report['size_after_bytes']))}"))
+    print(colorize(YELLOW, f"  Archived stale entries: {archived}"))
+    print(colorize(YELLOW, f"  Removed exact duplicates: {duplicates}"))
+    print(colorize(YELLOW, f"  Compacted similar entries: {merged}"))
+    if backups:
+        print(colorize(GREEN, f"  Backups created: {backups}"))
+    status = "dry run complete" if report["dry_run"] else "cleanup complete"
+    print(colorize(GREEN, f"  Status: {status}"))
+    print(colorize(CYAN, f"  Report: {report['report_path']}"))
+    print(colorize(CYAN, f"  Archive log: {report['archive_log_path']}"))
+    print(colorize(CYAN, f"  Weekly summary: {report['weekly_summary_path']}"))
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-    report = cleanup_memory(
-        root=Path.cwd(),
-        days=args.days,
-        dry_run=args.dry_run,
-        backup=args.backup,
-    )
-    print_console_report(report)
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Automated memory cleanup for OpenClaw.")
+    parser.add_argument("--days", type=int, default=90, help="Archive entries older than this many days.")
+    parser.add_argument("--dry-run", action="store_true", help="Preview cleanup without changing memory files.")
+    parser.add_argument("--backup", action="store_true", help="Create verified backups before cleanup.")
+    return parser
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    root: Path | None = None,
+    today: date | None = None,
+) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    project_root = root or Path.cwd()
+    try:
+        report = run_cleanup(
+            root=project_root,
+            days=args.days,
+            dry_run=args.dry_run,
+            backup=args.backup,
+            today=today,
+        )
+    except Exception as exc:  # pragma: no cover - exercised in CLI use
+        print(colorize(RED, f"Cleanup failed: {exc}"), file=sys.stderr)
+        return 1
+
+    print_report(report)
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
