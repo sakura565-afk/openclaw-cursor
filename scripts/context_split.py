@@ -140,6 +140,15 @@ def _trim_overlap_units(
     return trimmed
 
 
+def _tail_word_overlap(text: str, max_tokens: int) -> str:
+    if max_tokens <= 0:
+        return ""
+    words = re.findall(r"\S+", normalize_text(text))
+    if not words:
+        return ""
+    return " ".join(words[-max_tokens:])
+
+
 def _split_words_into_windows(
     text: str,
     chunk_size: int,
@@ -251,6 +260,13 @@ def _pack_units_into_drafts(
                 max(0, chunk_size - unit_tokens),
                 token_counter,
             )
+            if not overlap_units and overlap_tokens > 0:
+                fallback_overlap = _tail_word_overlap(
+                    chunk_text,
+                    min(overlap_tokens, max(0, chunk_size - unit_tokens)),
+                )
+                if fallback_overlap:
+                    overlap_units = [fallback_overlap]
             current_units = list(overlap_units)
             current_tokens = _count_units(current_units, token_counter)
             current_overlap = current_tokens
