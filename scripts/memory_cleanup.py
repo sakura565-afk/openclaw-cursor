@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import shutil
 import sys
@@ -62,8 +61,6 @@ class MemoryEntry:
 
 
 def colorize(text: str, color: str) -> str:
-    if os.environ.get("NO_COLOR"):
-        return text
     prefix = ANSI_COLORS.get(color, "")
     if not prefix:
         return text
