@@ -405,7 +405,7 @@ def run_cleanup(
 
     backups: list[str] = []
     backup_failures: list[str] = []
-    if backup:
+    if backup and not dry_run:
         for path in target_files:
             destination = backup_path_for(root, path, stamp, main_memory)
             if backup_file(path, destination):
