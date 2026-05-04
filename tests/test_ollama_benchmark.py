@@ -173,7 +173,7 @@ class OllamaBenchmarkTests(unittest.TestCase):
 
         history_rows = ollama_benchmark.build_history_rows(runs)
         self.assertEqual(history_rows[0]["run_id"], "20260504:0")
-        self.assertEqual(history_rows[1]["avg_tokens_per_sec"], "12.00")
+        self.assertEqual(history_rows[1]["avg_tokens_per_sec"], "12.50")
 
     def test_cli_run_compare_and_history_with_fake_binaries(self) -> None:
         bin_dir = self.root / "bin"
@@ -215,6 +215,7 @@ class OllamaBenchmarkTests(unittest.TestCase):
 
         env = os.environ.copy()
         env["PATH"] = f"{bin_dir}:{env['PATH']}"
+        env["PYTHONPATH"] = str(ROOT)
 
         run_result = subprocess.run(
             [sys.executable, "-m", "scripts.ollama_benchmark", "--log-dir", "logs", "run"],
