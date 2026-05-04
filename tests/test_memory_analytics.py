@@ -1,6 +1,8 @@
 import importlib.util
 import io
 import json
+import os
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -11,6 +13,7 @@ from pathlib import Path
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "memory_analytics.py"
 SPEC = importlib.util.spec_from_file_location("memory_analytics", MODULE_PATH)
 memory_analytics = importlib.util.module_from_spec(SPEC)
+sys.modules["memory_analytics"] = memory_analytics
 assert SPEC.loader is not None
 SPEC.loader.exec_module(memory_analytics)
 
@@ -66,9 +69,10 @@ class MemoryAnalyticsTest(unittest.TestCase):
 
             self.assertEqual(report["summary"]["total_entries"], 6)
             self.assertEqual(report["summary"]["sections_count"], 3)
-            self.assertEqual(report["age_distribution"]["8-30 days"], 3)
-            self.assertEqual(report["age_distribution"]["31-90 days"], 2)
-            self.assertEqual(report["age_distribution"]["0-7 days"], 1)
+            self.assertEqual(report["age_distribution"]["8-30 days"], 4)
+            self.assertEqual(report["age_distribution"]["31-90 days"], 1)
+            self.assertEqual(report["age_distribution"]["0-7 days"], 0)
+            self.assertEqual(report["age_distribution"]["unknown"], 1)
             self.assertEqual(len(report["stale_entries"]), 1)
             self.assertEqual(report["stale_entries"][0]["last_mention"], "2026-01-01")
             self.assertEqual(len(report["missing_cross_references"]), 1)
@@ -103,8 +107,9 @@ class MemoryAnalyticsTest(unittest.TestCase):
             expected_json = temp_path / "logs" / f"memory_analytics_{date.today().strftime('%Y%m%d')}.json"
 
             current_dir = Path.cwd()
+            previous_no_color = os.environ.pop("NO_COLOR", None)
             try:
-                os_chdir = __import__("os").chdir
+                os_chdir = os.chdir
                 os_chdir(temp_path)
                 stdout = io.StringIO()
                 with redirect_stdout(stdout):
@@ -112,6 +117,8 @@ class MemoryAnalyticsTest(unittest.TestCase):
                         ["--input", str(memory_path), "--output", str(output_path), "--days", "45"]
                     )
             finally:
+                if previous_no_color is not None:
+                    os.environ["NO_COLOR"] = previous_no_color
                 os_chdir(current_dir)
 
             self.assertEqual(exit_code, 0)

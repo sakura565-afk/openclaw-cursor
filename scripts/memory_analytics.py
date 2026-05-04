@@ -40,6 +40,10 @@ LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+(.+?)\s*$")
 INTERNAL_LINK_RE = re.compile(r"\[[^\]]+\]\(#([^)#\s]+)\)")
 HREF_LINK_RE = re.compile(r'href=["\']#([^"\']+)["\']', re.IGNORECASE)
 EXPLICIT_ANCHOR_RE = re.compile(r'<a\s+(?:name|id)=["\']([^"\']+)["\']', re.IGNORECASE)
+ANCHOR_ONLY_LINE_RE = re.compile(
+    r'^\s*<a\s+(?:name|id)=["\'][^"\']+["\']\s*>\s*</a>\s*$',
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -248,6 +252,10 @@ def parse_memory_file(path: Path) -> dict[str, object]:
     for line_number, line in enumerate(lines, start=1):
         for match in EXPLICIT_ANCHOR_RE.finditer(line):
             explicit_anchors.add(normalize_anchor(match.group(1)))
+
+        if ANCHOR_ONLY_LINE_RE.match(line):
+            flush_entry(line_number - 1)
+            continue
 
         heading_match = HEADING_RE.match(line)
         if heading_match:
