@@ -82,14 +82,13 @@ class MemoryCleanupTests(unittest.TestCase):
         self.assertNotIn("Archive me", main_text)
 
         older_daily_text = self.read_file("memory/2026-04-28.md")
-        self.assertNotIn("Duplicate older", older_daily_text)
-        self.assertIn("Similar context", older_daily_text)
-        self.assertIn("Merged duplicate context", older_daily_text)
-        self.assertIn("Next action item ready", older_daily_text)
-        self.assertIn("Next action items ready", older_daily_text)
+        self.assertEqual("", older_daily_text)
 
         newer_daily_text = self.read_file("memory/2026-04-29.md")
-        self.assertEqual("", newer_daily_text)
+        self.assertIn("Similar context follow-up", newer_daily_text)
+        self.assertIn("Merged duplicate context", newer_daily_text)
+        self.assertIn("Next action item ready", newer_daily_text)
+        self.assertIn("Next action items ready", newer_daily_text)
 
         archive_files = sorted((self.root / "memory" / "archive").glob("*.md"))
         self.assertEqual(1, len(archive_files))
