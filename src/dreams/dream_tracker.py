@@ -11,7 +11,10 @@ CONVERSATION_PATTERN = re.compile(
     r"\b(?:we\s+)?(?:should|could|need to|idea|dream|research|implement)\b[:\-\s]*(.+)",
     re.IGNORECASE,
 )
-TODO_PATTERN = re.compile(r"\b(?:TODO|FIXME|HACK)\b[:\-\s]*(.+)", re.IGNORECASE)
+TODO_PATTERN = re.compile(
+    r"^\s*(?:[#/*-]+\s*)?(?:TODO|FIXME|HACK)\b[:\-\s]*(.+)",
+    re.IGNORECASE,
+)
 
 
 class DreamTracker:

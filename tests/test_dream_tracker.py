@@ -55,6 +55,8 @@ class DreamTrackerTests(unittest.TestCase):
         self.assertIn("Dream: A dream sync panel for operators", titles)
         self.assertIn("auto-system-pattern", sources)
         self.assertIn("auto-conversation-analysis", sources)
+        self.assertNotIn("Dream: Resolve note from dream_tracker", titles)
+        self.assertNotIn("Dream: Resolve note from test_dream_tracker", titles)
 
     def test_research_and_implement_move_dream_through_workflow(self):
         temp_dir, repo_root = self.make_repo()
