@@ -213,7 +213,8 @@ class IdeaPipeline:
 
     def _empty_status(self) -> dict:
         return {
-            "state": "not_started",
+            "pipeline_state": "not_started",
+            "current_phase": None,
             "completed_phases": [],
             "last_phase": None,
             "ready_for_pr": False,
@@ -222,11 +223,12 @@ class IdeaPipeline:
     def _pipeline_status(self, entry: dict) -> dict:
         completed_phases = [phase for phase in PHASES if phase in entry["phases"]]
         last_phase = completed_phases[-1] if completed_phases else None
-        state = "ready_for_pr" if last_phase == "pr" else (
+        pipeline_state = "ready_for_pr" if last_phase == "pr" else (
             f"{last_phase}_complete" if last_phase else "not_started"
         )
         return {
-            "state": state,
+            "pipeline_state": pipeline_state,
+            "current_phase": entry.get("current_phase"),
             "completed_phases": completed_phases,
             "last_phase": last_phase,
             "ready_for_pr": last_phase == "pr",
