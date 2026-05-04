@@ -7,7 +7,7 @@ import argparse
 import json
 import re
 import sys
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -302,7 +302,7 @@ def build_statistics(
 def analyze_memory_file(input_path: Path, threshold_days: int, today: date | None = None) -> dict[str, object]:
     """Parse and analyze a MEMORY.md file."""
     if today is None:
-        today = datetime.utcnow().date()
+        today = datetime.now(UTC).date()
     content = input_path.read_text(encoding="utf-8")
     parsed = parse_memory_content(content)
     duplicates = detect_duplicate_entries(parsed["entries"])
@@ -315,7 +315,7 @@ def analyze_memory_file(input_path: Path, threshold_days: int, today: date | Non
         today=today,
     )
     return {
-        "generated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "generated_at": datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "source_file": str(input_path),
         "statistics": statistics,
         "sections": parsed["sections"],
@@ -477,7 +477,7 @@ def main(argv: list[str] | None = None) -> int:
         print(colorize(f"Input file not found: {input_path}", ANSI_RED), file=sys.stderr)
         return 1
 
-    today = datetime.utcnow().date()
+    today = datetime.now(UTC).date()
     report = analyze_memory_file(input_path=input_path, threshold_days=args.days, today=today)
     markdown = generate_markdown_report(report)
     output_path = Path(args.output)
