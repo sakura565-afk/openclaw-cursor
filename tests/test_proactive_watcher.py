@@ -113,6 +113,11 @@ class ProactiveSkillWatcherTests(unittest.TestCase):
         env = os.environ.copy()
         env["OPENCLAW_HOME"] = str(self.openclaw_home)
         env["OPENCLAW_REPORT_DIR"] = str(self.report_dir)
+        existing_pythonpath = env.get("PYTHONPATH")
+        repo_root = str(Path(__file__).resolve().parents[1])
+        env["PYTHONPATH"] = (
+            repo_root if not existing_pythonpath else os.pathsep.join([repo_root, existing_pythonpath])
+        )
 
         result = subprocess.run(
             [sys.executable, "-m", "src.skills.proactive_watcher", "scan"],

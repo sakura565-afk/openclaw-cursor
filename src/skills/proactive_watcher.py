@@ -185,9 +185,9 @@ class ProactiveSkillWatcher:
             age = self._days_since_modified(skill)
             if skill.usage_count >= 3:
                 skill.usage_label = "frequent"
-            elif skill.usage_count == 0 and age >= 30:
+            elif age >= 30 and skill.usage_count <= 2:
                 skill.usage_label = "rare"
-            elif skill.usage_count <= 1 and age >= 14:
+            elif age >= 14 and skill.usage_count <= 1:
                 skill.usage_label = "rare"
             else:
                 skill.usage_label = "active"
