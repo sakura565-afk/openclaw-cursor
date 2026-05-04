@@ -2,62 +2,54 @@
 
 OpenClaw orchestration via Cursor Cloud Agent.
 
-## Context splitter
+## Proactive Scout
 
-`scripts/context_split.py` splits oversized contexts before sending them to a MiniMax model behind an OpenRouter-style chat completions endpoint.
+`scripts/proactive_scout.py` speculatively prepares likely follow-up requests so a later user question can be served from cache instead of starting from scratch.
 
 ### Behavior
 
-- Detects semantic boundaries using double newlines and header-like blocks.
-- Skips splitting when the estimated context size is below `100000` tokens.
-- Targets chunks of about `50000` tokens with `5000` tokens of overlap.
-- Recursively re-splits any chunk larger than `150000` tokens.
-- Queries each chunk in parallel with a `60` second timeout and one retry.
-- Synthesizes the per-chunk answers into one final answer.
+- Uses stdlib only.
+- Predicts at most 2 follow-ups from the current result.
+- Only starts speculative work after more than 15 seconds of idle time.
+- Uses a fast-model label (`openclaw-fast` by default, override with `OPENCLAW_SCOUT_MODEL`).
+- Caches prepared follow-ups for 5 minutes.
+- Supports these task families:
+  - image -> `variants`, `more`, `change_style`, `upscale`
+  - code -> `add_tests`, `optimize`, `explain`, `refactor`
+  - video -> `shorter`, `different_angle`, `change_format`
+  - analysis -> `more_details`, `what_if`, `alternatives`
 
-The return value is a JSON object with:
+### Python API
 
-- `answer`
-- `n_chunks`
-- `chunks_used`
-- `method`
-- `chunks_info`
+- `scout_check(question) -> cached_or_none`
+- `scout_predict(task_type, result) -> list`
+- `scout_run_background(predictions)`
 
-### Environment
+The cache/state directory defaults to `~/.openclaw/proactive_scout` and can be overridden with `OPENCLAW_SCOUT_DIR`.
 
-The script uses only the Python standard library and reads OpenRouter settings from environment variables by default:
+### CLI
 
-- `OPENROUTER_API_KEY`
-- `OPENROUTER_API_URL` or `OPENROUTER_BASE_URL`
-- `OPENROUTER_MODEL`
-- `OPENROUTER_SITE_URL` (optional)
-- `OPENROUTER_APP_NAME` (optional)
-
-### CLI usage
-
-Pass the context directly:
+Check whether a prepared answer is already cached:
 
 ```bash
-python -m scripts.context_split "What does this say?" "Very large context text..."
+python3 scripts/proactive_scout.py check "Can you add tests for this change?"
 ```
 
-Read the context from a file:
+Show cache, jobs, and runtime state:
 
 ```bash
-python -m scripts.context_split "What does this say?" --file path/to/context.txt
+python3 scripts/proactive_scout.py status
 ```
 
-Override the defaults when needed:
+Clear all cached speculative results:
 
 ```bash
-python -m scripts.context_split \
-  "Summarize this" \
-  --file path/to/context.txt \
-  --model minimax/minimax-m1 \
-  --chunk-size 50000 \
-  --overlap 5000 \
-  --split-threshold 100000 \
-  --recursive-limit 150000 \
-  --timeout 60
+python3 scripts/proactive_scout.py clear
+```
+
+Predict likely follow-ups and start background work when idle time is high enough:
+
+```bash
+python3 scripts/proactive_scout.py predict code "Implemented the CLI and cache layer." --idle-seconds 18
 ```
 
