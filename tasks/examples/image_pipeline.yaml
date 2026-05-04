@@ -1,0 +1,20 @@
+name: image-pipeline
+description: Normalize and optimize image assets.
+metadata:
+  owner: media-platform
+  environment: staging
+steps:
+  - name: resize
+    action: image.resize
+    parameters:
+      input_dir: ./input-images
+      output_dir: ./output-images
+      max_width: 1280
+  - name: optimize
+    action: image.optimize
+    parameters:
+      quality: 85
+  - name: publish
+    action: storage.publish
+    parameters:
+      target: local-artifacts
