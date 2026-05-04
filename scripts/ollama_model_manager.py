@@ -369,9 +369,9 @@ def update_pull_metrics(
     state: dict[str, dict[str, float]],
     now: float | None = None,
 ) -> PullProgress:
-    now = time.monotonic() if now is None else now
     if not progress.digest or progress.completed is None:
         return progress
+    now = time.monotonic() if now is None else now
 
     previous = state.get(progress.digest)
     if progress.speed_bps is None and previous is not None:
@@ -444,13 +444,13 @@ def run_ollama_command(arguments: list[str]) -> subprocess.CompletedProcess[str]
 
 
 def get_disk_space(path: Path) -> tuple[str, list[list[str]], bool]:
-    usage = shutil.disk_usage(path)
+    total, used, free = shutil.disk_usage(path)
     rows = [
-        ["Total", format_bytes(usage.total)],
-        ["Used", format_bytes(usage.used)],
-        ["Free", colorize(format_bytes(usage.free), "yellow" if usage.free < TEN_GIB else "green")],
+        ["Total", format_bytes(total)],
+        ["Used", format_bytes(used)],
+        ["Free", colorize(format_bytes(free), "yellow" if free < TEN_GIB else "green")],
     ]
-    warning = usage.free < TEN_GIB
+    warning = free < TEN_GIB
     return render_table(["Metric", "Value"], rows), rows, warning
 
 

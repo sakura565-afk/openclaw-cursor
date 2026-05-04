@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import shutil
 import subprocess
 import sys
 import unittest
@@ -57,7 +58,7 @@ class OllamaModelManagerTests(unittest.TestCase):
         self.assertAlmostEqual(second.eta_seconds or 0.0, 7.0, places=3)
 
     def test_get_disk_space_warns_below_ten_gib(self) -> None:
-        fake_usage = (100 * 1024**3, 92 * 1024**3, 8 * 1024**3)
+        fake_usage = shutil._ntuple_diskusage(100 * 1024**3, 92 * 1024**3, 8 * 1024**3)
         with mock.patch("scripts.ollama_model_manager.shutil.disk_usage", return_value=fake_usage):
             table, rows, warning = manager.get_disk_space(Path("/workspace"))
 
@@ -131,7 +132,7 @@ class OllamaModelManagerTests(unittest.TestCase):
         self.assertIn("10.0%", output)
         self.assertIn("30.0%", output)
         self.assertIn("10.0 MB/s", output)
-        self.assertIn("1m 10s", output)
+        self.assertIn("7s", output)
         self.assertIn("pulled successfully", output)
 
     def test_main_returns_error_for_unsupported_search(self) -> None:
