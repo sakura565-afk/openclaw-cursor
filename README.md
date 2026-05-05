@@ -2,54 +2,38 @@
 
 OpenClaw orchestration via Cursor Cloud Agent.
 
-## Proactive Scout
+## Ollama Model Manager
 
-`scripts/proactive_scout.py` speculatively prepares likely follow-up requests so a later user question can be served from cache instead of starting from scratch.
+`python -m scripts.ollama_model_manager` provides a stdlib-only CLI for managing local Ollama models used by OpenClaw.
 
-### Behavior
-
-- Uses stdlib only.
-- Predicts at most 2 follow-ups from the current result.
-- Only starts speculative work after more than 15 seconds of idle time.
-- Uses a fast-model label (`openclaw-fast` by default, override with `OPENCLAW_SCOUT_MODEL`).
-- Caches prepared follow-ups for 5 minutes.
-- Supports these task families:
-  - image -> `variants`, `more`, `change_style`, `upscale`
-  - code -> `add_tests`, `optimize`, `explain`, `refactor`
-  - video -> `shorter`, `different_angle`, `change_format`
-  - analysis -> `more_details`, `what_if`, `alternatives`
-
-### Python API
-
-- `scout_check(question) -> cached_or_none`
-- `scout_predict(task_type, result) -> list`
-- `scout_run_background(predictions)`
-
-The cache/state directory defaults to `~/.openclaw/proactive_scout` and can be overridden with `OPENCLAW_SCOUT_DIR`.
-
-### CLI
-
-Check whether a prepared answer is already cached:
+### Commands
 
 ```bash
-python3 scripts/proactive_scout.py check "Can you add tests for this change?"
+python -m scripts.ollama_model_manager list
+python -m scripts.ollama_model_manager pull llama3.2
+python -m scripts.ollama_model_manager remove llama3.2
+python -m scripts.ollama_model_manager remove llama3.2 --yes
+python -m scripts.ollama_model_manager show llama3.2
+python -m scripts.ollama_model_manager search llama
+python -m scripts.ollama_model_manager cleanup
+python -m scripts.ollama_model_manager cleanup --days 45
 ```
 
-Show cache, jobs, and runtime state:
+### Features
+
+- Lists local models from `ollama list` in a colored table with model name, size, and modified date.
+- Pulls models with a live progress table that includes layer progress, transfer speed, and ETA.
+- Checks free disk space before pulling and warns when less than 10 GB is available.
+- Removes models through `ollama rm` with a confirmation prompt by default.
+- Shows model metadata, parameters, and Modelfile configuration using `ollama show`.
+- Searches for new models with `ollama search` when the local Ollama CLI supports that command.
+- Suggests cleanup candidates for models older than 30 days by using the `MODIFIED` value from `ollama list` as the local staleness signal.
+
+### Tests
+
+Run the focused test suite with:
 
 ```bash
-python3 scripts/proactive_scout.py status
-```
-
-Clear all cached speculative results:
-
-```bash
-python3 scripts/proactive_scout.py clear
-```
-
-Predict likely follow-ups and start background work when idle time is high enough:
-
-```bash
-python3 scripts/proactive_scout.py predict code "Implemented the CLI and cache layer." --idle-seconds 18
+python -m unittest tests.test_ollama_model_manager
 ```
 
