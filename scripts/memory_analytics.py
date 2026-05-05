@@ -456,6 +456,71 @@ def analyze_memory(
     }
 
 
+def generate_report(
+    parsed: dict[str, object],
+    reference_date: date | None = None,
+) -> dict[str, object]:
+    """Generate a compact health report focused on session-level telemetry."""
+
+    reference_date = reference_date or date.today()
+    entries: list[Entry] = parsed["entries"]
+    dated_mentions = sorted(
+        entry.last_mention for entry in entries if entry.last_mention is not None
+    )
+    oldest = dated_mentions[0] if dated_mentions else None
+
+    # Approximate "session count" from unique mention dates in the memory timeline.
+    unique_session_days = len(set(dated_mentions))
+    recent_window_start = reference_date.toordinal() - 6
+    previous_window_start = reference_date.toordinal() - 13
+    recent_sessions = sum(1 for day in set(dated_mentions) if day.toordinal() >= recent_window_start)
+    previous_sessions = sum(
+        1
+        for day in set(dated_mentions)
+        if previous_window_start <= day.toordinal() < recent_window_start
+    )
+    if recent_sessions > previous_sessions:
+        trend = "up"
+    elif recent_sessions < previous_sessions:
+        trend = "down"
+    else:
+        trend = "flat"
+
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "reference_date": reference_date.isoformat(),
+        "input_file": parsed["path"],
+        "memory_usage": {
+            "bytes": parsed["size_bytes"],
+            "human": human_size(parsed["size_bytes"]),
+        },
+        "session_count": unique_session_days,
+        "oldest_session": oldest.isoformat() if oldest else None,
+        "trend": trend,
+    }
+
+
+def format_slack_message(report: dict[str, object]) -> str:
+    """Format a report as a Slack-friendly markdown table."""
+
+    memory_usage = report["memory_usage"]
+    rows = [
+        ("Memory usage", f"{memory_usage['human']} ({memory_usage['bytes']} bytes)"),
+        ("Session count", str(report["session_count"])),
+        ("Oldest session", report["oldest_session"] or "n/a"),
+        ("Trend", str(report["trend"])),
+    ]
+    lines = [
+        "*Memory Analytics Health Report*",
+        "",
+        "| Metric | Value |",
+        "| --- | --- |",
+    ]
+    for metric, value in rows:
+        lines.append(f"| {metric} | {value} |")
+    return "\n".join(lines)
+
+
 def render_markdown_report(report: dict[str, object]) -> str:
     """Render a markdown report from the analytics data."""
 
@@ -604,15 +669,25 @@ def print_console_summary(report: dict[str, object], markdown_path: Path, json_p
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments."""
 
+    argv = list(argv) if argv is not None else None
+    if argv and argv[0] not in {"analyze", "report", "-h", "--help"}:
+        argv = ["analyze", *argv]
+
     parser = argparse.ArgumentParser(description="Analyze MEMORY.md health.")
-    parser.add_argument("--input", default="MEMORY.md", help="Path to the input MEMORY.md file.")
-    parser.add_argument("--output", default="report.md", help="Path to write the markdown report.")
-    parser.add_argument(
+    subparsers = parser.add_subparsers(dest="command")
+
+    analyze_parser = subparsers.add_parser("analyze", help="Generate markdown and JSON analytics reports.")
+    analyze_parser.add_argument("--input", default="MEMORY.md", help="Path to the input MEMORY.md file.")
+    analyze_parser.add_argument("--output", default="report.md", help="Path to write the markdown report.")
+    analyze_parser.add_argument(
         "--days",
         type=int,
         default=30,
         help="Stale threshold in days for entry freshness checks.",
     )
+
+    report_parser = subparsers.add_parser("report", help="Print a compact Slack-formatted health report.")
+    report_parser.add_argument("--input", default="MEMORY.md", help="Path to the input MEMORY.md file.")
     return parser.parse_args(argv)
 
 
@@ -620,14 +695,19 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint."""
 
     args = parse_args(argv)
+    command = args.command or "analyze"
     input_path = Path(args.input)
     if not input_path.exists():
         print(colorize(f"Input file not found: {input_path}", "red"), file=sys.stderr)
         return 1
 
     parsed = parse_memory_file(input_path)
-    report = analyze_memory(parsed, stale_days=args.days)
+    if command == "report":
+        health_report = generate_report(parsed)
+        print(format_slack_message(health_report))
+        return 0
 
+    report = analyze_memory(parsed, stale_days=args.days)
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     markdown_report = render_markdown_report(report)

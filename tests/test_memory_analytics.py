@@ -131,6 +131,61 @@ class MemoryAnalyticsTest(unittest.TestCase):
             self.assertEqual(json_report["stale_days"], 45)
             self.assertIn("summary", json_report)
 
+    def test_generate_report_returns_expected_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            memory_path = self.write_memory(Path(tmp_dir))
+            parsed = memory_analytics.parse_memory_file(memory_path)
+
+            report = memory_analytics.generate_report(parsed, reference_date=date(2026, 3, 10))
+
+            self.assertIn("memory_usage", report)
+            self.assertIn("session_count", report)
+            self.assertIn("oldest_session", report)
+            self.assertIn("trend", report)
+            self.assertEqual(report["memory_usage"]["bytes"], memory_path.stat().st_size)
+            self.assertEqual(report["oldest_session"], "2026-01-01")
+            self.assertEqual(report["session_count"], 5)
+            self.assertEqual(report["trend"], "down")
+
+    def test_format_slack_message_renders_markdown_table(self) -> None:
+        sample = {
+            "memory_usage": {"human": "1.2 KB", "bytes": 1220},
+            "session_count": 5,
+            "oldest_session": "2026-01-01",
+            "trend": "down",
+        }
+
+        message = memory_analytics.format_slack_message(sample)
+
+        self.assertIn("*Memory Analytics Health Report*", message)
+        self.assertIn("| Metric | Value |", message)
+        self.assertIn("| Memory usage | 1.2 KB (1220 bytes) |", message)
+        self.assertIn("| Session count | 5 |", message)
+        self.assertIn("| Oldest session | 2026-01-01 |", message)
+        self.assertIn("| Trend | down |", message)
+
+    def test_main_report_command_prints_slack_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_path = Path(tmp_dir)
+            memory_path = self.write_memory(temp_path)
+            previous_no_color = os.environ.pop("NO_COLOR", None)
+            current_dir = Path.cwd()
+            try:
+                os_chdir = os.chdir
+                os_chdir(temp_path)
+                stdout = io.StringIO()
+                with redirect_stdout(stdout):
+                    exit_code = memory_analytics.main(["report", "--input", str(memory_path)])
+            finally:
+                if previous_no_color is not None:
+                    os.environ["NO_COLOR"] = previous_no_color
+                os_chdir(current_dir)
+
+            output = stdout.getvalue()
+            self.assertEqual(exit_code, 0)
+            self.assertIn("*Memory Analytics Health Report*", output)
+            self.assertIn("| Metric | Value |", output)
+
 
 if __name__ == "__main__":
     unittest.main()
