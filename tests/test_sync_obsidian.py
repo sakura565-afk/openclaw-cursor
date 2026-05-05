@@ -143,6 +143,38 @@ class SyncObsidianTests(unittest.TestCase):
         updated = self.memory_path.read_text(encoding="utf-8")
         self.assertNotIn(sync_obsidian.STALE_PREFIX, updated)
 
+    def test_check_links_finds_broken_wikilinks_and_markdown_links(self):
+        topic = self.vault_path / "01_Projects" / "topic.md"
+        topic.write_text(
+            "# Topic\n"
+            "Good wiki [[02_Knowledge/existing]]\n"
+            "Bad wiki [[missing-note]]\n"
+            "Bad md [missing](../02_Knowledge/missing.md)\n",
+            encoding="utf-8",
+        )
+        existing = self.vault_path / "02_Knowledge" / "existing.md"
+        existing.write_text("# Existing\n", encoding="utf-8")
+
+        broken = sync_obsidian.check_links(self.vault_path)
+
+        self.assertEqual(len(broken), 2)
+        broken_set = {(item.link_type, item.target) for item in broken}
+        self.assertIn(("wikilink", "missing-note"), broken_set)
+        self.assertIn(("markdown", "../02_Knowledge/missing.md"), broken_set)
+
+    def test_check_links_ignores_external_and_anchor_links(self):
+        doc = self.vault_path / "memory" / "doc.md"
+        doc.write_text(
+            "# Doc\n"
+            "[External](https://example.com)\n"
+            "[Mail](mailto:test@example.com)\n"
+            "[Anchor](#section)\n",
+            encoding="utf-8",
+        )
+
+        broken = sync_obsidian.check_links(self.vault_path)
+        self.assertEqual(broken, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,6 +22,9 @@ DAILY_NOTES_TITLE = "Daily Notes"
 STALE_PREFIX = "> [!warning] Sync stale:"
 DEFAULT_MEMORY_ENV = "SYNC_OBSIDIAN_MEMORY_PATH"
 DEFAULT_VAULT_ENV = "SYNC_OBSIDIAN_VAULT_PATH"
+DEFAULT_CHECK_LINKS_VAULT = Path("C:/Users/user/Documents/Obsidian Vault")
+WIKILINK_PATTERN = re.compile(r"(?<!!)\[\[([^\]]+)\]\]")
+MARKDOWN_LINK_PATTERN = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
 
 
 class Color:
@@ -54,6 +57,14 @@ class VaultNote:
     @property
     def stem_slug(self) -> str:
         return slugify(Path(self.rel_path).stem)
+
+
+@dataclass(frozen=True)
+class BrokenLink:
+    source_path: str
+    line_number: int
+    link_type: str
+    target: str
 
 
 def colorize(text: str, color: str, enabled: bool = True) -> str:
@@ -138,6 +149,140 @@ def iter_vault_notes(vault_path: Path) -> list[VaultNote]:
 
     notes.sort(key=lambda note: note.rel_path)
     return notes
+
+
+def iter_markdown_files(vault_path: Path) -> list[Path]:
+    files: list[Path] = []
+    for path in vault_path.rglob("*.md"):
+        if any(part in IGNORED_PARTS for part in path.parts):
+            continue
+        files.append(path)
+    files.sort()
+    return files
+
+
+def normalize_markdown_target(target: str) -> str:
+    trimmed = target.strip()
+    if (
+        not trimmed
+        or "://" in trimmed
+        or trimmed.startswith("mailto:")
+        or trimmed.startswith("file:")
+        or trimmed.startswith("#")
+    ):
+        return ""
+    return trimmed.split("#", 1)[0].split("?", 1)[0].strip()
+
+
+def wikilink_resolves(
+    source: Path,
+    raw_target: str,
+    vault_path: Path,
+    markdown_paths: set[str],
+    stem_index: dict[str, set[str]],
+) -> bool:
+    target = raw_target.strip().split("|", 1)[0].split("#", 1)[0].strip()
+    if not target:
+        return True
+
+    normalized = target.replace("\\", "/")
+    if "/" in normalized:
+        candidate = (source.parent / normalized).resolve() if not normalized.startswith("/") else None
+        candidates: list[Path] = []
+        if candidate:
+            candidates.append(candidate if candidate.suffix else candidate.with_suffix(".md"))
+        direct = (vault_path / normalized).resolve()
+        candidates.append(direct if direct.suffix else direct.with_suffix(".md"))
+
+        for path in candidates:
+            try:
+                rel = path.relative_to(vault_path).as_posix()
+            except ValueError:
+                continue
+            if rel in markdown_paths:
+                return True
+        return False
+
+    stem = Path(normalized).stem.lower()
+    return stem in stem_index and bool(stem_index[stem])
+
+
+def markdown_link_resolves(source: Path, raw_target: str, vault_path: Path, markdown_paths: set[str]) -> bool:
+    normalized = normalize_markdown_target(raw_target)
+    if not normalized:
+        return True
+
+    candidate = Path(normalized)
+    if candidate.is_absolute():
+        return False
+
+    resolved = (source.parent / candidate).resolve()
+    candidates = [resolved]
+    if not resolved.suffix:
+        candidates.append(resolved.with_suffix(".md"))
+
+    for path in candidates:
+        try:
+            rel = path.relative_to(vault_path).as_posix()
+        except ValueError:
+            continue
+        if rel in markdown_paths:
+            return True
+    return False
+
+
+def check_links(vault_path: Path) -> list[BrokenLink]:
+    vault_path = vault_path.resolve()
+    markdown_files = iter_markdown_files(vault_path)
+    markdown_paths = {path.relative_to(vault_path).as_posix() for path in markdown_files}
+    stem_index: dict[str, set[str]] = {}
+    for rel_path in markdown_paths:
+        stem_index.setdefault(Path(rel_path).stem.lower(), set()).add(rel_path)
+
+    broken: list[BrokenLink] = []
+    for path in markdown_files:
+        rel_source = path.relative_to(vault_path).as_posix()
+        for line_number, line in enumerate(read_text(path).splitlines(), start=1):
+            for match in WIKILINK_PATTERN.finditer(line):
+                target = match.group(1)
+                if not wikilink_resolves(path, target, vault_path, markdown_paths, stem_index):
+                    broken.append(
+                        BrokenLink(
+                            source_path=rel_source,
+                            line_number=line_number,
+                            link_type="wikilink",
+                            target=target,
+                        )
+                    )
+            for match in MARKDOWN_LINK_PATTERN.finditer(line):
+                target = match.group(1)
+                if not markdown_link_resolves(path, target, vault_path, markdown_paths):
+                    broken.append(
+                        BrokenLink(
+                            source_path=rel_source,
+                            line_number=line_number,
+                            link_type="markdown",
+                            target=target,
+                        )
+                    )
+    return broken
+
+
+def print_link_check_report(vault_path: Path, broken_links: list[BrokenLink]) -> None:
+    color_enabled = sys.stdout.isatty()
+    if not broken_links:
+        print(colorize(f"No broken links found in {vault_path}", Color.GREEN, color_enabled))
+        return
+
+    print(
+        colorize(
+            f"Found {len(broken_links)} broken link(s) in {vault_path}:",
+            Color.RED,
+            color_enabled,
+        )
+    )
+    for issue in broken_links:
+        print(f"- {issue.source_path}:{issue.line_number} [{issue.link_type}] {issue.target}")
 
 
 def build_reference_note(memory_path: Path, sections: Iterable[MemorySection]) -> str:
@@ -453,7 +598,7 @@ def resolve_path(cli_value: str | None, env_var: str, default: Path) -> Path:
     return default
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_sync_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="Preview changes without writing files.")
     parser.add_argument(
@@ -468,7 +613,24 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
+    argv = argv or sys.argv[1:]
+    if argv and argv[0] == "check-links":
+        parser = argparse.ArgumentParser(description="Check Obsidian markdown links.")
+        parser.add_argument("command", choices=["check-links"])
+        parser.add_argument(
+            "--vault",
+            help=(
+                "Path to the Obsidian vault "
+                f"(defaults to {DEFAULT_VAULT_ENV} or {DEFAULT_CHECK_LINKS_VAULT})."
+            ),
+        )
+        args = parser.parse_args(argv)
+        vault_path = resolve_path(args.vault, DEFAULT_VAULT_ENV, DEFAULT_CHECK_LINKS_VAULT)
+        broken_links = check_links(vault_path)
+        print_link_check_report(vault_path, broken_links)
+        return 1 if broken_links else 0
+
+    parser = build_sync_parser()
     args = parser.parse_args(argv)
     cwd = Path.cwd()
     memory_path = resolve_path(args.memory, DEFAULT_MEMORY_ENV, cwd / "MEMORY.md")
