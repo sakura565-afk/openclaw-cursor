@@ -6,15 +6,28 @@ import json
 import subprocess
 import time
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional, Tuple
 
 API_KEY = "crsr_8451e2fa232a5ca1982fd0876a5b5eb0632e24bd4e34680142b4a9c26be8c685"
 REPO = "https://github.com/sakura565-afk/openclaw-cursor"
 REF = "main"
 BATCH_SIZE = 5
 POLL_INTERVAL = 30  # seconds
+MAX_POLL_INTERVAL = 300  # seconds
+POLL_TIMEOUT_SECONDS = 30 * 60
 LOG_PATH = Path("C:/Users/user/.openclaw/workspace/memory")
+
+
+class AgentStatus(str, Enum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    FINISHED = "FINISHED"
+    PROCESSING = "PROCESSING"
+    NOT_FOUND = "NOT_FOUND"
+    TIMED_OUT = "TIMED_OUT"
+    ERROR = "ERROR"
 
 def get_active_agents() -> int:
     """Count currently running agents via API."""
@@ -65,8 +78,22 @@ def launch_agent(branch: str, description: str) -> Dict:
     except Exception as e:
         return {"agent_id": None, "branch": branch, "status": f"ERROR: {e}"}
 
-def poll_agent(agent_id: str) -> str:
-    """Poll agent status."""
+def _extract_poll_status(output: str) -> AgentStatus:
+    """Parse cursor_cloud_agent poll output into an AgentStatus."""
+    upper_output = output.upper()
+    if '"STATUS": "FINISHED"' in upper_output:
+        return AgentStatus.FINISHED
+    if '"STATUS": "RUNNING"' in upper_output:
+        return AgentStatus.RUNNING
+    if '"STATUS": "PENDING"' in upper_output:
+        return AgentStatus.PENDING
+    if "404" in output:
+        return AgentStatus.NOT_FOUND
+    return AgentStatus.PROCESSING
+
+
+def poll_agent(agent_id: str) -> AgentStatus:
+    """Poll agent status via cursor_cloud_agent.py poll API."""
     try:
         result = subprocess.run(
             [
@@ -79,20 +106,84 @@ def poll_agent(agent_id: str) -> str:
             timeout=60,
             cwd=str(Path(__file__).parent.parent.parent)
         )
-        
+
         output = result.stdout + result.stderr
-        
-        if '"status": "FINISHED"' in output:
-            return "FINISHED"
-        elif '"status": "RUNNING"' in output:
-            return "RUNNING"
-        elif "404" in output:
-            return "NOT_FOUND"
-        else:
-            return "PROCESSING"
-            
+
+        # Support both raw JSON output and mixed console output.
+        return _extract_poll_status(output)
+
     except Exception as e:
-        return f"ERROR: {e}"
+        print(f"⚠️ Poll error for {agent_id}: {e}")
+        return AgentStatus.ERROR
+
+
+def _poll_loop(running: Dict[str, str]) -> Tuple[List[Dict], Dict[str, str]]:
+    """
+    Poll running agents until at least one terminal result is observed.
+    Uses exponential backoff and graceful timeout handling.
+    """
+    completed: List[Dict] = []
+    started_at: Dict[str, float] = {agent_id: time.time() for agent_id in running.keys()}
+    sleep_seconds = POLL_INTERVAL
+
+    while running and not completed:
+        now = time.time()
+        progress_made = False
+
+        for agent_id in list(running.keys()):
+            elapsed = now - started_at.get(agent_id, now)
+            if elapsed > POLL_TIMEOUT_SECONDS:
+                branch = running.pop(agent_id)
+                completed.append(
+                    {
+                        "branch": branch,
+                        "status": AgentStatus.TIMED_OUT.value,
+                        "pr_url": None,
+                    }
+                )
+                progress_made = True
+                print(f"⏱️ Timed out (>30min): {branch} ({agent_id})")
+                continue
+
+            status = poll_agent(agent_id)
+            if status == AgentStatus.FINISHED:
+                branch = running.pop(agent_id)
+                completed.append(
+                    {
+                        "branch": branch,
+                        "status": AgentStatus.FINISHED.value,
+                        "pr_url": f"https://cursor.com/agents/{agent_id}",
+                    }
+                )
+                progress_made = True
+                print(f"✅ Completed: {branch}")
+            elif status == AgentStatus.NOT_FOUND:
+                branch = running.pop(agent_id)
+                completed.append(
+                    {
+                        "branch": branch,
+                        "status": AgentStatus.NOT_FOUND.value,
+                        "pr_url": None,
+                    }
+                )
+                progress_made = True
+                print(f"❌ Not found: {branch} ({agent_id})")
+            elif status == AgentStatus.PENDING:
+                # Pending is expected early in lifecycle; leave it in running.
+                print(f"🕒 Pending: {running[agent_id]} ({agent_id})")
+            elif status == AgentStatus.ERROR:
+                # Keep in running and retry with backoff.
+                print(f"⚠️ Poll transient error: {running[agent_id]} ({agent_id})")
+
+        if progress_made:
+            sleep_seconds = POLL_INTERVAL
+        else:
+            sleep_seconds = min(sleep_seconds * 2, MAX_POLL_INTERVAL)
+
+        if running and not completed:
+            time.sleep(sleep_seconds)
+
+    return completed, running
 
 def log_queue_status(pending: List[str], running: Dict, completed: List[Dict]):
     """Log queue status to file."""
@@ -150,26 +241,9 @@ def run_queue(branches: List[str]):
                     "pr_url": None
                 })
         
-        # Poll running agents
-        for agent_id in list(running.keys()):
-            status = poll_agent(agent_id)
-            
-            if status == "FINISHED":
-                branch = running.pop(agent_id)
-                # Extract PR URL from poll output
-                completed.append({
-                    "branch": branch,
-                    "status": "FINISHED",
-                    "pr_url": f"https://cursor.com/agents/{agent_id}"  # Approximate
-                })
-                print(f"✅ Completed: {branch}")
-            elif status == "NOT_FOUND":
-                running.pop(agent_id)
-                completed.append({
-                    "branch": running.get(agent_id, "unknown"),
-                    "status": "NOT_FOUND",
-                    "pr_url": None
-                })
+        # Poll running agents with backoff and timeout logic.
+        poll_completed, running = _poll_loop(running)
+        completed.extend(poll_completed)
         
         # Log status
         log_queue_status(pending, running, completed)
