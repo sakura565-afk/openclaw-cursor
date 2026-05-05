@@ -1,0 +1,3 @@
+Summarize the key idea of retrieval-augmented generation.
+Write a haiku about batch inference.
+List three practical uses for local LLMs.
