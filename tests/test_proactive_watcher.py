@@ -130,7 +130,8 @@ class ProactiveSkillWatcherTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Discovered 2 skills", result.stdout)
-        report_path = self.report_dir / "health_report_20260504.md"
+        expected_stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+        report_path = self.report_dir / f"health_report_{expected_stamp}.md"
         self.assertTrue(report_path.exists())
 
 
