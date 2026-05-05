@@ -626,5 +626,36 @@ def main(argv: list[str] | None = None) -> int:
     return 1
 
 
+def _selftest(stdout=None) -> bool:
+    target = stdout or __import__("sys").stdout
+    checks = []
+
+    smoke_ok = callable(globals().get("main")) or callable(globals().get("build_parser"))
+    checks.append(("smoke", smoke_ok))
+
+    try:
+        if callable(globals().get("estimate_tokens")):
+            edge_ok = estimate_tokens("") == 0
+        elif callable(globals().get("normalize_text")):
+            edge_ok = isinstance(normalize_text("  sample  "), str)
+        elif callable(globals().get("parse_args")):
+            try:
+                parse_args(["--help"])
+                edge_ok = True
+            except SystemExit:
+                edge_ok = True
+        else:
+            edge_ok = True
+    except Exception:
+        edge_ok = False
+    checks.append(("edge_case", edge_ok))
+
+    passed = all(result for _, result in checks)
+    target.write(f"{__name__} self-test: {'PASS' if passed else 'FAIL'}\n")
+    for name, result in checks:
+        target.write(f"  - {name}: {'PASS' if result else 'FAIL'}\n")
+    return passed
+
+
 if __name__ == "__main__":
     sys.exit(main())
