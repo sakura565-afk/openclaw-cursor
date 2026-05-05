@@ -1,19 +1,18 @@
-from __future__ import annotations
-
+import importlib.util
 import json
-import os
-import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-
-from scripts.memory_cleanup import cleanup_memory  # noqa: E402
+MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "memory_cleanup.py"
+SPEC = importlib.util.spec_from_file_location("memory_cleanup", MODULE_PATH)
+memory_cleanup = importlib.util.module_from_spec(SPEC)
+assert SPEC.loader is not None
+sys.modules[SPEC.name] = memory_cleanup
+SPEC.loader.exec_module(memory_cleanup)
 
 
 class MemoryCleanupTests(unittest.TestCase):
@@ -25,168 +24,134 @@ class MemoryCleanupTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
-    def write(self, relative_path: str, content: str) -> Path:
+    def write_file(self, relative_path: str, content: str) -> Path:
         path = self.root / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         return path
 
-    def read(self, relative_path: str) -> str:
+    def read_file(self, relative_path: str) -> str:
         return (self.root / relative_path).read_text(encoding="utf-8")
 
-    def test_cleanup_archives_duplicates_and_similar_entries(self) -> None:
-        self.write(
+    def test_cleanup_archives_deduplicates_and_compacts(self) -> None:
+        self.write_file(
             "MEMORY.md",
-            "\n".join(
-                [
-                    "# Memory",
-                    "",
-                    "## Alpha current",
-                    "Updated: 2026-05-01",
-                    "Keep this active note.",
-                    "",
-                    "## Alpha duplicate old",
-                    "Updated: 2026-04-30",
-                    "Keep this active note.",
-                    "",
-                    "## Similar primary",
-                    "Updated: 2026-05-02",
-                    "Shared line one.",
-                    "Shared line two.",
-                    "Primary only detail.",
-                    "",
-                    "## Similar duplicate",
-                    "Updated: 2026-05-01",
-                    "Shared line one.",
-                    "Shared line two.",
-                    "Secondary only detail.",
-                    "",
-                    "## Stale entry",
-                    "Updated: 2025-12-01",
-                    "This should move to the archive.",
-                    "",
-                ]
-            )
-            + "\n",
+            "# Team memory\n\n"
+            "## Keep recent duplicate\n"
+            "Updated: 2026-04-01\n\n"
+            "Alpha context line\n"
+            "Shared note\n\n"
+            "## Archive me\n"
+            "Updated: 2025-12-01\n\n"
+            "Very old context\n",
         )
-        self.write(
-            "memory/2026-05-04.md",
-            "\n".join(
-                [
-                    "## Daily recent",
-                    "Updated: 2026-05-04",
-                    "Recent note.",
-                    "",
-                ]
-            ),
+        self.write_file(
+            "memory/2026-04-28.md",
+            "## Duplicate older\n"
+            "Updated: 2026-03-15\n\n"
+            "Alpha context line\n"
+            "Shared note\n\n"
+            "## Similar context\n"
+            "Updated: 2026-04-20\n\n"
+            "Project checkpoint complete\n"
+            "Next action item ready\n",
+        )
+        self.write_file(
+            "memory/2026-04-29.md",
+            "## Similar context follow-up\n"
+            "Updated: 2026-04-25\n\n"
+            "Project checkpoint complete\n"
+            "Next action items ready\n",
         )
 
-        report = cleanup_memory(
+        report = memory_cleanup.run_cleanup(
             root=self.root,
             days=90,
             dry_run=False,
             backup=True,
             today=date(2026, 5, 4),
-            now=datetime(2026, 5, 4, 12, 30, 0),
         )
 
-        memory_text = self.read("MEMORY.md")
-        self.assertIn("## Alpha current", memory_text)
-        self.assertNotIn("## Alpha duplicate old", memory_text)
-        self.assertIn("Primary only detail.", memory_text)
-        self.assertIn("Secondary only detail.", memory_text)
-        self.assertNotIn("## Stale entry", memory_text)
+        self.assertEqual(1, len(report["archived_entries"]))
+        self.assertEqual(1, len(report["removed_duplicates"]))
+        self.assertEqual(1, len(report["merged_entries"]))
+        self.assertEqual(3, len(report["backups"]))
 
-        archive_dir = self.root / "memory" / "archive"
-        archive_files = list(archive_dir.glob("*.md"))
-        self.assertEqual(len(archive_files), 1)
+        main_text = self.read_file("MEMORY.md")
+        self.assertIn("Keep recent duplicate", main_text)
+        self.assertNotIn("Archive me", main_text)
+
+        older_daily_text = self.read_file("memory/2026-04-28.md")
+        self.assertEqual("", older_daily_text)
+
+        newer_daily_text = self.read_file("memory/2026-04-29.md")
+        self.assertIn("Similar context follow-up", newer_daily_text)
+        self.assertIn("Merged duplicate context", newer_daily_text)
+        self.assertIn("Next action item ready", newer_daily_text)
+        self.assertIn("Next action items ready", newer_daily_text)
+
+        archive_files = sorted((self.root / "memory" / "archive").glob("*.md"))
+        self.assertEqual(1, len(archive_files))
         archive_text = archive_files[0].read_text(encoding="utf-8")
-        self.assertIn("Stale entry", archive_text)
-        self.assertIn("This should move to the archive.", archive_text)
+        self.assertIn("Archive me", archive_text)
 
-        backup_path = self.root / "memory" / "MEMORY.md.backup_20260504"
-        self.assertTrue(backup_path.exists())
-        self.assertIn("## Alpha duplicate old", backup_path.read_text(encoding="utf-8"))
+        backup_text = self.read_file("memory/MEMORY.md.backup_20260504")
+        self.assertIn("Archive me", backup_text)
 
-        self.assertEqual(report["duplicates_removed"], 1)
-        self.assertEqual(report["similar_entries_compacted"], 1)
-        self.assertEqual(report["archived_entries"], 1)
-        self.assertIn("memory/MEMORY.md.backup_20260504", report["backup_files"])
+        report_json = json.loads(Path(report["report_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(1, len(report_json["archive_files"]))
+        self.assertEqual(1, len(report_json["removed_duplicates"]))
 
-        weekly_summary = json.loads(
-            self.read("logs/weekly_summary_2026-W19.json")
+        weekly_summary = Path(report["weekly_summary_path"]).read_text(encoding="utf-8")
+        self.assertIn("Archived entries: 1", weekly_summary)
+        self.assertIn("Duplicates removed: 1", weekly_summary)
+
+    def test_dry_run_keeps_original_files_unchanged(self) -> None:
+        original = (
+            "## Old note\n"
+            "Updated: 2025-01-01\n\n"
+            "Archive candidate\n"
         )
-        self.assertEqual(weekly_summary["aggregate"]["archived_entries"], 1)
-        self.assertEqual(weekly_summary["aggregate"]["duplicates_removed"], 1)
-        self.assertEqual(weekly_summary["aggregate"]["similar_entries_compacted"], 1)
+        self.write_file("MEMORY.md", original)
 
-        log_report = json.loads(
-            self.read("logs/cleanup_report_20260504_123000.json")
-        )
-        self.assertEqual(log_report["entries_before"], 6)
-        self.assertEqual(log_report["entries_after"], 3)
-
-    def test_dry_run_preserves_sources_but_writes_logs_and_backup(self) -> None:
-        original = "\n".join(
-            [
-                "## Keep",
-                "Updated: 2026-05-02",
-                "Fresh note.",
-                "",
-                "## Old",
-                "Updated: 2025-01-01",
-                "Archive me.",
-                "",
-            ]
-        )
-        self.write("MEMORY.md", original)
-
-        report = cleanup_memory(
+        report = memory_cleanup.run_cleanup(
             root=self.root,
             days=90,
             dry_run=True,
             backup=True,
             today=date(2026, 5, 4),
-            now=datetime(2026, 5, 4, 8, 0, 0),
         )
 
-        self.assertEqual(self.read("MEMORY.md"), original)
-        self.assertTrue((self.root / "memory" / "MEMORY.md.backup_20260504").exists())
-        self.assertFalse((self.root / "memory" / "archive").exists())
-        self.assertTrue((self.root / "logs" / "cleanup_report_20260504_080000.json").exists())
         self.assertTrue(report["dry_run"])
+        self.assertEqual(original, self.read_file("MEMORY.md"))
+        self.assertFalse((self.root / "memory" / "archive").exists())
+        self.assertFalse((self.root / "memory" / "MEMORY.md.backup_20260504").exists())
+        self.assertTrue(Path(report["report_path"]).exists())
 
-    def test_cli_outputs_colorized_summary(self) -> None:
-        self.write(
+    def test_cli_returns_success_and_colorized_output(self) -> None:
+        self.write_file(
             "MEMORY.md",
-            "\n".join(
-                [
-                    "## Duplicate one",
-                    "Updated: 2026-05-04",
-                    "Same details.",
-                    "",
-                    "## Duplicate two",
-                    "Updated: 2026-05-03",
-                    "Same details.",
-                    "",
-                ]
-            ),
+            "## Fresh\n"
+            "Updated: 2026-05-01\n\n"
+            "Useful note\n",
         )
 
-        result = subprocess.run(
-            [sys.executable, str(ROOT / "scripts" / "memory_cleanup.py"), "--dry-run", "--backup"],
-            cwd=self.root,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        with tempfile.TemporaryDirectory() as _:
+            from io import StringIO
+            from contextlib import redirect_stdout
 
-        self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn("\x1b[", result.stdout)
-        self.assertIn("OpenClaw memory cleanup", result.stdout)
-        self.assertTrue((self.root / "memory" / "MEMORY.md.backup_").parent.exists())
-        log_files = list((self.root / "logs").glob("cleanup_report_*.json"))
-        self.assertEqual(len(log_files), 1)
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                exit_code = memory_cleanup.main(
+                    argv=["--days", "30", "--dry-run"],
+                    root=self.root,
+                    today=date(2026, 5, 4),
+                )
+
+        output = stdout.getvalue()
+        self.assertEqual(0, exit_code)
+        self.assertIn("\033[36mOpenClaw memory cleanup", output)
+        self.assertIn("Threshold: 30 days", output)
 
 
 if __name__ == "__main__":
