@@ -1,0 +1,24 @@
+{
+  "lookback_days": 1,
+  "max_chars_per_transcript": 40000,
+  "max_transcripts": 25,
+  "schedule": {
+    "enabled": true,
+    "minimum_interval_hours": 24
+  },
+  "session_roots": [
+    "{openclaw_home}/sessions",
+    "{openclaw_home}/session_history",
+    "{openclaw_home}/history/sessions",
+    "{openclaw_home}/workspace/sessions",
+    "{openclaw_home}/workspace/session_history",
+    "{openclaw_home}/workspace/transcripts"
+  ],
+  "transcript_extensions": [
+    ".json",
+    ".jsonl",
+    ".log",
+    ".md",
+    ".txt"
+  ]
+}
