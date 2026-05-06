@@ -16,7 +16,11 @@ from pathlib import Path
 from typing import Iterable
 
 import requests
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - fallback for minimal environments
+    def load_dotenv(*_: object, **__: object) -> bool:
+        return False
 from PIL import Image, ImageDraw, ImageFont
 
 
