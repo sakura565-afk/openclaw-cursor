@@ -1,0 +1,15 @@
+models:
+  inswapper_model: "C:\\Users\\user\\comfyui\\ComfyUI_windows_portable\\ComfyUI\\models\\reactor\\faces\\inswapper_128.onnx"
+  insightface_model_root: "C:\\Users\\user\\comfyui\\ComfyUI_windows_portable\\ComfyUI\\models\\insightface\\buffalo_l"
+  gfpgan_model: "C:\\Users\\user\\comfyui\\ComfyUI_windows_portable\\ComfyUI\\models\\facerestore_models\\GFPGANv1.3.pth"
+
+paths:
+  target_dir: "target_images"
+  source_face: "source_face.jpg"
+  output_dir: "output_swapped"
+
+processing:
+  enhance: true
+  det_size: [640, 640]
+  providers:
+    - "CPUExecutionProvider"
