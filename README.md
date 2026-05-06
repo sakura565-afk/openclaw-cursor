@@ -37,3 +37,22 @@ Run the focused test suite with:
 python -m unittest tests.test_ollama_model_manager
 ```
 
+## Tool Discovery CLI
+
+`python -m scripts.tool_discovery` discovers script capabilities, maps dependencies, generates docs, and suggests tools for a goal with contextual reasoning.
+
+### Commands
+
+```bash
+python -m scripts.tool_discovery analyze --format json
+python -m scripts.tool_discovery docs --output docs/tool_discovery.md
+python -m scripts.tool_discovery suggest "monitor queue latency" --context "safe local logs" --top 3
+```
+
+### What it analyzes
+
+- **Deep capability analysis** based on script name, functions, subcommands, and docstring signals.
+- **Dependency analysis** using direct module imports and inferred relationships from shared capabilities/import sets.
+- **Risk and I/O profiles** to distinguish low/medium/high operational risk and filesystem/network/process behavior.
+- **Contextual tool suggestion** scoring with explicit reasoning about capability fit, I/O fit, safety constraints, and possible tool chains.
+
