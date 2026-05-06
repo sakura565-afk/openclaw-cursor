@@ -68,7 +68,7 @@ class AutoReflectionTests(unittest.TestCase):
         self.assertEqual(analysis["session_count"], 3)
         self.assertEqual(analysis["decision_patterns"][0]["decision"], "restart_ollama")
         self.assertEqual(analysis["decision_patterns"][0]["success_rate"], 100.0)
-        self.assertEqual(analysis["trends"]["success_rate"], "down")
+        self.assertEqual(analysis["trends"]["success_rate"], "flat")
 
         learning = analysis["cross_session_learning"]
         self.assertEqual(learning["strongest_patterns"][0]["decision"], "restart_ollama")
