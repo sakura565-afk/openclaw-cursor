@@ -164,12 +164,17 @@ class ConversationExtractorTests(unittest.TestCase):
         )
 
         stdout = io.StringIO()
-        with redirect_stdout(stdout):
-            exit_code = conversation_extractor.main(
-                ["extract", "--session-path", str(self.sessions_dir), "--days", "7"],
-                root=self.root,
-                now=self.now,
-            )
+        previous_no_color = os.environ.pop("NO_COLOR", None)
+        try:
+            with redirect_stdout(stdout):
+                exit_code = conversation_extractor.main(
+                    ["extract", "--session-path", str(self.sessions_dir), "--days", "7"],
+                    root=self.root,
+                    now=self.now,
+                )
+        finally:
+            if previous_no_color is not None:
+                os.environ["NO_COLOR"] = previous_no_color
 
         output = stdout.getvalue()
         self.assertEqual(0, exit_code)
