@@ -1,0 +1,386 @@
+{
+  "generated_from": [
+    "/workspace/scripts",
+    "/workspace/src"
+  ],
+  "tool_count": 19,
+  "tools": [
+    {
+      "capabilities": [
+        "web_calls"
+      ],
+      "module_path": "scripts.batch_image_optimizer",
+      "name": "batch_image_optimizer",
+      "usage_examples": [
+        {
+          "call": "requests.post",
+          "file": "scripts/batch_image_optimizer.py",
+          "line": 141,
+          "snippet": "requests.post(endpoint, headers=headers, json=payload, timeout=timeout)"
+        }
+      ]
+    },
+    {
+      "capabilities": [
+        "exec_calls"
+      ],
+      "module_path": "scripts.comfy_video_pipeline",
+      "name": "comfy_video_pipeline",
+      "usage_examples": [
+        {
+          "call": "subprocess.run",
+          "file": "scripts/comfy_video_pipeline.py",
+          "line": 567,
+          "snippet": "subprocess.run(cmd, check=True, capture_output=True, text=True)"
+        }
+      ]
+    },
+    {
+      "capabilities": [
+        "file_operations"
+      ],
+      "module_path": "scripts.context_split",
+      "name": "context_split",
+      "usage_examples": [
+        {
+          "call": "read_text",
+          "file": "scripts/context_split.py",
+          "line": 704,
+          "snippet": "Path(args.context_file).read_text(encoding=\"utf-8\")"
+        }
+      ]
+    },
+    {
+      "capabilities": [
+        "file_operations"
+      ],
+      "module_path": "scripts.memory_cleanup",
+      "name": "memory_cleanup",
+      "usage_examples": [
+        {
+          "call": "write_text",
+          "file": "scripts/memory_cleanup.py",
+          "line": 449,
+          "snippet": "write[\"path\"].write_text(write[\"content\"], encoding=\"utf-8\")"
+        }
+      ]
+    },
+    {
+      "capabilities": [
+        "exec_calls"
+      ],
+      "module_path": "scripts.ollama_benchmark",
+      "name": "ollama_benchmark",
+      "usage_examples": [
+        {
+          "call": "subprocess.run",
+          "file": "scripts/ollama_benchmark.py",
+          "line": 100,
+          "snippet": "subprocess.run( args, capture_output=True, text=True, check=False, )"
+        }
+      ]
+    },
+    {
+      "capabilities": [
+        "exec_calls"
+      ],
+      "module_path": "scripts.ollama_model_manager",
+      "name": "ollama_model_manager",
+      "usage_examples": [
+        {
+          "call": "subprocess.run",
+          "file": "scripts/ollama_model_manager.py",
+          "line": 431,
+          "snippet": "subprocess.run(command, text=True, capture_output=True, check=False)"
+        },
+        {
+          "call": "subprocess.Popen",
+          "file": "scripts/ollama_model_manager.py",
+          "line": 485,
+          "snippet": "subprocess.Popen( command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, )"
+        }
+      ]
+    },
+    {
+      "capabilities": [
+        "exec_calls",
+        "file_operations"
+      ],
+      "module_path": "scripts.ollama_monitor",
+      "name": "ollama_monitor",
+      "usage_examples": [
+        {
+          "call": "write_text",
+          "file": "scripts/ollama_monitor.py",
+          "line": 166,
+          "snippet": "state_path(root).write_text(json.dumps(state, indent=2, sort_keys=True) + \"\\n\", encoding=\"utf-8\")"
+        },
+        {
+          "call": "subprocess.run",
+          "file": "scripts/ollama_monitor.py",
+          "line": 306,
+          "snippet": "subprocess.run(command, capture_output=True, text=True, check=False)"
+        }
+      ]
+    },
+    {
+      "capabilities": [
+        "file_operations"
+      ],
+      "module_path": "scripts.optimize_context",
+      "name": "optimize_context",
+      "usage_examples": [
+        {
+          "call": "read_text",
+          "file": "scripts/optimize_context.py",
+          "line": 213,
+          "snippet": "read_text(session_log_path)"
+        },
+        {
+          "call": "read_text",
+          "file": "scripts/optimize_context.py",
+          "line": 232,
+          "snippet": "read_text(session_log_path)"
+        },
+        {
+          "call": "read_text",
+          "file": "scripts/optimize_context.py",
+          "line": 255,
+          "snippet": "read_text(path)"
+        },
+        {
+          "call": "read_text",
+          "file": "scripts/optimize_context.py",
+          "line": 321,
+          "snippet": "read_text(path)"
+        }
+      ]
+    },
+    {
+      "capabilities": [
+        "exec_calls"
+      ],
+      "module_path": "scripts.proactive_scout",
+      "name": "proactive_scout",
+      "usage_examples": [
+        {
+          "call": "subprocess.Popen",
+          "file": "scripts/proactive_scout.py",
+          "line": 568,
+          "snippet": "subprocess.Popen( [sys.executable, str(Path(__file__).resolve()), \"_worker\", \"--job-path\", str(job_path), \"--scout-dir\", str(root)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, start_new_session=True, )"
+        }
+      ]
+    },
+    {
+      "capabilities": [
+        "exec_calls"
+      ],
+      "module_path": "scripts.queue_manager",
+      "name": "queue_manager",
+      "usage_examples": [
+        {
+          "call": "subprocess.run",
+          "file": "scripts/queue_manager.py",
+          "line": 23,
+          "snippet": "subprocess.run( [\"python\", \"cursor_cloud_agent.py\", \"status\"], capture_output=True, text=True, timeout=10, cwd=str(Path(__file__).parent.parent) )"
+        },
+        {
+          "call": "subprocess.run",
+          "file": "scripts/queue_manager.py",
+          "line": 39,
+          "snippet": "subprocess.run( [ \"python\", \"cursor_cloud_agent.py\", \"launch\", \"--api-key\", API_KEY, \"--repo\", REPO, \"--ref\", REF, \"--prompt\", prompt, \"--auto-pr\" ], capture_output=True, text=True, timeout=30, cwd=str(Path(__file__).parent.parent.parent) )"
+        },
+        {
+          "call": "subprocess.run",
+          "file": "scripts/queue_manager.py",
+          "line": 71,
+          "snippet": "subprocess.run( [ \"python\", \"cursor_cloud_agent.py\", \"poll\", \"--api-key\", API_KEY, \"--agent-id\", agent_id ], capture_output=True, text=True, timeout=60, cwd=str(Path(__file__).parent.parent.parent) )"
+        }
+      ]
+    },
+    {
+      "capabilities": [
+        "file_operations"
+      ],
+      "module_path": "scripts.sync_obsidian",
+      "name": "sync_obsidian",
+      "usage_examples": [
+        {
+          "call": "read_text",
+          "file": "scripts/sync_obsidian.py",
+          "line": 286,
+          "snippet": "read_text(memory_path)"
+        },
+        {
+          "call": "read_text",
+          "file": "scripts/sync_obsidian.py",
+          "line": 298,
+          "snippet": "read_text(generated_note_path)"
+        },
+        {
+          "call": "write_text",
+          "file": "scripts/sync_obsidian.py",
+          "line": 315,
+          "snippet": "write_text(generated_note_path, generated_after)"
+        },
+        {
+          "call": "write_text",
+          "file": "scripts/sync_obsidian.py",
+          "line": 386,
+          "snippet": "write_text(memory_path, memory_text)"
+        },
+        {
+          "call": "write_text",
+          "file": "scripts/sync_obsidian.py",
+          "line": 406,
+          "snippet": "write_text(report_path, json.dumps(report, indent=2, sort_keys=True) + \"\\n\")"
+        }
+      ]
+    },
+    {
+      "capabilities": [
+        "message_sends"
+      ],
+      "module_path": "scripts.telegram_sender",
+      "name": "telegram_sender",
+      "usage_examples": [
+        {
+          "call": "sender.send_photo",
+          "file": "scripts/telegram_sender.py",
+          "line": 315,
+          "snippet": "sender.send_photo(args.image, caption=args.caption)"
+        },
+        {
+          "call": "sender.send_group",
+          "file": "scripts/telegram_sender.py",
+          "line": 317,
+          "snippet": "sender.send_group(args.images, caption=args.caption)"
+        },
+        {
+          "call": "sender.send_document",
+          "file": "scripts/telegram_sender.py",
+          "line": 319,
+          "snippet": "sender.send_document(args.file, caption=args.caption)"
+        }
+      ]
+    },
+    {
+      "capabilities": [
+        "exec_calls"
+      ],
+      "module_path": "scripts.video_thumbnail_generator",
+      "name": "video_thumbnail_generator",
+      "usage_examples": [
+        {
+          "call": "subprocess.run",
+          "file": "scripts/video_thumbnail_generator.py",
+          "line": 40,
+          "snippet": "subprocess.run(command, check=True, capture_output=True, text=True)"
+        }
+      ]
+    },
+    {
+      "capabilities": [
+        "file_operations"
+      ],
+      "module_path": "src.coordination.cross_bot_sync",
+      "name": "cross_bot_sync",
+      "usage_examples": [
+        {
+          "call": "os.open",
+          "file": "src/coordination/cross_bot_sync.py",
+          "line": 150,
+          "snippet": "os.open( self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644, )"
+        }
+      ]
+    },
+    {
+      "capabilities": [
+        "exec_calls",
+        "file_operations"
+      ],
+      "module_path": "src.ideation.idea_pipeline",
+      "name": "idea_pipeline",
+      "usage_examples": [
+        {
+          "call": "open",
+          "file": "src/ideation/idea_pipeline.py",
+          "line": 193,
+          "snippet": "self._log_path().open(\"w\", encoding=\"utf-8\")"
+        },
+        {
+          "call": "subprocess.run",
+          "file": "src/ideation/idea_pipeline.py",
+          "line": 239,
+          "snippet": "subprocess.run( [\"git\", \"status\", \"--short\", \"--branch\"], check=False, capture_output=True, text=True, cwd=self.project_root, )"
+        }
+      ]
+    },
+    {
+      "capabilities": [
+        "exec_calls"
+      ],
+      "module_path": "src.monitoring.session_monitor",
+      "name": "session_monitor",
+      "usage_examples": [
+        {
+          "call": "subprocess.run",
+          "file": "src/monitoring/session_monitor.py",
+          "line": 18,
+          "snippet": "subprocess.run( [\"npx\", \"openclaw\", \"status\", \"--json\"], capture_output=True, text=True, timeout=30, shell=True )"
+        }
+      ]
+    },
+    {
+      "capabilities": [
+        "exec_calls"
+      ],
+      "module_path": "src.openclaw_orchestration.task_runner",
+      "name": "task_runner",
+      "usage_examples": [
+        {
+          "call": "subprocess.run",
+          "file": "src/openclaw_orchestration/task_runner.py",
+          "line": 372,
+          "snippet": "subprocess.run( command, cwd=self.base_dir, env=env, capture_output=True, text=True, timeout=timeout, check=False, )"
+        },
+        {
+          "call": "subprocess.run",
+          "file": "src/openclaw_orchestration/task_runner.py",
+          "line": 399,
+          "snippet": "subprocess.run( str(command), cwd=self.base_dir, env=env, capture_output=True, text=True, timeout=timeout, shell=True, check=False, )"
+        }
+      ]
+    },
+    {
+      "capabilities": [
+        "exec_calls"
+      ],
+      "module_path": "src.self_improvement.auto_engine",
+      "name": "auto_engine",
+      "usage_examples": [
+        {
+          "call": "subprocess.run",
+          "file": "src/self_improvement/auto_engine.py",
+          "line": 105,
+          "snippet": "subprocess.run( list(command), check=False, capture_output=True, text=True, )"
+        }
+      ]
+    },
+    {
+      "capabilities": [
+        "exec_calls"
+      ],
+      "module_path": "src.skills.proactive_watcher",
+      "name": "proactive_watcher",
+      "usage_examples": [
+        {
+          "call": "subprocess.run",
+          "file": "src/skills/proactive_watcher.py",
+          "line": 161,
+          "snippet": "subprocess.run( [sys.executable, \"-m\", \"py_compile\", str(python_file)], capture_output=True, text=True, check=False, )"
+        }
+      ]
+    }
+  ]
+}
