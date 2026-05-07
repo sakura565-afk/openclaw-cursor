@@ -37,3 +37,31 @@ Run the focused test suite with:
 python -m unittest tests.test_ollama_model_manager
 ```
 
+## EXIF Date Normalizer
+
+`python -m scripts.exif_date_normalizer` normalizes photo filenames by timestamp and writes a CSV audit log.
+
+### Features
+
+- Recursively scans folders via `--scan <path>`.
+- Reads `DateTimeOriginal` from EXIF metadata.
+- Renames files to `YYYY-MM-DD_HH-mm-ss_originalname.ext`.
+- Supports dry-run preview by default; real rename happens only with `--fix`.
+- Optional fallback `--folder-date` extracts date from parent folder names like `20240131` or `2024-01-31`.
+- Timezone is configurable via `--tz` (default: `Europe/Moscow`).
+- Writes CSV log columns: `old_name,new_name,date_source,status`.
+- Supported formats: JPG, PNG, TIFF, HEIC.
+
+### Examples
+
+```bash
+# Preview only (dry-run)
+python -m scripts.exif_date_normalizer --scan /data/photos
+
+# Apply rename and store log
+python -m scripts.exif_date_normalizer --scan /data/photos --fix --csv-log logs/exif_rename.csv
+
+# Allow folder date fallback and custom timezone
+python -m scripts.exif_date_normalizer --scan /data/photos --folder-date --tz Europe/Berlin
+```
+
