@@ -1,0 +1,9 @@
+{
+  "ConnectionError": "Add retries with backoff and a connectivity health check.",
+  "FileNotFoundError": "Verify the file path exists before opening files.",
+  "IndexError": "Guard list/array access with bounds checks.",
+  "KeyError": "Use dict.get() with defaults and check required keys upfront.",
+  "TimeoutError": "Increase timeout carefully and add retry-on-timeout logic.",
+  "TypeError": "Add explicit type checks at API boundaries.",
+  "ValueError": "Validate and sanitize input data before processing."
+}
