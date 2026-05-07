@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import sys
 from dataclasses import dataclass, field
@@ -17,6 +18,22 @@ GREEN = "\033[32m"
 YELLOW = "\033[33m"
 BLUE = "\033[34m"
 CYAN = "\033[36m"
+
+log = logging.getLogger(__name__)
+
+
+def configure_logging(verbose: bool = False, quiet: bool = False) -> None:
+    if logging.getLogger().handlers:
+        logging.getLogger().setLevel(logging.DEBUG if verbose else logging.WARNING if quiet else logging.INFO)
+        return
+    if quiet:
+        level = logging.WARNING
+    elif verbose:
+        level = logging.DEBUG
+    else:
+        level = logging.INFO
+    logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
+
 
 DATE_METADATA_RE = re.compile(
     r"^\s*(?:[-*]\s*)?(?:last\s+updated|updated|created|date)\s*[:\-]\s*(\d{4}-\d{2}-\d{2})\s*$",
@@ -314,6 +331,14 @@ def run_cleanup(
     stamp = current_day.strftime("%Y%m%d")
     cutoff = current_day - timedelta(days=days)
 
+    log.info(
+        "Memory cleanup scan root=%s dry_run=%s days=%s backup=%s",
+        root.resolve(),
+        dry_run,
+        days,
+        backup,
+    )
+
     main_memory, daily_files = discover_memory_files(root)
     target_files = [path for path in [main_memory, *daily_files] if path is not None]
 
@@ -513,11 +538,61 @@ def print_report(report: dict[str, object]) -> None:
     print(colorize(CYAN, f"  Weekly summary: {report['weekly_summary_path']}"))
 
 
+def summarize_health_report(data: dict[str, object]) -> None:
+    """Log a short summary when a JSON health report is supplied."""
+
+    summary = data.get("summary")
+    if not isinstance(summary, dict):
+        log.info("Health report has no summary block.")
+        return
+    issue_count = summary.get("issue_count")
+    scores = summary.get("by_severity")
+    score = summary.get("health_score")
+    log.info("Health summary: score=%s issues=%s breakdown=%s", score, issue_count, scores)
+
+
+def merge_cleanup_hints(report: dict[str, object], *, days: int, backup: bool) -> tuple[int, bool]:
+    """Apply the first ``run_memory_cleanup`` hint so cleanup follows the analyzer."""
+
+    hints = report.get("cleanup_hints") if isinstance(report, dict) else None
+    merged_days = days
+    merged_backup = backup
+    if not hints:
+        return merged_days, merged_backup
+    for hint in hints:
+        if isinstance(hint, dict) and hint.get("action") == "run_memory_cleanup":
+            kwargs = hint.get("kwargs") or {}
+            merged_days = int(kwargs.get("days", merged_days))
+            merged_backup = bool(kwargs.get("backup", merged_backup))
+            log.info("Applied health report cleanup hint days=%s backup=%s", merged_days, merged_backup)
+            break
+    return merged_days, merged_backup
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Automated memory cleanup for OpenClaw.")
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        default=None,
+        help="OpenClaw workspace root (Markdown memory). Defaults to current directory.",
+    )
     parser.add_argument("--days", type=int, default=90, help="Archive entries older than this many days.")
     parser.add_argument("--dry-run", action="store_true", help="Preview cleanup without changing memory files.")
     parser.add_argument("--backup", action="store_true", help="Create verified backups before cleanup.")
+    parser.add_argument(
+        "--health-report",
+        type=Path,
+        default=None,
+        help="memory_health_report JSON output; use with --apply-report to merge hinted settings.",
+    )
+    parser.add_argument(
+        "--apply-report",
+        action="store_true",
+        help="When set with --health-report, apply run_memory_cleanup kwargs from cleanup_hints.",
+    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging.")
+    parser.add_argument("-q", "--quiet", action="store_true", help="Only warnings and errors to logs.")
     return parser
 
 
@@ -528,13 +603,32 @@ def main(
 ) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    project_root = root or Path.cwd()
+    configure_logging(verbose=args.verbose, quiet=args.quiet)
+    project_root = root or args.workspace or Path.cwd()
+    if args.apply_report and not args.health_report:
+        parser.error("--apply-report requires --health-report.")
+
+    merged_days = args.days
+    merged_backup = args.backup
+    if args.health_report is not None:
+        if not args.health_report.exists():
+            log.error("Health report path does not exist: %s", args.health_report)
+            return 1
+        try:
+            health_data = json.loads(args.health_report.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            log.error("Failed to read health report: %s", exc)
+            return 1
+        summarize_health_report(health_data)
+        if args.apply_report:
+            merged_days, merged_backup = merge_cleanup_hints(health_data, days=merged_days, backup=merged_backup)
+
     try:
         report = run_cleanup(
             root=project_root,
-            days=args.days,
+            days=merged_days,
             dry_run=args.dry_run,
-            backup=args.backup,
+            backup=merged_backup,
             today=today,
         )
     except Exception as exc:  # pragma: no cover - exercised in CLI use
