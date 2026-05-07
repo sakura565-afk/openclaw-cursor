@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.local/schemas/conversation_schema.json",
+  "title": "ExtractedConversationSession",
+  "type": "object",
+  "required": [
+    "session_id",
+    "source_file",
+    "summary",
+    "turns",
+    "key_decisions",
+    "tools_used",
+    "errors_encountered",
+    "follow_up_items"
+  ],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "total_turns",
+        "roles_present",
+        "tools_used_count",
+        "decisions_count",
+        "errors_count",
+        "follow_ups_count"
+      ],
+      "properties": {
+        "total_turns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "roles_present": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tools_used_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "decisions_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "errors_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "follow_ups_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "turns": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/turn"
+      }
+    },
+    "key_decisions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidenceItem"
+      }
+    },
+    "tools_used": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "errors_encountered": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidenceItem"
+      }
+    },
+    "follow_up_items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidenceItem"
+      }
+    }
+  },
+  "$defs": {
+    "turn": {
+      "type": "object",
+      "required": [
+        "index",
+        "role",
+        "content",
+        "tool_calls",
+        "metadata"
+      ],
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "role": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "content": {
+          "type": "string"
+        },
+        "tool_calls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metadata": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "evidenceItem": {
+      "type": "object",
+      "required": [
+        "turn_index",
+        "role",
+        "timestamp",
+        "evidence"
+      ],
+      "properties": {
+        "turn_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "role": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
