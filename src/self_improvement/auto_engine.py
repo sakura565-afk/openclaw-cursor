@@ -347,7 +347,7 @@ class AutoImprovementEngine:
         checks = self.run_health_checks()
 
         ollama_result = next((item for item in checks if item.name == "ollama"), None)
-        if ollama_result and ollama_result.status != "ok":
+        if ollama_result and ollama_result.status == "critical":
             actions.append(self.restart_ollama())
 
         disk_result = next((item for item in checks if item.name == "disk"), None)
@@ -482,6 +482,37 @@ class AutoImprovementEngine:
         color = Colors.GREEN if action.outcome not in {"failed"} else Colors.RED
         outcome = colorize(action.outcome.upper(), color, self.color)
         return f"[{outcome}] {action.category}: {action.action}"
+
+
+class SelfImproveAgent:
+    """Backwards-compatible facade used by automation scripts."""
+
+    def __init__(
+        self,
+        root_dir: Path | str | None = None,
+        log_dir: Path | str | None = None,
+        *,
+        color: Optional[bool] = None,
+    ) -> None:
+        self.engine = AutoImprovementEngine(
+            root_dir=root_dir or Path.cwd(),
+            log_dir=log_dir,
+            color=color,
+        )
+
+    def run_full_cycle(self) -> Dict[str, Any]:
+        checks = self.engine.run_health_checks()
+        actions = self.engine.auto_fix()
+        digest = self.engine.generate_weekly_digest()
+        report = {
+            "timestamp": _now_utc().isoformat(),
+            "checks": [check.as_dict() for check in checks],
+            "actions": [action.as_dict() for action in actions],
+            "digest_path": str(self.engine.log_dir / "weekly_auto_improvement_digest.md"),
+            "digest": digest,
+        }
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return report
 
 
 def build_parser() -> argparse.ArgumentParser:

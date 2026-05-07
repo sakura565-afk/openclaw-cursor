@@ -1,3 +1,4 @@
 logs/sync_obsidian_*.json
+src/self_improvement/logs/
 __pycache__/
 *.py[cod]
