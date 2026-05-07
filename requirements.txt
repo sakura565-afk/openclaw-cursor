@@ -1,3 +1,6 @@
 flask
 markdown2
 python-frontmatter
+pillow
+imagehash
+tqdm

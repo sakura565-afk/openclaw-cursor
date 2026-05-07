@@ -37,3 +37,39 @@ Run the focused test suite with:
 python -m unittest tests.test_ollama_model_manager
 ```
 
+## Photo Deduplication
+
+`python -m scripts.photo_deduplication` scans photo archives and groups duplicate images using perceptual/average hashing.
+
+### Supported formats
+
+- JPG / JPEG
+- PNG
+- TIFF
+- BMP
+- HEIC (requires Pillow HEIF support in environment)
+
+### Usage
+
+```bash
+python -m scripts.photo_deduplication --scan /path/to/archive --dry-run
+python -m scripts.photo_deduplication --scan /path/to/archive --move --hash-type both
+python -m scripts.photo_deduplication --scan /path/to/archive --hash-type perceptual --threshold 95
+```
+
+### CLI flags
+
+- `--scan <path>`: recursively scans directory for images.
+- `--dry-run`: generates report only, no file deletion/move.
+- `--move`: moves duplicates to `<scan>/duplicates/` instead of deleting.
+- `--hash-type [perceptual|average|both]`: hashing mode.
+- `--threshold`: duplicate similarity threshold in percent.
+- `--json-out`: path to JSON report file.
+- `--csv-out`: path to CSV duplicates list.
+
+### Tests
+
+```bash
+python -m unittest tests.test_photo_deduplication
+```
+
