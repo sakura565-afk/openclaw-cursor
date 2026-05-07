@@ -37,3 +37,35 @@ Run the focused test suite with:
 python -m unittest tests.test_ollama_model_manager
 ```
 
+## Photo Archive Report
+
+`python -m scripts.photo_archive_report` analyzes a photo/video archive and produces statistics in markdown tables plus JSON for charting.
+
+### Usage
+
+```bash
+python -m scripts.photo_archive_report --scan /path/to/archive
+python -m scripts.photo_archive_report --scan /path/to/archive --check-integrity
+python -m scripts.photo_archive_report --scan /path/to/archive --check-integrity --output reports/photo_archive.md
+python -m scripts.photo_archive_report --scan /path/to/archive --verbose --output reports/photo_archive.md
+```
+
+### What it reports
+
+- Total files and file counts by extension (`jpg`, `png`, `heic`, `mp4`, etc.)
+- Distribution by file modification year/month
+- File size statistics: total, average, median, max (bytes)
+- Optional integrity checks:
+  - broken image detection (`Pillow` open/verify)
+  - suspicious tiny `HEIC/JPEG` files (`< 1KB`)
+  - detailed broken/suspicious files table
+
+If `--output report.md` is provided, the tool writes:
+- markdown report to `report.md`
+- JSON payload to `report.json` (same directory/stem)
+
+### Tests
+
+```bash
+python -m unittest tests.test_photo_archive_report
+```
