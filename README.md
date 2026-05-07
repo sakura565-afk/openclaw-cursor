@@ -37,3 +37,27 @@ Run the focused test suite with:
 python -m unittest tests.test_ollama_model_manager
 ```
 
+## Conversation Extractor
+
+`python -m scripts.conversation_extractor` parses OpenClaw session transcripts
+(JSON, JSONL, or NDJSON) under `~/.openclaw/sessions/` and emits a structured
+report containing user messages, assistant responses, tool calls, tool
+outcomes, and detected error / success / learning patterns.
+
+```bash
+python -m scripts.conversation_extractor
+python -m scripts.conversation_extractor --sessions-dir ~/.openclaw/sessions
+python -m scripts.conversation_extractor --output report.json --markdown report.md
+```
+
+The default sessions directory is resolved from `$OPENCLAW_SESSIONS_DIR`,
+falling back to `%APPDATA%/openclaw/sessions` on Windows or
+`~/.openclaw/sessions` elsewhere. All path handling uses `pathlib.Path` so the
+script runs unchanged on Windows, macOS, and Linux.
+
+Run its test suite with:
+
+```bash
+python -m unittest tests.test_conversation_extractor
+```
+
