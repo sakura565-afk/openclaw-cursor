@@ -1,0 +1,4662 @@
+{
+  "version": 1,
+  "generated_at": "2026-05-08T12:12:31.305197+00:00",
+  "repo_root": "/workspace",
+  "scan_globs": [
+    "scripts/*.py",
+    "src/**/*.py"
+  ],
+  "tools": [
+    {
+      "id": "scripts/__init__.py",
+      "relative_path": "scripts/__init__.py",
+      "purpose": "Utility scripts for OpenClaw automation.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": false,
+      "entry_functions": [],
+      "cli": {
+        "parser_descriptions": [],
+        "arguments": [],
+        "subcommands": []
+      },
+      "symbols": [],
+      "notes": [
+        "No public classes/functions and no argparse usage detected; may be a thin shim."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/ami_parser.py",
+      "relative_path": "scripts/ami_parser.py",
+      "purpose": "AMI.by price intelligence tracker for furniture categories.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "AMI.by price tracker"
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "--db"
+            ],
+            "dest": null,
+            "help": "Path to SQLite DB file",
+            "action": null,
+            "required": null
+          }
+        ],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "Product",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "AmiTracker",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/batch_image_optimizer.py",
+      "relative_path": "scripts/batch_image_optimizer.py",
+      "purpose": "Bulk image optimizer with optional MiniMax enhancement.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main",
+        "parse_args"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "Bulk image processor (resize/watermark/compress/enhance via MiniMax)."
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "--input-dir"
+            ],
+            "dest": null,
+            "help": null,
+            "action": null,
+            "required": true
+          },
+          {
+            "flags": [
+              "--output-dir"
+            ],
+            "dest": null,
+            "help": null,
+            "action": null,
+            "required": true
+          },
+          {
+            "flags": [
+              "--operations"
+            ],
+            "dest": null,
+            "help": "Comma-separated operations list.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--target-size"
+            ],
+            "dest": null,
+            "help": null,
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--watermark-text"
+            ],
+            "dest": null,
+            "help": null,
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--minimax-base-url"
+            ],
+            "dest": null,
+            "help": null,
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--minimax-model"
+            ],
+            "dest": null,
+            "help": null,
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--verbose"
+            ],
+            "dest": null,
+            "help": null,
+            "action": "store_true",
+            "required": null
+          },
+          {
+            "flags": [
+              "--verbose"
+            ],
+            "dest": null,
+            "help": null,
+            "action": "store_true",
+            "required": null
+          }
+        ],
+        "subcommands": [
+          {
+            "name": "run",
+            "help": "Process a directory of images."
+          },
+          {
+            "name": "self-test",
+            "help": "Run a mock-image self test."
+          }
+        ]
+      },
+      "symbols": [
+        {
+          "kind": "function",
+          "name": "parse_size",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_operations",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "setup_logging",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "append_markdown_log",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "minimax_enhance_image",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "apply_resize",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "apply_watermark",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "single_image_process",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "process_directory",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "run_self_test",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_args",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/comfy_auto_quality.py",
+      "relative_path": "scripts/comfy_auto_quality.py",
+      "purpose": "Universal auto-quality processor for ComfyUI images.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main",
+        "parse_args"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "ComfyUI auto-quality processor (face restore + denoise + upscale)."
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "--input"
+            ],
+            "dest": "input_path",
+            "help": "Input image path.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--output"
+            ],
+            "dest": "output_dir",
+            "help": "Output directory.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--gpu"
+            ],
+            "dest": null,
+            "help": "Preferred Comfy host.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--comfy-url"
+            ],
+            "dest": "comfy_url",
+            "help": "Override ComfyUI API URL.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--retries"
+            ],
+            "dest": null,
+            "help": "HTTP retry attempts.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--retry-backoff-sec"
+            ],
+            "dest": null,
+            "help": "Retry backoff multiplier.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--upscale"
+            ],
+            "dest": null,
+            "help": "Preferred upscale factor.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--self-test"
+            ],
+            "dest": null,
+            "help": "Run API/object_info checks and local quality analysis.",
+            "action": "store_true",
+            "required": null
+          }
+        ],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "PipelineError",
+          "doc": "Pipeline-level exception with user-friendly text.",
+          "bases": [
+            "RuntimeError"
+          ]
+        },
+        {
+          "kind": "class",
+          "name": "Config",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "MarkdownLogger",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "ComfyClient",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "AutoQualityProcessor",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_args",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "run_self_test",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "process_pil_image",
+          "doc": "Programmatic API entry point for PIL inputs. Example: from PIL import Image from scripts.comfy_auto_quality import process_pil_image result = process_pil_image(Image.open(\"photo.jpg\"), output_dir=\"out\", gpu=\"Work-PC\")",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/comfy_video_pipeline.py",
+      "relative_path": "scripts/comfy_video_pipeline.py",
+      "purpose": "\u0423\u043d\u0438\u0432\u0435\u0440\u0441\u0430\u043b\u044c\u043d\u044b\u0439 \u043f\u0430\u0439\u043f\u043b\u0430\u0439\u043d \u0433\u0435\u043d\u0435\u0440\u0430\u0446\u0438\u0438 \u0432\u0438\u0434\u0435\u043e \u043c\u0435\u0431\u0435\u043b\u0438 \u0447\u0435\u0440\u0435\u0437 ComfyUI API:",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main",
+        "parse_args"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "\u0413\u0435\u043d\u0435\u0440\u0430\u0446\u0438\u044f \u0438 \u0438\u043d\u0442\u0435\u0440\u043f\u043e\u043b\u044f\u0446\u0438\u044f \u0432\u0438\u0434\u0435\u043e \u043c\u0435\u0431\u0435\u043b\u0438 \u0447\u0435\u0440\u0435\u0437 ComfyUI (SD + RIFE + SUPIR)."
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "--input_image"
+            ],
+            "dest": null,
+            "help": "\u041f\u0443\u0442\u044c \u043a \u0432\u0445\u043e\u0434\u043d\u043e\u0439 \u0444\u043e\u0442\u043e\u0433\u0440\u0430\u0444\u0438\u0438 \u043c\u0435\u0431\u0435\u043b\u0438.",
+            "action": null,
+            "required": true
+          },
+          {
+            "flags": [
+              "--effect"
+            ],
+            "dest": null,
+            "help": "\u0422\u0438\u043f \u044d\u0444\u0444\u0435\u043a\u0442\u0430 \u043a\u0430\u043c\u0435\u0440\u044b: rotate | zoom | pan",
+            "action": null,
+            "required": true
+          },
+          {
+            "flags": [
+              "--duration"
+            ],
+            "dest": null,
+            "help": "\u0414\u043b\u0438\u0442\u0435\u043b\u044c\u043d\u043e\u0441\u0442\u044c \u0432\u0438\u0434\u0435\u043e \u0432 \u0441\u0435\u043a\u0443\u043d\u0434\u0430\u0445.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--fps"
+            ],
+            "dest": null,
+            "help": "\u0426\u0435\u043b\u0435\u0432\u043e\u0439 FPS \u0438\u0442\u043e\u0433\u043e\u0432\u043e\u0433\u043e \u0432\u0438\u0434\u0435\u043e.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--output_video"
+            ],
+            "dest": null,
+            "help": "\u041f\u0443\u0442\u044c \u043a \u0444\u0438\u043d\u0430\u043b\u044c\u043d\u043e\u043c\u0443 mp4 \u0444\u0430\u0439\u043b\u0443.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--frames_dir"
+            ],
+            "dest": null,
+            "help": "\u041f\u0430\u043f\u043a\u0430 \u0434\u043b\u044f \u043f\u0440\u043e\u043c\u0435\u0436\u0443\u0442\u043e\u0447\u043d\u044b\u0445 \u043a\u0430\u0434\u0440\u043e\u0432.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--comfy_url"
+            ],
+            "dest": null,
+            "help": "URL ComfyUI API.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--checkpoint"
+            ],
+            "dest": null,
+            "help": "Base checkpoint \u0434\u043b\u044f SD (\u043f\u043e \u0442\u0440\u0435\u0431\u043e\u0432\u0430\u043d\u0438\u044e: realisticVisionV60B1_v12.safetensors).",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--rife_models_dir"
+            ],
+            "dest": null,
+            "help": "\u041f\u0443\u0442\u044c \u043a \u0434\u0438\u0440\u0435\u043a\u0442\u043e\u0440\u0438\u0438 \u043c\u043e\u0434\u0435\u043b\u0435\u0439 RIFE.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--rife_model_name"
+            ],
+            "dest": null,
+            "help": "\u042f\u0432\u043d\u043e\u0435 \u0438\u043c\u044f RIFE \u043c\u043e\u0434\u0435\u043b\u0438 (\u043e\u043f\u0446\u0438\u043e\u043d\u0430\u043b\u044c\u043d\u043e).",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--base_gen_fps"
+            ],
+            "dest": null,
+            "help": "FPS \u0431\u0430\u0437\u043e\u0432\u043e\u0439 SD \u0433\u0435\u043d\u0435\u0440\u0430\u0446\u0438\u0438.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--width"
+            ],
+            "dest": null,
+            "help": "\u0428\u0438\u0440\u0438\u043d\u0430 \u043a\u0430\u0434\u0440\u0430.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--height"
+            ],
+            "dest": null,
+            "help": "\u0412\u044b\u0441\u043e\u0442\u0430 \u043a\u0430\u0434\u0440\u0430.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--steps"
+            ],
+            "dest": null,
+            "help": "\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e SD \u0448\u0430\u0433\u043e\u0432 KSampler.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--cfg"
+            ],
+            "dest": null,
+            "help": "CFG scale \u0434\u043b\u044f SD.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--denoise"
+            ],
+            "dest": null,
+            "help": "\u0421\u0438\u043b\u0430 denoise \u0432 img2img.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--seed"
+            ],
+            "dest": null,
+            "help": "\u0411\u0430\u0437\u043e\u0432\u044b\u0439 seed.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--supir_scale"
+            ],
+            "dest": null,
+            "help": "\u041a\u043e\u044d\u0444\u0444\u0438\u0446\u0438\u0435\u043d\u0442 SUPIR upscale.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--no_supir"
+            ],
+            "dest": null,
+            "help": "\u041e\u0442\u043a\u043b\u044e\u0447\u0438\u0442\u044c SUPIR upscale \u0434\u0430\u0436\u0435 \u0435\u0441\u043b\u0438 \u043d\u043e\u0434\u044b \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u044b.",
+            "action": "store_true",
+            "required": null
+          },
+          {
+            "flags": [
+              "--retries"
+            ],
+            "dest": null,
+            "help": "\u041a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e retry \u0434\u043b\u044f API \u0438 \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u0439.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--retry_backoff_sec"
+            ],
+            "dest": null,
+            "help": "\u0411\u0430\u0437\u043e\u0432\u0430\u044f \u043f\u0430\u0443\u0437\u0430 \u043c\u0435\u0436\u0434\u0443 retry.",
+            "action": null,
+            "required": null
+          }
+        ],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "PipelineError",
+          "doc": "\u0411\u0438\u0437\u043d\u0435\u0441-\u043e\u0448\u0438\u0431\u043a\u0430 \u043f\u0430\u0439\u043f\u043b\u0430\u0439\u043d\u0430.",
+          "bases": [
+            "RuntimeError"
+          ]
+        },
+        {
+          "kind": "class",
+          "name": "PipelineConfig",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "MarkdownLogger",
+          "doc": "\u041f\u0440\u043e\u0441\u0442\u043e\u0439 markdown-\u043b\u043e\u0433\u0433\u0435\u0440 \u0432 memory/comfy_video_log.md.",
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "ComfyClient",
+          "doc": "\u041a\u043b\u0438\u0435\u043d\u0442 \u0434\u043b\u044f ComfyUI HTTP API \u0441 retry-\u043b\u043e\u0433\u0438\u043a\u043e\u0439.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "retry",
+          "doc": "\u0414\u0435\u043a\u043e\u0440\u0430\u0442\u043e\u0440 retry \u0434\u043b\u044f \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0445 \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u0439 (\u043d\u0435 HTTP).",
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "ComfyVideoPipeline",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_args",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/context_split.py",
+      "relative_path": "scripts/context_split.py",
+      "purpose": "Split large contexts before querying MiniMax.",
+      "purpose_source": "argparse",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main",
+        "parse_args"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "Split large contexts before querying MiniMax."
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "question"
+            ],
+            "dest": null,
+            "help": "Question to ask about the context.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "context"
+            ],
+            "dest": null,
+            "help": "Context text to analyze.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--file"
+            ],
+            "dest": "context_file",
+            "help": "Read the context from a file instead of the positional context argument.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--api-key"
+            ],
+            "dest": null,
+            "help": "OpenRouter API key. Defaults to OPENROUTER_API_KEY.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--api-url"
+            ],
+            "dest": null,
+            "help": "OpenRouter-style chat completions endpoint or base URL.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--model"
+            ],
+            "dest": null,
+            "help": "Model name to send to the OpenRouter-style endpoint.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--chunk-size"
+            ],
+            "dest": null,
+            "help": null,
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--overlap"
+            ],
+            "dest": null,
+            "help": null,
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--split-threshold"
+            ],
+            "dest": null,
+            "help": null,
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--recursive-limit"
+            ],
+            "dest": null,
+            "help": null,
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--timeout"
+            ],
+            "dest": null,
+            "help": null,
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--max-workers"
+            ],
+            "dest": null,
+            "help": null,
+            "action": null,
+            "required": null
+          }
+        ],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "Chunk",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "ChunkDraft",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "normalize_text",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "estimate_tokens",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "normalize_api_url",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "is_header_block",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "split_semantic_units",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "split_context",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_chunk_messages",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_synthesis_messages",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "extract_message_text",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "openrouter_chat_completion",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "query_with_retry",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "split_and_query_context",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_args",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "load_context",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/face_swap_batch.py",
+      "relative_path": "scripts/face_swap_batch.py",
+      "purpose": "Batch face swap processor for model photography.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "Batch face swap processor"
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "--config"
+            ],
+            "dest": null,
+            "help": "Path to face_swap_batch.yaml",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--init-config"
+            ],
+            "dest": null,
+            "help": "Write default YAML config and exit",
+            "action": "store_true",
+            "required": null
+          },
+          {
+            "flags": [
+              "--self-test"
+            ],
+            "dest": null,
+            "help": "Run synthetic self-test and exit",
+            "action": "store_true",
+            "required": null
+          }
+        ],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "FaceSwapError",
+          "doc": "Pipeline-level error.",
+          "bases": [
+            "RuntimeError"
+          ]
+        },
+        {
+          "kind": "class",
+          "name": "MarkdownLogger",
+          "doc": "Simple markdown logger that appends sections.",
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "FaceSwapConfig",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "detect_faces",
+          "doc": "Detect face rectangles in an image.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "apply_inswapper",
+          "doc": "Apply face swap on one rectangle. model_path is accepted for API compatibility, runtime uses initialized swapper.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "apply_gfpgan",
+          "doc": "Enhance swapped image using GFPGAN when available.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "single_swap",
+          "doc": "Swap all faces in one target image.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "batch_swap",
+          "doc": "Batch face swap over all jpg/png images in target_dir.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/marketplace_dashboard.py",
+      "relative_path": "scripts/marketplace_dashboard.py",
+      "purpose": "Marketplace analytics dashboard for Amadey.ru, Wildberries, and Ozon.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main",
+        "parse_args"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "Marketplace analytics dashboard (WB + Ozon + Amadey.ru)."
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "--db-path"
+            ],
+            "dest": null,
+            "help": "Path to SQLite database file.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--seed"
+            ],
+            "dest": null,
+            "help": "Seed example data when table is empty.",
+            "action": "store_true",
+            "required": null
+          },
+          {
+            "flags": [
+              "--reset"
+            ],
+            "dest": null,
+            "help": "Clear existing marketplace_sales data before running.",
+            "action": "store_true",
+            "required": null
+          }
+        ],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "SaleRecord",
+          "doc": "Single sales event row.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "setup_database",
+          "doc": "Create required marketplace_sales table.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "seed_if_empty",
+          "doc": "Insert demo data for dashboard display when table is empty.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "money",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "render_table",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "bar_chart",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "summary_metrics",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "top_products",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "monthly_dynamics",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "channel_comparison",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_args",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/media_tool.py",
+      "relative_path": "scripts/media_tool.py",
+      "purpose": "Utilities for preparing media files before upload.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": false,
+      "entry_functions": [],
+      "cli": {
+        "parser_descriptions": [],
+        "arguments": [],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "ResizeError",
+          "doc": "Raised when an image cannot be resized to fit the target limit.",
+          "bases": [
+            "RuntimeError"
+          ]
+        },
+        {
+          "kind": "class",
+          "name": "PreparedFile",
+          "doc": "Represents a media file prepared for upload.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "ensure_photo_size_under_limit",
+          "doc": "Return a file path suitable for Telegram photo uploads. If the original image already fits under ``limit_bytes``, the original file is returned. Otherwise, ffmpeg is used to generate progressively smaller JPEG versions until one fits under the requested size limit.",
+          "bases": null
+        }
+      ],
+      "notes": [],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/memory_analytics.py",
+      "relative_path": "scripts/memory_analytics.py",
+      "purpose": "Memory health analytics for MEMORY.md files.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main",
+        "parse_args"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "Analyze MEMORY.md health."
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "--input"
+            ],
+            "dest": null,
+            "help": "Path to the input MEMORY.md file.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--output"
+            ],
+            "dest": null,
+            "help": "Path to write the markdown report.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--days"
+            ],
+            "dest": null,
+            "help": "Stale threshold in days for entry freshness checks.",
+            "action": null,
+            "required": null
+          }
+        ],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "Entry",
+          "doc": "A single MEMORY.md entry.",
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "Section",
+          "doc": "A heading section within the memory file.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "colorize",
+          "doc": "Wrap text in ANSI color codes unless disabled.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "human_size",
+          "doc": "Format bytes into a compact human-readable string.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "slugify_heading",
+          "doc": "Create a markdown-friendly anchor from a heading.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "normalize_anchor",
+          "doc": "Normalize anchor references for comparisons.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "normalize_text",
+          "doc": "Normalize markdown text for duplicate detection.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_date_string",
+          "doc": "Parse a single date-like string into a date.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "extract_dates",
+          "doc": "Extract unique dates found within a block of text.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "extract_internal_links",
+          "doc": "Extract internal anchor references from markdown and HTML links.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_memory_file",
+          "doc": "Parse the memory file into sections, entries, anchors, and links.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_age_distribution",
+          "doc": "Bucket entries by age based on the most recent date in each entry.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "find_stale_entries",
+          "doc": "Return entries whose last mention is older than the configured threshold.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "find_missing_cross_references",
+          "doc": "Find internal links that point to anchors not present in the file.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "find_duplicate_entries",
+          "doc": "Detect similar entry pairs above the configured similarity threshold.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "analyze_memory",
+          "doc": "Produce analytics results for a parsed memory file.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "render_markdown_report",
+          "doc": "Render a markdown report from the analytics data.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "print_console_summary",
+          "doc": "Print a colorized summary to the terminal.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_args",
+          "doc": "Parse CLI arguments.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": "CLI entrypoint.",
+          "bases": null
+        }
+      ],
+      "notes": [
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/memory_cleanup.py",
+      "relative_path": "scripts/memory_cleanup.py",
+      "purpose": "Automated memory cleanup for OpenClaw.",
+      "purpose_source": "argparse",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "Automated memory cleanup for OpenClaw."
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "--days"
+            ],
+            "dest": null,
+            "help": "Archive entries older than this many days.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--dry-run"
+            ],
+            "dest": null,
+            "help": "Preview cleanup without changing memory files.",
+            "action": "store_true",
+            "required": null
+          },
+          {
+            "flags": [
+              "--backup"
+            ],
+            "dest": null,
+            "help": "Create verified backups before cleanup.",
+            "action": "store_true",
+            "required": null
+          }
+        ],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "Entry",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "ParsedFile",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "colorize",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "human_bytes",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "normalize_lines",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "semantic_text",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "merge_bodies",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_date_candidate",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "dates_from_text",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "date_from_stem",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "infer_last_updated",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "split_sections",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "split_heading_and_body",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_file",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "discover_memory_files",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "rebuild_file",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "archive_path_for",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "ensure_unique_path",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "backup_path_for",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "backup_file",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_weekly_summary",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "run_cleanup",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "print_report",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_parser",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/obsidian_dashboard.py",
+      "relative_path": "scripts/obsidian_dashboard.py",
+      "purpose": "Obsidian Vault Dashboard",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main",
+        "parse_args"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "Obsidian Vault Dashboard"
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "--vault-path"
+            ],
+            "dest": null,
+            "help": "Path to Obsidian vault",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--port"
+            ],
+            "dest": null,
+            "help": "Port for dashboard web server",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--dump-json"
+            ],
+            "dest": null,
+            "help": "Scan vault and print JSON stats (without starting server)",
+            "action": "store_true",
+            "required": null
+          },
+          {
+            "flags": [
+              "--report-format"
+            ],
+            "dest": null,
+            "help": "Report format for --report output",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--report"
+            ],
+            "dest": null,
+            "help": "Generate report and print to stdout (without starting server)",
+            "action": "store_true",
+            "required": null
+          }
+        ],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "function",
+          "name": "bytes_to_human",
+          "doc": "Convert bytes to human-readable value.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "now_iso",
+          "doc": "Current timestamp in ISO format.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "log_event",
+          "doc": "Append markdown log entry to memory/obsidian_dashboard_log.md.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "normalize_note_name",
+          "doc": "Normalize note path to Obsidian note key without extension.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_wiki_target",
+          "doc": "Parse wiki link target: [[path/to/note|alias]] -> path/to/note [[note#header]] -> note",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "extract_wiki_links",
+          "doc": "Extract raw wiki-link targets from markdown content.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "extract_tags",
+          "doc": "Extract hashtags from content + tags from frontmatter.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "get_project_stats",
+          "doc": "Return project statistics: { \"project\": \"...\", \"file_count\": int, \"total_size\": int, \"total_size_human\": str, \"last_modified\": \"...\", \"types\": {\"md\": 5, \"png\": 2} }",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "collect_markdown_notes",
+          "doc": "Build an index of markdown notes by possible wiki-link keys.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "find_broken_links",
+          "doc": "Find broken internal wiki links for markdown files. Returns list of: {\"source\": \"...\", \"target\": \"...\"}",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "scan_vault",
+          "doc": "Scan Obsidian vault and return dashboard data dictionary.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "generate_report",
+          "doc": "Generate dashboard report in markdown or html.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "create_app",
+          "doc": "Create and configure Flask app.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "run_server",
+          "doc": "Run Flask dashboard server.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_args",
+          "doc": "CLI args.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/ollama_batch.py",
+      "relative_path": "scripts/ollama_batch.py",
+      "purpose": "Run Ollama prompts in parallel and save responses to JSON.",
+      "purpose_source": "argparse",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main",
+        "parse_args"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "Run Ollama prompts in parallel and save responses to JSON."
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "--file"
+            ],
+            "dest": null,
+            "help": "Input file with prompts.",
+            "action": null,
+            "required": true
+          },
+          {
+            "flags": [
+              "--model"
+            ],
+            "dest": null,
+            "help": "Ollama model name.",
+            "action": null,
+            "required": true
+          },
+          {
+            "flags": [
+              "--output"
+            ],
+            "dest": null,
+            "help": "Path to the JSON output file.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--parallel"
+            ],
+            "dest": null,
+            "help": "Maximum concurrent requests to send to Ollama.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--timeout"
+            ],
+            "dest": null,
+            "help": "Timeout in seconds for each Ollama request.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--retries"
+            ],
+            "dest": null,
+            "help": "Maximum retries after the initial failed attempt.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--backoff-base"
+            ],
+            "dest": null,
+            "help": "Base seconds for exponential backoff between retries.",
+            "action": null,
+            "required": null
+          }
+        ],
+        "subcommands": [
+          {
+            "name": "run",
+            "help": "Run prompts from a text file or JSON array."
+          }
+        ]
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "PromptResult",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "positive_int",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "positive_float",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_args",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "load_prompts",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "format_duration",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "print_progress",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "run_prompt",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "run_batch",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_output_payload",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "write_results",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "run_command",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/ollama_benchmark.py",
+      "relative_path": "scripts/ollama_benchmark.py",
+      "purpose": "Benchmark installed Ollama models.",
+      "purpose_source": "argparse",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main",
+        "parse_args"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "Benchmark installed Ollama models."
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "--log-dir"
+            ],
+            "dest": null,
+            "help": "Directory where benchmark logs are stored (default: logs).",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "models"
+            ],
+            "dest": null,
+            "help": "Specific Ollama model names. If omitted, installed models are discovered via `ollama list`.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--current"
+            ],
+            "dest": null,
+            "help": "Current run identifier in the form YYYYMMDD:index or a JSON log path.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--previous"
+            ],
+            "dest": null,
+            "help": "Previous run identifier in the form YYYYMMDD:index or a JSON log path.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--limit"
+            ],
+            "dest": null,
+            "help": "Maximum number of runs to show (default: 10).",
+            "action": null,
+            "required": null
+          }
+        ],
+        "subcommands": [
+          {
+            "name": "run",
+            "help": "Run a benchmark across models."
+          },
+          {
+            "name": "compare",
+            "help": "Compare two benchmark runs."
+          },
+          {
+            "name": "history",
+            "help": "Show historical benchmark runs."
+          }
+        ]
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "BenchmarkPrompt",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_args",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "run_command",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "estimate_token_count",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "normalize_text",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "score_prompt_output",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "format_number",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "render_markdown_table",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "list_models",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "read_vram_usage_mb",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "read_ram_usage_mb",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "safe_delta",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "benchmark_prompt",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "benchmark_model",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "benchmark_rows",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "ensure_log_dir",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "benchmark_log_path",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "read_json",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "write_json",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "load_runs_from_payload",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "load_history",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "save_run",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "resolve_run_identifier",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "compare_results",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_run_payload",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "run_benchmarks",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "latest_two_runs",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "print_run_report",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "print_compare_report",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_history_rows",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "print_history_report",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/ollama_manifest_fix.py",
+      "relative_path": "scripts/ollama_manifest_fix.py",
+      "purpose": "Repair Ollama on-disk manifests so current servers can list and load local models.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "Fix Ollama local manifest layout (discoverability + digest/size consistency)."
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "--models"
+            ],
+            "dest": null,
+            "help": "Models directory (defaults to OLLAMA_MODELS or ~/.ollama/models).",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "manifest_paths"
+            ],
+            "dest": null,
+            "help": "Optional specific manifest files to fix; default: all manifests under manifests/*/*/*/*.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--dry-run"
+            ],
+            "dest": null,
+            "help": "Print actions without writing.",
+            "action": "store_true",
+            "required": null
+          },
+          {
+            "flags": [
+              "--no-repair-json"
+            ],
+            "dest": null,
+            "help": "Only mirror registry aliases; do not rewrite manifest JSON.",
+            "action": "store_true",
+            "required": null
+          },
+          {
+            "flags": [
+              "--no-mirror"
+            ],
+            "dest": null,
+            "help": "Do not write duplicate manifests under the canonical registry.ollama.ai host.",
+            "action": "store_true",
+            "required": null
+          }
+        ],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "function",
+          "name": "manifest_paths_under",
+          "doc": "Match Ollama's manifest.Manifests glob: manifests/*/*/*/* (files only).",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_manifest_rel_path",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "canonicalize_digest",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "blob_path_for_digest",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "fix_manifest_obj",
+          "doc": "Normalize config + layers digests and sizes against files under models_root/blobs. Returns (new_manifest_dict, warnings).",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "go_style_json_lines",
+          "doc": "Match encoding/json.Encoder.Encode: one JSON object + trailing newline.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "process_manifest_file",
+          "doc": "Returns a report dict for one file.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "run_fix",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_arg_parser",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/ollama_model_manager.py",
+      "relative_path": "scripts/ollama_model_manager.py",
+      "purpose": "Manage local Ollama models for OpenClaw.",
+      "purpose_source": "argparse",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main",
+        "parse_args"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "Manage local Ollama models for OpenClaw."
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "model"
+            ],
+            "dest": null,
+            "help": "Model name to pull.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "model"
+            ],
+            "dest": null,
+            "help": "Model name to remove.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--yes"
+            ],
+            "dest": null,
+            "help": "Skip the confirmation prompt.",
+            "action": "store_true",
+            "required": null
+          },
+          {
+            "flags": [
+              "model"
+            ],
+            "dest": null,
+            "help": "Model name to inspect.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "query"
+            ],
+            "dest": null,
+            "help": "Search query.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--days"
+            ],
+            "dest": null,
+            "help": "Flag models older than this many days.",
+            "action": null,
+            "required": null
+          }
+        ],
+        "subcommands": [
+          {
+            "name": "list",
+            "help": "List local Ollama models."
+          },
+          {
+            "name": "pull",
+            "help": "Pull an Ollama model."
+          },
+          {
+            "name": "remove",
+            "help": "Remove a local Ollama model."
+          },
+          {
+            "name": "show",
+            "help": "Show details for a local model."
+          },
+          {
+            "name": "search",
+            "help": "Search for models via the Ollama CLI."
+          },
+          {
+            "name": "cleanup",
+            "help": "Suggest stale models to remove."
+          }
+        ]
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "OllamaManagerError",
+          "doc": "Raised for recoverable CLI workflow errors.",
+          "bases": [
+            "RuntimeError"
+          ]
+        },
+        {
+          "kind": "class",
+          "name": "ModelEntry",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "PullProgress",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "colorize",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "strip_ansi",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "format_bytes",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_human_bytes",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "format_rate",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "format_duration",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "render_table",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "print_section",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_relative_age_days",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_tabular_output",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_model_list",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_key_value_output",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_parameter_output",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_modelfile_output",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_eta_seconds",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_pull_progress",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "update_pull_metrics",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "render_pull_progress",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "read_stream_chunks",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "ensure_ollama_available",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "run_ollama_command",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "get_disk_space",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "list_models",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "pull_model",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "remove_model",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "show_model",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "search_models",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "cleanup_suggestions",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_args",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/ollama_monitor.py",
+      "relative_path": "scripts/ollama_monitor.py",
+      "purpose": "Monitor and auto-restart Ollama for OpenClaw.",
+      "purpose_source": "argparse",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main",
+        "parse_args"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "Monitor and auto-restart Ollama for OpenClaw."
+        ],
+        "arguments": [],
+        "subcommands": [
+          {
+            "name": "status",
+            "help": "Run a one-time health and VRAM status check."
+          },
+          {
+            "name": "restart",
+            "help": "Restart managed Ollama if needed."
+          },
+          {
+            "name": "logs",
+            "help": "Print the latest Ollama JSON log."
+          }
+        ]
+      },
+      "symbols": [
+        {
+          "kind": "function",
+          "name": "utc_now",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "isoformat_timestamp",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_timestamp",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "format_duration",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "logs_dir",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "state_path",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "stderr_log_path",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "daily_log_path",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "ensure_logs_dir",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "default_state",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "load_json_file",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "summarize_state",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "load_daily_log",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "write_daily_log",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "append_log_event",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "load_state",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "save_state",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "is_pid_running",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "sync_stderr_to_json",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "finalize_current_uptime",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "mark_service_healthy",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "check_health",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "check_vram",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "stop_managed_ollama",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "start_ollama_process",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "restart_ollama",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "gather_status",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "run_monitor_loop",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "latest_json_log",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "print_json",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "print_logs",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_args",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/optimize_context.py",
+      "relative_path": "scripts/optimize_context.py",
+      "purpose": "Optimize OpenClaw session context and suggest reductions.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "Optimize OpenClaw session context."
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "--session-log"
+            ],
+            "dest": null,
+            "help": "Path to a session log (.json or text).",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--output"
+            ],
+            "dest": null,
+            "help": "Optional markdown file for optimization hints.",
+            "action": null,
+            "required": null
+          }
+        ],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "function",
+          "name": "estimate_tokens",
+          "doc": "Estimate token count at roughly four characters per token.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "read_text",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "normalize_content",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "truncate",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "color",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "repo_root",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "resolve_candidate_path",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "update_ref",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "extract_paths_from_text",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "extract_from_json",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_text_session_log",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_session_log",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "content_fingerprint",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "relative_display",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_file_metrics",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "priority_label",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "summarize_content",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "detect_memory_bloat",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "analyze_session",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "render_markdown",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "render_summary",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "write_report",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/proactive_scout.py",
+      "relative_path": "scripts/proactive_scout.py",
+      "purpose": "Proactive scout for OpenClaw follow-up prediction.",
+      "purpose_source": "argparse",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "Proactive scout for OpenClaw follow-up prediction."
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "question"
+            ],
+            "dest": null,
+            "help": "Question to look up in the speculative cache.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--scout-dir"
+            ],
+            "dest": null,
+            "help": "Override the scout state directory.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--scout-dir"
+            ],
+            "dest": null,
+            "help": "Override the scout state directory.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--scout-dir"
+            ],
+            "dest": null,
+            "help": "Override the scout state directory.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "task_type"
+            ],
+            "dest": null,
+            "help": "Task type: image, code, video, or analysis.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "result"
+            ],
+            "dest": null,
+            "help": "The assistant result that future follow-ups will build on.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--scout-dir"
+            ],
+            "dest": null,
+            "help": "Override the scout state directory.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--idle-seconds"
+            ],
+            "dest": null,
+            "help": "Only start background work when the system has been idle longer than this number.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--job-path"
+            ],
+            "dest": null,
+            "help": null,
+            "action": null,
+            "required": true
+          },
+          {
+            "flags": [
+              "--scout-dir"
+            ],
+            "dest": null,
+            "help": null,
+            "action": null,
+            "required": true
+          }
+        ],
+        "subcommands": [
+          {
+            "name": "check",
+            "help": "Return a prepared follow-up if it is already cached."
+          },
+          {
+            "name": "status",
+            "help": "Show current scout cache and job state."
+          },
+          {
+            "name": "clear",
+            "help": "Clear scout cache and job records."
+          },
+          {
+            "name": "predict",
+            "help": "Predict follow-ups and optionally run them in the background."
+          },
+          {
+            "name": "_worker",
+            "help": null
+          }
+        ]
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "Prediction",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "scout_predict",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "scout_check",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "scout_run_background",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "scout_status",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "scout_clear",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_parser",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/queue_manager.py",
+      "relative_path": "scripts/queue_manager.py",
+      "purpose": "Cursor Cloud Agents Batch Queue Manager",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "Cursor Batch Queue Manager"
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "action"
+            ],
+            "dest": null,
+            "help": null,
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--branches"
+            ],
+            "dest": null,
+            "help": "Branch names to process",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--file"
+            ],
+            "dest": null,
+            "help": "File with branch list (one per line)",
+            "action": null,
+            "required": null
+          }
+        ],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "function",
+          "name": "get_active_agents",
+          "doc": "Count currently running agents via API.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "launch_agent",
+          "doc": "Launch a single Cursor agent.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "poll_agent",
+          "doc": "Poll agent status.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "log_queue_status",
+          "doc": "Log queue status to file.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "run_queue",
+          "doc": "Main queue runner. Launches agents in batches, monitors, retries on limit.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/sync_obsidian.py",
+      "relative_path": "scripts/sync_obsidian.py",
+      "purpose": "Bidirectional sync between MEMORY.md and an Obsidian vault.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main"
+      ],
+      "cli": {
+        "parser_descriptions": [],
+        "arguments": [
+          {
+            "flags": [
+              "--dry-run"
+            ],
+            "dest": null,
+            "help": "Preview changes without writing files.",
+            "action": "store_true",
+            "required": null
+          },
+          {
+            "flags": [
+              "--memory"
+            ],
+            "dest": null,
+            "help": null,
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--vault"
+            ],
+            "dest": null,
+            "help": null,
+            "action": null,
+            "required": null
+          }
+        ],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "Color",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "MemorySection",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "VaultNote",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "colorize",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "slugify",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "isoformat_timestamp",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "read_text",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "write_text",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_memory_sections",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "iter_vault_notes",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_reference_note",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_wikilink",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_daily_note_entry",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "add_daily_notes_entries",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "apply_stale_marker",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_diff",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "sync_memory_and_vault",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "print_report",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "resolve_path",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_parser",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/telegram_sender.py",
+      "relative_path": "scripts/telegram_sender.py",
+      "purpose": "Telegram bot sender utility for OpenClaw.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "Send media to Telegram via bot API."
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "--timeout"
+            ],
+            "dest": null,
+            "help": "HTTP request timeout in seconds.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--retries"
+            ],
+            "dest": null,
+            "help": "Maximum upload attempts before failing.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "image"
+            ],
+            "dest": null,
+            "help": "Path to an image file.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--caption"
+            ],
+            "dest": null,
+            "help": "Optional photo caption.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "images"
+            ],
+            "dest": null,
+            "help": "One or more image paths.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--caption"
+            ],
+            "dest": null,
+            "help": "Optional caption on the first image.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "file"
+            ],
+            "dest": null,
+            "help": "Path to the file to upload.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--caption"
+            ],
+            "dest": null,
+            "help": "Optional document caption.",
+            "action": null,
+            "required": null
+          }
+        ],
+        "subcommands": [
+          {
+            "name": "send-photo",
+            "help": "Send a single photo."
+          },
+          {
+            "name": "send-group",
+            "help": "Send a media group."
+          },
+          {
+            "name": "send-document",
+            "help": "Send a document upload."
+          }
+        ]
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "TelegramSenderError",
+          "doc": "Raised when a Telegram upload fails permanently.",
+          "bases": [
+            "RuntimeError"
+          ]
+        },
+        {
+          "kind": "class",
+          "name": "ProgressFile",
+          "doc": "File wrapper that reports read progress during uploads.",
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "TelegramConfig",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "TelegramSender",
+          "doc": "Client wrapper around the Telegram Bot API.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_parser",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "scripts/video_thumbnail_generator.py",
+      "relative_path": "scripts/video_thumbnail_generator.py",
+      "purpose": "Thumbnail generator for furniture videos.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main",
+        "parse_args"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "Generate furniture video thumbnails."
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "--input-dir"
+            ],
+            "dest": null,
+            "help": "Directory containing mp4 files.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--output-dir"
+            ],
+            "dest": null,
+            "help": "Directory for thumbnail jpgs.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--brand-text"
+            ],
+            "dest": null,
+            "help": "Brand text overlay.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--use-minimax"
+            ],
+            "dest": null,
+            "help": "Enable optional MiniMax enhancement.",
+            "action": "store_true",
+            "required": null
+          },
+          {
+            "flags": [
+              "--frame-count"
+            ],
+            "dest": null,
+            "help": "Candidate frames per video.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--log-path"
+            ],
+            "dest": null,
+            "help": "Markdown batch log path.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--verbose"
+            ],
+            "dest": null,
+            "help": "Enable debug logging.",
+            "action": "store_true",
+            "required": null
+          }
+        ],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "function",
+          "name": "setup_logger",
+          "doc": "Build logger for console output.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "extract_frames",
+          "doc": "Extract evenly sampled JPG frames from video into temp dir.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "select_best_frame",
+          "doc": "Select frame with highest center-biased Laplacian sharpness.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "enhance_thumbnail",
+          "doc": "Enhance selected frame for thumbnail readability.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "apply_branding",
+          "doc": "Overlay brand text in lower-left with a translucent rounded backdrop.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "generate_all_sizes",
+          "doc": "Create thumbnails in requested resolutions.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "batch_process",
+          "doc": "Process all mp4 files in directory and export thumbnails.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_args",
+          "doc": "Parse CLI arguments.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": "CLI entrypoint.",
+          "bases": null
+        }
+      ],
+      "notes": [],
+      "parse_error": null
+    },
+    {
+      "id": "src/__init__.py",
+      "relative_path": "src/__init__.py",
+      "purpose": "OpenClaw source package.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": false,
+      "entry_functions": [],
+      "cli": {
+        "parser_descriptions": [],
+        "arguments": [],
+        "subcommands": []
+      },
+      "symbols": [],
+      "notes": [
+        "No public classes/functions and no argparse usage detected; may be a thin shim."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "src/coordination/__init__.py",
+      "relative_path": "src/coordination/__init__.py",
+      "purpose": "Coordination utilities for OpenClaw bots.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": false,
+      "entry_functions": [],
+      "cli": {
+        "parser_descriptions": [],
+        "arguments": [],
+        "subcommands": []
+      },
+      "symbols": [],
+      "notes": [
+        "No public classes/functions and no argparse usage detected; may be a thin shim."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "src/coordination/cross_bot_sync.py",
+      "relative_path": "src/coordination/cross_bot_sync.py",
+      "purpose": "Cross-bot coordination helpers for OpenClaw bots.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "OpenClaw cross-bot sync coordinator"
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "--shared-dir"
+            ],
+            "dest": null,
+            "help": "Override the shared state directory (defaults to ~/.openclaw/shared).",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--bot"
+            ],
+            "dest": null,
+            "help": "Bot name, for example 'main' or 'tasks'.",
+            "action": null,
+            "required": true
+          },
+          {
+            "flags": [
+              "--memory-path"
+            ],
+            "dest": null,
+            "help": "Path to the local MEMORY.md file. Defaults to ./MEMORY.md.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "task"
+            ],
+            "dest": null,
+            "help": "Task description to record in shared state.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--bot"
+            ],
+            "dest": null,
+            "help": "Bot performing the action.",
+            "action": null,
+            "required": true
+          },
+          {
+            "flags": [
+              "--to"
+            ],
+            "dest": "target_bot",
+            "help": "Optional target bot for a handoff.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--release"
+            ],
+            "dest": null,
+            "help": "Release the task instead of claiming it.",
+            "action": "store_true",
+            "required": null
+          },
+          {
+            "flags": [
+              "--allow-takeover"
+            ],
+            "dest": null,
+            "help": "Allow taking over an existing task claim.",
+            "action": "store_true",
+            "required": null
+          },
+          {
+            "flags": [
+              "--bot"
+            ],
+            "dest": null,
+            "help": "Bot writing the status.",
+            "action": null,
+            "required": true
+          },
+          {
+            "flags": [
+              "--state"
+            ],
+            "dest": null,
+            "help": "Short status string, such as 'idle'.",
+            "action": null,
+            "required": true
+          },
+          {
+            "flags": [
+              "--task"
+            ],
+            "dest": null,
+            "help": "Optional current task description.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--details"
+            ],
+            "dest": null,
+            "help": "Optional JSON object with extra status metadata.",
+            "action": null,
+            "required": null
+          }
+        ],
+        "subcommands": [
+          {
+            "name": "sync",
+            "help": "Sync a MEMORY.md file with shared state."
+          },
+          {
+            "name": "handoff",
+            "help": "Claim, transfer, or release a task."
+          },
+          {
+            "name": "status",
+            "help": "Write bot status to the shared status file."
+          },
+          {
+            "name": "unlock",
+            "help": "Remove the shared lock file if it exists."
+          }
+        ]
+      },
+      "symbols": [
+        {
+          "kind": "function",
+          "name": "utc_now",
+          "doc": "Return an ISO 8601 timestamp in UTC.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "normalize_task",
+          "doc": "Normalize task descriptions so equivalent claims share a key.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "normalize_memory_key",
+          "doc": "Normalize a memory line for de-duplication and conflict resolution.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "parse_memory_entries",
+          "doc": "Convert markdown text into normalized memory entries.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "render_memory",
+          "doc": "Render normalized memory entries back to a deterministic markdown file.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "read_json",
+          "doc": "Read a JSON file and return a mapping, or a default on missing files.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "atomic_write_text",
+          "doc": "Atomically write text content to a file.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "atomic_write_json",
+          "doc": "Atomically write JSON content to a file.",
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "FallbackFileLock",
+          "doc": "A small lock-file implementation using ``O_EXCL`` semantics.",
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "LockTimeoutError",
+          "doc": "Raised when the shared lock cannot be acquired in time.",
+          "bases": [
+            "TimeoutError"
+          ]
+        },
+        {
+          "kind": "class",
+          "name": "FileLock",
+          "doc": "Thin wrapper that normalizes lock handling across implementations.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_lock",
+          "doc": "Create either an external ``filelock`` instance or the fallback lock.",
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "CrossBotSyncCoordinator",
+          "doc": "Coordinator for shared bot state, memory sync, and status writes.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "json_dumps",
+          "doc": "Render JSON for CLI output.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_parser",
+          "doc": "Create the CLI parser.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "run_cli",
+          "doc": "Run the CLI and print JSON responses.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": "Entrypoint for ``python -m src.coordination.cross_bot_sync``.",
+          "bases": null
+        }
+      ],
+      "notes": [
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "src/dreams/__init__.py",
+      "relative_path": "src/dreams/__init__.py",
+      "purpose": "Library or helper module (no module docstring or ArgumentParser description found).",
+      "purpose_source": "inferred",
+      "has_cli_guard": false,
+      "entry_functions": [],
+      "cli": {
+        "parser_descriptions": [],
+        "arguments": [],
+        "subcommands": []
+      },
+      "symbols": [],
+      "notes": [
+        "No public classes/functions and no argparse usage detected; may be a thin shim."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "src/dreams/dream_tracker.py",
+      "relative_path": "src/dreams/dream_tracker.py",
+      "purpose": "Library or helper module (no module docstring or ArgumentParser description found).",
+      "purpose_source": "inferred",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main"
+      ],
+      "cli": {
+        "parser_descriptions": [],
+        "arguments": [],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "DreamTracker",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [
+        "CLI entry guard present but no ``add_argument`` calls matched (dynamic argparse possible).",
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "src/ideation/__init__.py",
+      "relative_path": "src/ideation/__init__.py",
+      "purpose": "Idea pipeline package for OpenClaw.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": false,
+      "entry_functions": [],
+      "cli": {
+        "parser_descriptions": [],
+        "arguments": [],
+        "subcommands": []
+      },
+      "symbols": [],
+      "notes": [
+        "No public classes/functions and no argparse usage detected; may be a thin shim."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "src/ideation/idea_pipeline.py",
+      "relative_path": "src/ideation/idea_pipeline.py",
+      "purpose": "Idea-to-PR pipeline utilities for OpenClaw.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main"
+      ],
+      "cli": {
+        "parser_descriptions": [],
+        "arguments": [],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "IdeaPipeline",
+          "doc": "Run a simple idea pipeline and persist status by day.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": "CLI entry point for the idea pipeline.",
+          "bases": null
+        }
+      ],
+      "notes": [
+        "CLI entry guard present but no ``add_argument`` calls matched (dynamic argparse possible).",
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "src/monitoring/__init__.py",
+      "relative_path": "src/monitoring/__init__.py",
+      "purpose": "OpenClaw Monitoring Package",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": false,
+      "entry_functions": [],
+      "cli": {
+        "parser_descriptions": [],
+        "arguments": [],
+        "subcommands": []
+      },
+      "symbols": [],
+      "notes": [
+        "No public classes/functions and no argparse usage detected; may be a thin shim."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "src/monitoring/session_monitor.py",
+      "relative_path": "src/monitoring/session_monitor.py",
+      "purpose": "OpenClaw Session Monitor",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "OpenClaw Session Monitor"
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "action"
+            ],
+            "dest": null,
+            "help": null,
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--threshold"
+            ],
+            "dest": null,
+            "help": null,
+            "action": null,
+            "required": null
+          }
+        ],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "function",
+          "name": "get_session_sizes",
+          "doc": "Parse openclaw status JSON to get session info.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "log_warning",
+          "doc": "Log warning to daily memory file.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "check_sessions",
+          "doc": "Check all sessions and alert on large ones.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [],
+      "parse_error": null
+    },
+    {
+      "id": "src/openclaw_orchestration/__init__.py",
+      "relative_path": "src/openclaw_orchestration/__init__.py",
+      "purpose": "Library or helper module (no module docstring or ArgumentParser description found).",
+      "purpose_source": "inferred",
+      "has_cli_guard": false,
+      "entry_functions": [],
+      "cli": {
+        "parser_descriptions": [],
+        "arguments": [],
+        "subcommands": []
+      },
+      "symbols": [],
+      "notes": [
+        "No public classes/functions and no argparse usage detected; may be a thin shim."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "src/openclaw_orchestration/task_runner.py",
+      "relative_path": "src/openclaw_orchestration/task_runner.py",
+      "purpose": "Run OpenClaw task workflows.",
+      "purpose_source": "argparse",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "Run OpenClaw task workflows."
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "--base-dir"
+            ],
+            "dest": null,
+            "help": "Repository root containing tasks/ and logs/.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--tasks-dir"
+            ],
+            "dest": null,
+            "help": "Directory containing YAML task definitions.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--log-path"
+            ],
+            "dest": null,
+            "help": "JSONL task log path.",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "task_name"
+            ],
+            "dest": null,
+            "help": "Task name to execute.",
+            "action": null,
+            "required": null
+          }
+        ],
+        "subcommands": [
+          {
+            "name": "list-tasks",
+            "help": "List available tasks."
+          },
+          {
+            "name": "run-task",
+            "help": "Run a single task."
+          },
+          {
+            "name": "show-status",
+            "help": "Show latest task status."
+          }
+        ]
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "TaskExecutionError",
+          "doc": null,
+          "bases": [
+            "RuntimeError"
+          ]
+        },
+        {
+          "kind": "class",
+          "name": "TaskDefinition",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "TaskResult",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "TaskRunner",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_parser",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "src/self_improvement/__init__.py",
+      "relative_path": "src/self_improvement/__init__.py",
+      "purpose": "Self-improvement utilities for OpenClaw.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": false,
+      "entry_functions": [],
+      "cli": {
+        "parser_descriptions": [],
+        "arguments": [],
+        "subcommands": []
+      },
+      "symbols": [],
+      "notes": [
+        "No public classes/functions and no argparse usage detected; may be a thin shim."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "src/self_improvement/auto_engine.py",
+      "relative_path": "src/self_improvement/auto_engine.py",
+      "purpose": "OpenClaw autonomous self-improvement engine",
+      "purpose_source": "argparse",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "OpenClaw autonomous self-improvement engine"
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "command"
+            ],
+            "dest": null,
+            "help": "Action to run",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--root-dir"
+            ],
+            "dest": null,
+            "help": "Repository root directory used for disk checks and log output",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--no-color"
+            ],
+            "dest": null,
+            "help": "Disable ANSI color output",
+            "action": "store_true",
+            "required": null
+          }
+        ],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "Colors",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "colorize",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "CheckResult",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "ImprovementAction",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "AutoImprovementEngine",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_parser",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "src/skills/__init__.py",
+      "relative_path": "src/skills/__init__.py",
+      "purpose": "Skill utilities for OpenClaw.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": false,
+      "entry_functions": [],
+      "cli": {
+        "parser_descriptions": [],
+        "arguments": [],
+        "subcommands": []
+      },
+      "symbols": [],
+      "notes": [
+        "No public classes/functions and no argparse usage detected; may be a thin shim."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "src/skills/proactive_watcher.py",
+      "relative_path": "src/skills/proactive_watcher.py",
+      "purpose": "Proactive skill watcher for OpenClaw.",
+      "purpose_source": "argparse",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "Proactive skill watcher for OpenClaw."
+        ],
+        "arguments": [],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "SkillRecord",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "ProactiveSkillWatcher",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_parser",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [
+        "CLI entry guard present but no ``add_argument`` calls matched (dynamic argparse possible).",
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    },
+    {
+      "id": "src/skills/tool_discovery.py",
+      "relative_path": "src/skills/tool_discovery.py",
+      "purpose": "Static discovery for CLI scripts and library modules under ``scripts/`` and ``src/``.",
+      "purpose_source": "module_docstring",
+      "has_cli_guard": true,
+      "entry_functions": [
+        "main"
+      ],
+      "cli": {
+        "parser_descriptions": [
+          "Discover tools under scripts/ and src/ and emit manifest + docs."
+        ],
+        "arguments": [
+          {
+            "flags": [
+              "--repo-root"
+            ],
+            "dest": null,
+            "help": "Repository root (default: inferred from this file or OPENCLAW_REPO_ROOT).",
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--out-dir"
+            ],
+            "dest": null,
+            "help": null,
+            "action": null,
+            "required": null
+          },
+          {
+            "flags": [
+              "--write"
+            ],
+            "dest": null,
+            "help": "Write manifest.json, INDEX.md, and by_module/*.md.",
+            "action": "store_true",
+            "required": null
+          },
+          {
+            "flags": [
+              "--check"
+            ],
+            "dest": null,
+            "help": "Exit with non-zero status if outputs are stale.",
+            "action": "store_true",
+            "required": null
+          },
+          {
+            "flags": [
+              "--json"
+            ],
+            "dest": null,
+            "help": "Print manifest JSON to stdout (no files).",
+            "action": "store_true",
+            "required": null
+          }
+        ],
+        "subcommands": []
+      },
+      "symbols": [
+        {
+          "kind": "class",
+          "name": "ArgSpec",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "SubcommandSpec",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "CliProfile",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "SymbolDoc",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "class",
+          "name": "ToolRecord",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "analyze_file",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "discover",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "write_outputs",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "manifests_equivalent",
+          "doc": "Compare ignoring generated_at timestamp.",
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "check_up_to_date",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "build_arg_parser",
+          "doc": null,
+          "bases": null
+        },
+        {
+          "kind": "function",
+          "name": "main",
+          "doc": null,
+          "bases": null
+        }
+      ],
+      "notes": [
+        "Mix of class-based implementation and CLI-style entry functions."
+      ],
+      "parse_error": null
+    }
+  ]
+}
