@@ -1,4 +1,6 @@
 logs/sync_obsidian_*.json
-.learnings/
+.learnings/*
+!.learnings/error_log.md
+!.learnings/error_log.json
 __pycache__/
 *.py[cod]
