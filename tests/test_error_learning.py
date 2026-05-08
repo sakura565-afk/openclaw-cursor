@@ -69,8 +69,13 @@ class ErrorLearningTests(unittest.TestCase):
         entry = store["entries"][0]
         self.assertEqual(
             set(entry.keys()),
-            {"id", "timestamp", "category", "error", "lesson", "resolved"},
+            {"id", "timestamp", "category", "error", "lesson", "resolved", "cluster_tag"},
         )
+        dedup_path = self.log_path.parent / f"{self.log_path.name}.dedup_cache.json"
+        self.assertTrue(dedup_path.is_file())
+        dedup = json.loads(dedup_path.read_text(encoding="utf-8"))
+        self.assertIn("fingerprints", dedup)
+        self.assertIn(str(entry["id"]), dedup["fingerprints"])
         self.assertEqual(entry["category"], "runtime_error")
         self.assertTrue(entry["resolved"])
 
@@ -131,6 +136,49 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertEqual(search_stderr, "")
         self.assertIn("JSON payload was truncated", search_stdout)
         self.assertNotIn("cold restart", search_stdout)
+
+    def test_analyze_reports_clusters(self) -> None:
+        error_learning.add_entry(
+            self.log_path,
+            "parser_error",
+            "Malformed trailing comma in JSON response",
+            "Strip trailing commas before json.loads",
+        )
+        error_learning.add_entry(
+            self.log_path,
+            "parser_error",
+            "Malformed trailing comma in JSON response",
+            "Reject oversized payloads earlier",
+        )
+
+        code, stdout, stderr = self.run_cli("analyze")
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn("Clusters", stdout)
+
+    def test_duplicate_add_updates_sidecar_counter(self) -> None:
+        exit_code, _, _ = self.run_cli(
+            "add",
+            "network",
+            "Connection reset by peer",
+            "Retry with exponential backoff",
+        )
+        self.assertEqual(exit_code, 0)
+
+        exit_code, stdout, _ = self.run_cli(
+            "add",
+            "network",
+            "Connection reset by peer",
+            "Retry with exponential backoff",
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Duplicate entry detected", stdout)
+
+        dedup_path = self.log_path.parent / f"{self.log_path.name}.dedup_cache.json"
+        dedup = json.loads(dedup_path.read_text(encoding="utf-8"))
+        fps = dedup["fingerprints"]
+        flagged = [meta for meta in fps.values() if isinstance(meta, dict) and int(meta.get("duplicate_suppressed_count", 0)) > 0]
+        self.assertTrue(flagged)
 
 
 if __name__ == "__main__":
