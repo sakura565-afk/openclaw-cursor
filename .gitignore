@@ -1,4 +1,6 @@
 logs/sync_obsidian_*.json
+# Regenerate with: python3 scripts/tool_discovery.py --refresh
+scripts/tool_index.json
 .learnings/
 __pycache__/
 *.py[cod]

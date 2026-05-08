@@ -197,6 +197,99 @@ class ToolDiscoveryTests(unittest.TestCase):
         self.assertEqual(payload["goal"], "send notification")
         self.assertEqual(len(payload["suggestions"]), 1)
 
+    def test_refresh_writes_tool_index_json(self) -> None:
+        root = self._build_repo()
+        (root / "scripts" / "alpha_tool.py").write_text(
+            '"""Alpha utility."""\n',
+            encoding="utf-8",
+        )
+        skills = root / "src" / "skills"
+        skills.mkdir(parents=True)
+        (skills / "__init__.py").write_text('"""skills"""', encoding="utf-8")
+        (skills / "beta_skill.py").write_text(
+            '"""Beta skill module."""\n',
+            encoding="utf-8",
+        )
+
+        index_path = root / "scripts" / "tool_index.json"
+        prev_out = sys.stdout
+        try:
+            sys.stdout = io.StringIO()
+            exit_code = tool_discovery.main(
+                ["--root", str(root), "--index", str(index_path), "--refresh"]
+            )
+        finally:
+            sys.stdout = prev_out
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(index_path.exists())
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload.get("version"), tool_discovery.INDEX_VERSION)
+        paths = {item["path"] for item in payload["items"]}
+        self.assertIn("scripts/alpha_tool.py", paths)
+        self.assertIn("src/skills/beta_skill.py", paths)
+
+    def test_search_ranks_matching_paths(self) -> None:
+        root = self._build_repo()
+        (root / "scripts" / "obsidian_sync.py").write_text(
+            '"""Sync Obsidian vault notes."""\n',
+            encoding="utf-8",
+        )
+        index_path = root / "scripts" / "tool_index.json"
+        prev_out = sys.stdout
+        try:
+            sys.stdout = io.StringIO()
+            tool_discovery.main(["--root", str(root), "--index", str(index_path), "--refresh"])
+        finally:
+            sys.stdout = prev_out
+
+        buffer = io.StringIO()
+        previous = sys.stdout
+        try:
+            sys.stdout = buffer
+            exit_code = tool_discovery.main(
+                [
+                    "--root",
+                    str(root),
+                    "--index",
+                    str(index_path),
+                    "--search",
+                    "obsidian vault",
+                    "--limit",
+                    "5",
+                ]
+            )
+        finally:
+            sys.stdout = previous
+
+        self.assertEqual(exit_code, 0)
+        out = buffer.getvalue()
+        self.assertIn("obsidian_sync", out)
+
+    def test_stats_reports_counts(self) -> None:
+        root = self._build_repo()
+        (root / "scripts" / "tiny_tool.py").write_text("# tiny\n", encoding="utf-8")
+        index_path = root / "scripts" / "tool_index.json"
+        prev_out = sys.stdout
+        try:
+            sys.stdout = io.StringIO()
+            tool_discovery.main(["--root", str(root), "--index", str(index_path), "--refresh"])
+        finally:
+            sys.stdout = prev_out
+
+        buffer = io.StringIO()
+        previous = sys.stdout
+        try:
+            sys.stdout = buffer
+            exit_code = tool_discovery.main(
+                ["--root", str(root), "--index", str(index_path), "--stats"]
+            )
+        finally:
+            sys.stdout = previous
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Total entries:", buffer.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
