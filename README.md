@@ -39,20 +39,23 @@ python -m unittest tests.test_ollama_model_manager
 
 ## Tool Discovery CLI
 
-`python -m scripts.tool_discovery` discovers script capabilities, maps dependencies, generates docs, and suggests tools for a goal with contextual reasoning.
+`python -m scripts.tool_discovery` walks **all** Python modules under the repo (skipping `__init__.py`, caches, and virtualenv trees), infers capabilities from names, docstrings, **function signatures**, and **decorators**, records **I/O** and **safety constraints**, maps dependencies, writes **`docs/tool_discovery.md`** by default, and suggests tools for a goal with scored reasoning.
 
 ### Commands
 
 ```bash
+python -m scripts.tool_discovery registry
 python -m scripts.tool_discovery analyze --format json
+python -m scripts.tool_discovery docs
 python -m scripts.tool_discovery docs --output docs/tool_discovery.md
 python -m scripts.tool_discovery suggest "monitor queue latency" --context "safe local logs" --top 3
 ```
 
 ### What it analyzes
 
-- **Deep capability analysis** based on script name, functions, subcommands, and docstring signals.
-- **Dependency analysis** using direct module imports and inferred relationships from shared capabilities/import sets.
-- **Risk and I/O profiles** to distinguish low/medium/high operational risk and filesystem/network/process behavior.
-- **Contextual tool suggestion** scoring with explicit reasoning about capability fit, I/O fit, safety constraints, and possible tool chains.
+- **Capability analysis** from script paths, module docstrings, public function names, parameter and return annotations, per-function docstrings, argparse subcommands, and decorator patterns (for example Click or Typer).
+- **Dependency analysis** using direct module imports and inferred relationships from shared capabilities or import sets.
+- **Risk and I/O profiles** to distinguish low, medium, and high operational risk and filesystem, network, process, database, and structured-data behavior.
+- **Safety constraints** such as `network_egress`, `subprocess_execution`, and filesystem read or write signals derived from imports and source patterns.
+- **Contextual tool suggestion** via `suggest()` or `suggest_tools()` with explicit reasoning about capability fit, docstrings, I/O fit, safety, and possible tool chains.
 
