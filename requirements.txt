@@ -5,3 +5,5 @@ pillow
 tqdm
 matplotlib
 seaborn
+pyheif
+python-magic
