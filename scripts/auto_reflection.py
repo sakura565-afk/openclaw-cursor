@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """
-Cron-friendly self-reflection over recent agent-style logs and session artifacts.
+Cron-friendly self-reflection over recent session transcripts and memory logs.
 
-Scans configurable paths for logs and JSON, extracts recurring failure patterns and
-actionable notes, writes structured outputs under `.learnings/`, builds a periodic
-summary, and optionally posts the summary (Telegram or generic webhook).
+Scans configurable paths (including ``memory/**/*.md``), classifies signals into
+what went well vs what went wrong, writes concise actionable notes under
+``.learnings/``, merges recent runs into ``MEMORY.md`` (between HTML markers), and
+optionally posts a summary (Telegram or generic webhook).
 
-Example crontab (daily at 09:00 UTC):
+**Single run (typical crontab):**
 
     0 9 * * * cd /path/to/repo && /usr/bin/python3 -m scripts.auto_reflection
+
+**Periodic loop (uses the ``schedule`` library):**
+
+    python -m scripts.auto_reflection --interval-minutes 360 --root /path/to/repo
 
 Environment (all optional unless posting):
 
@@ -26,6 +31,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from collections import Counter
@@ -56,8 +62,19 @@ LESSON_HINTS = re.compile(
     r"(?i)(\blesson learned\b|\btakeaway\b|\bremember to\b|\bnext time\b|"
     r"\bavoid\b|\bshould have\b|\broot cause\b)"
 )
+SUCCESS_HINTS = re.compile(
+    r"(?i)(\b(successfully|completed successfully|all (?:tests|checks) passed|"
+    r"tests passed|worked well|great work|looks good|lgtm|shipped|deployed cleanly|"
+    r"goal (?:achieved|met)|task complete|resolved (?:fully|cleanly)|nailed it)\b|"
+    r"\b(ci|build|pipeline)\s+(?:is\s+)?green\b)"
+)
 MAX_FILE_BYTES = 2 * 1024 * 1024
 TELEGRAM_TEXT_LIMIT = 4000
+
+MEMORY_MARKER_START = "<!-- auto-reflection:start -->"
+MEMORY_MARKER_END = "<!-- auto-reflection:end -->"
+MEMORY_CONSOLIDATE_RUNS = 10
+MAX_MEMORY_BULLETS_PER_COLUMN = 28
 
 
 @dataclass
@@ -68,6 +85,7 @@ class Insight:
     source_paths: list[str] = field(default_factory=list)
     severity: str = "info"  # info | warning | error
     category: str = "general"
+    polarity: str = "neutral"  # positive | negative | neutral (went well / went wrong / other)
 
 
 @dataclass
@@ -131,6 +149,23 @@ def iter_session_files(root: Path, globs: Sequence[str], cutoff: datetime) -> li
     return out
 
 
+def _polarity_for_line(line: str) -> str:
+    """Classify a line for summary buckets (went well vs went wrong)."""
+
+    failed = bool(FAILURE_HINTS.search(line))
+    success = bool(SUCCESS_HINTS.search(line))
+    lesson = bool(LESSON_HINTS.search(line))
+    if failed and not success:
+        return "negative"
+    if success and not failed:
+        return "positive"
+    if failed:
+        return "negative"
+    if lesson:
+        return "negative"
+    return "neutral"
+
+
 def _severity_for_line(line: str) -> str:
     if re.search(r"(?i)\b(traceback|exception|fatal|critical)\b", line):
         return "error"
@@ -140,6 +175,8 @@ def _severity_for_line(line: str) -> str:
 
 
 def _category_for_line(line: str) -> str:
+    if SUCCESS_HINTS.search(line) and not FAILURE_HINTS.search(line):
+        return "success"
     if LESSON_HINTS.search(line):
         return "lesson"
     if re.search(r"(?i)\b(test|pytest|unittest)\b", line):
@@ -167,7 +204,7 @@ def extract_insights_from_text(path: Path, root: Path, raw: str) -> Iterator[Ins
         stripped = line.strip()
         if len(stripped) < 12:
             continue
-        if FAILURE_HINTS.search(stripped) or LESSON_HINTS.search(stripped):
+        if FAILURE_HINTS.search(stripped) or LESSON_HINTS.search(stripped) or SUCCESS_HINTS.search(stripped):
             text = normalize_insight_text(stripped)
             if not text:
                 continue
@@ -176,6 +213,7 @@ def extract_insights_from_text(path: Path, root: Path, raw: str) -> Iterator[Ins
                 source_paths=[rel],
                 severity=_severity_for_line(stripped),
                 category=_category_for_line(stripped),
+                polarity=_polarity_for_line(stripped),
             )
 
 
@@ -231,6 +269,7 @@ def dedupe_insights(insights: Iterable[Insight]) -> list[Insight]:
                 source_paths=list(ins.source_paths),
                 severity=ins.severity,
                 category=ins.category,
+                polarity=ins.polarity,
             )
         else:
             for p in ins.source_paths:
@@ -239,6 +278,9 @@ def dedupe_insights(insights: Iterable[Insight]) -> list[Insight]:
             sev_rank = {"error": 3, "warning": 2, "info": 1}
             if sev_rank.get(ins.severity, 0) > sev_rank.get(existing.severity, 0):
                 existing.severity = ins.severity
+            pol_rank = {"negative": 3, "positive": 2, "neutral": 1}
+            if pol_rank.get(ins.polarity, 0) > pol_rank.get(existing.polarity, 0):
+                existing.polarity = ins.polarity
     return list(buckets.values())
 
 
@@ -248,46 +290,189 @@ def build_summary_markdown(
     insights: Sequence[Insight],
     top_sessions: Sequence[str],
 ) -> str:
+    went_well = [i for i in insights if i.polarity == "positive"]
+    went_wrong = [i for i in insights if i.polarity == "negative"]
+    other = [i for i in insights if i.polarity == "neutral"]
+
     lines = [
         f"# Reflection summary ({run_at.date().isoformat()} UTC)",
         "",
         f"- Session files scanned: **{files_scanned}**",
-        f"- Distinct insights: **{len(insights)}**",
+        f"- Distinct insights: **{len(insights)}** (positive: {len(went_well)}, negative: {len(went_wrong)}, other: {len(other)})",
         "",
     ]
     if top_sessions:
-        lines.append("## Recently touched logs")
+        lines.append("## Recently touched logs / memory")
         for p in top_sessions[:15]:
             lines.append(f"- `{p}`")
         lines.append("")
+
     if not insights:
         lines.append("_No notable patterns in the scanned window._")
         return "\n".join(lines)
 
-    lines.append("## Insights")
-    by_cat: dict[str, list[Insight]] = {}
-    for ins in insights:
-        by_cat.setdefault(ins.category, []).append(ins)
-
-    for cat in sorted(by_cat.keys()):
-        lines.append(f"### {cat}")
+    def _emit_bucket(title: str, bucket: Sequence[Insight]) -> None:
+        lines.append(title)
+        if not bucket:
+            lines.append("_None captured in this window._")
+            lines.append("")
+            return
         rank = {"error": 0, "warning": 1, "info": 2}
-        for ins in sorted(
-            by_cat[cat],
-            key=lambda i: (rank.get(i.severity, 9), i.text.lower()),
-        ):
+        for ins in sorted(bucket, key=lambda i: (rank.get(i.severity, 9), i.text.lower())):
             badge = ins.severity.upper()
-            sources = ", ".join(f"`{s}`" for s in ins.source_paths[:3])
-            if len(ins.source_paths) > 3:
+            sources = ", ".join(f"`{s}`" for s in ins.source_paths[:2])
+            if len(ins.source_paths) > 2:
                 sources += ", …"
             lines.append(f"- **[{badge}]** {ins.text} _(sources: {sources})_")
         lines.append("")
+
+    _emit_bucket("## What went well", went_well)
+    _emit_bucket("## What went wrong / lessons", went_wrong)
+    if other:
+        _emit_bucket("## Other signals", other)
+
+    lines.append("## Actionable next steps")
+    lines.extend(build_actionable_lines(insights, for_memory=False))
+    lines.append("")
 
     ctr = Counter(i.category for i in insights)
     lines.append("## Category counts")
     for cat, n in ctr.most_common():
         lines.append(f"- **{cat}**: {n}")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def build_actionable_lines(insights: Sequence[Insight], *, for_memory: bool) -> list[str]:
+    """Concise bullets: reinforce wins, address failures."""
+
+    lines: list[str] = []
+    positives = [i for i in insights if i.polarity == "positive"]
+    negatives = [i for i in insights if i.polarity == "negative"]
+
+    if positives:
+        lines.append("- **Keep doing**")
+        for ins in positives[:12]:
+            lines.append(f"  - {ins.text}")
+    if negatives:
+        lines.append("- **Improve / watch**")
+        cap = 16 if for_memory else 20
+        for ins in negatives[:cap]:
+            lines.append(f"  - {ins.text}")
+    if not positives and not negatives:
+        lines.append("_No polarized signals; skim raw logs for nuance._")
+    return lines
+
+
+def _polarity_from_record(row: dict[str, Any]) -> str:
+    raw = row.get("polarity")
+    if raw in ("positive", "negative", "neutral"):
+        return str(raw)
+    sev = str(row.get("severity") or "info")
+    if sev in ("error", "warning"):
+        return "negative"
+    return "neutral"
+
+
+def load_recent_insights_from_disk(root: Path, limit_json: int) -> list[Insight]:
+    """Load and dedupe insights from the newest ``run_*.json`` artifacts."""
+
+    insight_dir = root / LEARNINGS_DIR / INSIGHTS_SUBDIR
+    if not insight_dir.is_dir():
+        return []
+    paths = sorted(insight_dir.glob("run_*.json"), reverse=True)[:limit_json]
+    collected: list[Insight] = []
+    for path in paths:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for row in data.get("insights") or []:
+            if not isinstance(row, dict) or not isinstance(row.get("text"), str):
+                continue
+            src = row.get("source_paths")
+            paths_list = list(src) if isinstance(src, list) else []
+            collected.append(
+                Insight(
+                    text=row["text"],
+                    source_paths=[str(p) for p in paths_list],
+                    severity=str(row.get("severity") or "info"),
+                    category=str(row.get("category") or "general"),
+                    polarity=_polarity_from_record(row),
+                )
+            )
+    return dedupe_insights(collected)
+
+
+def _ordered_unique_texts(insights: Sequence[Insight], polarity: str, cap: int) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for ins in insights:
+        if ins.polarity != polarity:
+            continue
+        fp = insight_fingerprint(ins.text)
+        if fp in seen:
+            continue
+        seen.add(fp)
+        out.append(ins.text)
+        if len(out) >= cap:
+            break
+    return out
+
+
+def build_memory_consolidation_markdown(root: Path, run_at: datetime, current_run: ReflectionRun) -> str:
+    """Section body placed between ``MEMORY_MARKER_*`` in MEMORY.md."""
+
+    disk = load_recent_insights_from_disk(root, MEMORY_CONSOLIDATE_RUNS)
+    merged = dedupe_insights(list(current_run.insights) + disk)
+    ts = run_at.replace(microsecond=0).strftime("%Y-%m-%d %H:%M UTC")
+    well = _ordered_unique_texts(merged, "positive", MAX_MEMORY_BULLETS_PER_COLUMN)
+    bad = _ordered_unique_texts(merged, "negative", MAX_MEMORY_BULLETS_PER_COLUMN)
+    lines = [
+        "### Self-reflection (auto-consolidated)",
+        f"_Updated {ts} from the last {MEMORY_CONSOLIDATE_RUNS} reflection runs (deduped)._",
+        "",
+        "#### What went well",
+    ]
+    if well:
+        for t in well:
+            lines.append(f"- {t}")
+    else:
+        lines.append("- _(none recorded recently)_")
+    lines.extend(["", "#### What went wrong / fix next", ""])
+    if bad:
+        for t in bad:
+            lines.append(f"- {t}")
+    else:
+        lines.append("- _(none recorded recently)_")
+    lines.extend(["", "#### Actionable checklist", ""])
+    lines.extend(build_actionable_lines(merged, for_memory=True))
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def consolidate_memory_md(memory_path: Path, root: Path, run: ReflectionRun, *, dry_run: bool) -> None:
+    if dry_run:
+        return
+    try:
+        run_at = datetime.fromisoformat(run.started_at_utc.replace("Z", "+00:00"))
+        if run_at.tzinfo is None:
+            run_at = run_at.replace(tzinfo=timezone.utc)
+    except ValueError:
+        run_at = utc_now()
+    block = build_memory_consolidation_markdown(root, run_at, run)
+    memory_path.parent.mkdir(parents=True, exist_ok=True)
+    if not memory_path.exists():
+        content = f"# MEMORY\n\n{MEMORY_MARKER_START}\n\n{block}\n\n{MEMORY_MARKER_END}\n"
+    else:
+        content = memory_path.read_text(encoding="utf-8")
+        if MEMORY_MARKER_START in content and MEMORY_MARKER_END in content:
+            pre, rest = content.split(MEMORY_MARKER_START, 1)
+            _mid, post = rest.split(MEMORY_MARKER_END, 1)
+            content = pre + MEMORY_MARKER_START + "\n\n" + block + "\n\n" + MEMORY_MARKER_END + post
+        else:
+            content = (
+                content.rstrip() + f"\n\n{MEMORY_MARKER_START}\n\n{block}\n\n{MEMORY_MARKER_END}\n"
+            )
+    memory_path.write_text(content, encoding="utf-8")
 
 
 def weekly_report_path(root: Path, dt: datetime) -> Path:
@@ -320,6 +505,9 @@ def write_insight_artifacts(root: Path, run: ReflectionRun) -> tuple[Path, Path]
     md_path = base.with_suffix(".md")
     json_path = base.with_suffix(".json")
 
+    actionable = "\n".join(
+        ["## Actionable insights (concise)", ""] + build_actionable_lines(run.insights, for_memory=False) + [""]
+    )
     md_lines = [
         f"# Run {run.run_id}",
         f"- Started: {run.started_at_utc}",
@@ -327,6 +515,8 @@ def write_insight_artifacts(root: Path, run: ReflectionRun) -> tuple[Path, Path]
         f"- Files scanned: {run.files_scanned}",
         "",
         run.summary_markdown,
+        "",
+        actionable,
     ]
     md_path.write_text("\n".join(md_lines), encoding="utf-8")
 
@@ -418,6 +608,7 @@ def run_reflection(
     extra_globs: Sequence[str],
     overlap_minutes: int = 90,
     dry_run: bool = False,
+    memory_path: Path | None = None,
 ) -> ReflectionRun:
     started = utc_now()
     state = load_state(root)
@@ -465,6 +656,7 @@ def run_reflection(
     md_path, _ = write_insight_artifacts(root, run)
     weekly_path = update_weekly_summary(root, started, summary)
     write_latest_pointers(root, md_path, weekly_path)
+    consolidate_memory_md(memory_path or (root / "MEMORY.md"), root, run, dry_run=False)
 
     state["last_run_utc"] = finished.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     state["last_run_id"] = run_id
@@ -513,7 +705,10 @@ def maybe_post_results(run: ReflectionRun, *, dry_run: bool) -> list[str]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Analyze recent agent logs, refresh .learnings/, and optionally post a summary.",
+        description=(
+            "Reflect on recent session logs and memory transcripts: write `.learnings/`, "
+            "update MEMORY.md, optional webhook/Telegram, or run on a schedule."
+        ),
     )
     parser.add_argument(
         "--root",
@@ -544,6 +739,19 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the markdown summary to stdout.",
     )
+    parser.add_argument(
+        "--memory",
+        type=Path,
+        default=None,
+        help="MEMORY.md to merge consolidated learnings into (default: <root>/MEMORY.md).",
+    )
+    parser.add_argument(
+        "--interval-minutes",
+        type=int,
+        default=0,
+        metavar="N",
+        help="If N > 0, repeat every N minutes using the `schedule` library (blocking).",
+    )
     return parser
 
 
@@ -551,22 +759,44 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     root = args.root or Path(os.environ.get("AUTO_REFLECTION_ROOT", "") or ".").resolve()
+    memory_path = args.memory
+    if memory_path is None:
+        memory_path = root / "MEMORY.md"
+    elif not memory_path.is_absolute():
+        memory_path = (root / memory_path).resolve()
+    else:
+        memory_path = memory_path.resolve()
+
     if args.dry_run:
-        print(f"[dry-run] root={root}", file=sys.stderr)
+        print(f"[dry-run] root={root} memory={memory_path}", file=sys.stderr)
 
-    run = run_reflection(
-        root,
-        since_hours=args.since_hours,
-        extra_globs=args.glob,
-        dry_run=args.dry_run,
-    )
+    def tick() -> None:
+        run = run_reflection(
+            root,
+            since_hours=args.since_hours,
+            extra_globs=args.glob,
+            dry_run=args.dry_run,
+            memory_path=memory_path,
+        )
+        for line in maybe_post_results(run, dry_run=args.dry_run):
+            print(line, file=sys.stderr)
+        if args.stdout_summary:
+            print(run.summary_markdown)
 
-    for line in maybe_post_results(run, dry_run=args.dry_run):
-        print(line, file=sys.stderr)
+    if args.interval_minutes > 0:
+        import schedule
 
-    if args.stdout_summary:
-        print(run.summary_markdown)
+        schedule.every(args.interval_minutes).minutes.do(tick)
+        tick()
+        print(
+            f"[schedule] Running every {args.interval_minutes} minute(s); Ctrl+C to stop.",
+            file=sys.stderr,
+        )
+        while True:
+            schedule.run_pending()
+            time.sleep(1)
 
+    tick()
     return 0
 
 

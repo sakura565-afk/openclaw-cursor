@@ -64,7 +64,8 @@ class AutoReflectionTests(unittest.TestCase):
             (root / "logs").mkdir(parents=True)
             (root / "logs" / "run.log").write_text(
                 "Lesson learned: verify API keys before deploying.\n"
-                "Fatal: database migration failed.\n",
+                "Fatal: database migration failed.\n"
+                "Successfully deployed the hotfix.\n",
                 encoding="utf-8",
             )
 
@@ -75,6 +76,7 @@ class AutoReflectionTests(unittest.TestCase):
                 dry_run=True,
             )
             self.assertFalse((root / ".learnings").exists())
+            self.assertFalse((root / "MEMORY.md").exists())
             self.assertGreaterEqual(len(run_dry.insights), 1)
 
             run_full = auto_reflection.run_reflection(
@@ -92,6 +94,11 @@ class AutoReflectionTests(unittest.TestCase):
             self.assertEqual(len(md_files), 1)
             body = md_files[0].read_text(encoding="utf-8")
             self.assertIn("Lesson learned:", body)
+            self.assertIn("What went well", body)
+            self.assertIn("Actionable insights", body)
+            memory = (root / "MEMORY.md").read_text(encoding="utf-8")
+            self.assertIn("auto-reflection:start", memory)
+            self.assertIn("Successfully deployed the hotfix", memory)
 
     def test_post_webhook_uses_json_post(self):
         captured: dict[str, object] = {}
