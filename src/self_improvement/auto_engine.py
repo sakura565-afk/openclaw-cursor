@@ -12,6 +12,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
+from src.self_improvement.error_learning import ErrorLearningSystem
+
 try:
     import psutil  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
@@ -91,6 +93,7 @@ class AutoImprovementEngine:
         command_runner: Optional[Callable[[Sequence[str]], subprocess.CompletedProcess[str]]] = None,
         ollama_restart_command: Optional[Sequence[str]] = None,
         color: Optional[bool] = None,
+        error_learner: Optional[ErrorLearningSystem] = None,
     ) -> None:
         self.root_dir = Path(root_dir or Path.cwd())
         self.log_dir = Path(log_dir or self.root_dir / "logs")
@@ -100,6 +103,7 @@ class AutoImprovementEngine:
             ollama_restart_command or ["systemctl", "--user", "restart", "ollama"]
         )
         self.color = color if color is not None else sys.stdout.isatty()
+        self.error_learner = error_learner
 
     def _run_command(self, command: Sequence[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -289,6 +293,8 @@ class AutoImprovementEngine:
             details=details or {},
         )
         self._append_log_entry(action)
+        if self.error_learner is not None:
+            self.error_learner.record(message, source="auto_engine_warning", extra=details or {})
         return action
 
     def clear_temp_files(self) -> ImprovementAction:
@@ -322,6 +328,12 @@ class AutoImprovementEngine:
             },
         )
         self._append_log_entry(action)
+        if self.error_learner is not None and failed_items:
+            self.error_learner.record(
+                f"clear_temp_files failed_items={failed_items}",
+                source="auto_engine_cleanup",
+                extra={"failed_items": failed_items, "temp_dir": str(temp_root)},
+            )
         return action
 
     def restart_ollama(self) -> ImprovementAction:
@@ -340,6 +352,8 @@ class AutoImprovementEngine:
             },
         )
         self._append_log_entry(action)
+        if self.error_learner is not None and not success:
+            self.error_learner.record_subprocess(result, source="ollama_restart", command_summary="restart_ollama")
         return action
 
     def auto_fix(self) -> List[ImprovementAction]:
