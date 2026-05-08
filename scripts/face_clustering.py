@@ -3,21 +3,65 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing
 import os
 import sys
+import threading
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Protocol
+from typing import Any, ClassVar, Iterable, Protocol
 
 import numpy as np
 from PIL import Image
+
+try:
+    from scripts.raw_pipeline import RAW_EXTENSIONS, decode_raw_to_rgb_uint8, is_raw_path
+except ImportError:  # pragma: no cover - script run with cwd on sys.path
+    from raw_pipeline import RAW_EXTENSIONS, decode_raw_to_rgb_uint8, is_raw_path
+
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover
+
+    def tqdm(iterable: Any, **_: Any) -> Any:
+        return iterable
 
 
 DEFAULT_EPS = 0.6
 CACHE_FILENAME = ".face_clustering_cache.json"
 CATALOG_FILENAME = "catalog.json"
 FOLDERS_DIRNAME = "face_clusters"
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"} | set(RAW_EXTENSIONS)
+
+
+_parallel_backend: "FaceBackend | None" = None
+
+
+def load_image_rgb_array(path: Path) -> np.ndarray:
+    """Return HxWx3 uint8 RGB, including demosaiced RAW via rawpy."""
+    if is_raw_path(path):
+        return decode_raw_to_rgb_uint8(path)
+    with Image.open(path) as img:
+        return np.asarray(img.convert("RGB"), dtype=np.uint8)
+
+
+def _parallel_worker_init(kind: str) -> None:
+    global _parallel_backend
+    if kind == "face_recognition":
+        _parallel_backend = FaceRecognitionBackend()
+    elif kind == "insightface":
+        _parallel_backend = InsightFaceBackend()
+    else:  # pragma: no cover
+        raise ValueError(f"unknown backend kind: {kind}")
+
+
+def _parallel_encode_one(scan_root_str: str, rel: str) -> tuple[str, dict[str, Any]]:
+    assert _parallel_backend is not None
+    image_path = Path(scan_root_str) / rel
+    signature = file_signature(image_path)
+    vectors = [vector.tolist() for vector in _parallel_backend.encode(image_path)]
+    return rel, {"signature": signature, "encodings": vectors}
 
 
 @dataclass
@@ -40,29 +84,73 @@ class FaceBackend(Protocol):
 
 
 class FaceRecognitionBackend:
+    kind: ClassVar[str] = "face_recognition"
+
     def __init__(self) -> None:
         import face_recognition  # type: ignore
 
         self._face_recognition = face_recognition
 
     def encode(self, image_path: Path) -> list[np.ndarray]:
-        image = self._face_recognition.load_image_file(str(image_path))
+        rgb = load_image_rgb_array(image_path)
+        image = rgb  # face_recognition uses RGB ndarray
         locations = self._face_recognition.face_locations(image)
         encodings = self._face_recognition.face_encodings(image, known_face_locations=locations)
         return [np.asarray(vector, dtype=float) for vector in encodings]
 
 
 class InsightFaceBackend:
-    def __init__(self) -> None:
-        from insightface.app import FaceAnalysis  # type: ignore
+    kind: ClassVar[str] = "insightface"
 
-        self._app = FaceAnalysis(name="buffalo_l")
-        self._app.prepare(ctx_id=-1)
+    def __init__(self) -> None:
+        import os
+
+        try:
+            from insightface.app import FaceAnalysis  # type: ignore
+        except ImportError as exc:  # pragma: no cover
+            raise RuntimeError(
+                "insightface is not installed. Install with: pip install insightface onnxruntime"
+            ) from exc
+
+        root = os.environ.get("INSIGHTFACE_ROOT", "~/.insightface/models")
+        root_expanded = os.path.expandvars(os.path.expanduser(root))
+        try:
+            self._app = FaceAnalysis(name="buffalo_l", root=root_expanded)
+        except TypeError:
+            self._app = FaceAnalysis(name="buffalo_l")
+
+        self._lock = threading.Lock()
+        prepared = False
+        last_exc: BaseException | None = None
+        ctx_order = [-1]
+        gpu_first = os.environ.get("INSIGHTFACE_DISABLE_GPU", "").strip() not in ("1", "true", "yes")
+        if gpu_first:
+            ctx_order = [0, -1]
+
+        for ctx_id in ctx_order:
+            try:
+                self._app.prepare(ctx_id=ctx_id, det_thresh=0.5, det_size=(640, 640))
+                prepared = True
+                break
+            except Exception as exc:  # pragma: no cover - env-specific (CUDA/cpu)
+                last_exc = exc
+                continue
+        if not prepared:
+            raise RuntimeError(
+                f"InsightFace model prepare failed (buffalo_l). "
+                f"Set INSIGHTFACE_ROOT if models are elsewhere. Last error: {last_exc}"
+            ) from last_exc
 
     def encode(self, image_path: Path) -> list[np.ndarray]:
-        rgb_image = np.array(Image.open(image_path).convert("RGB"))
-        bgr_image = rgb_image[:, :, ::-1]
-        faces = self._app.get(bgr_image)
+        rgb_image = load_image_rgb_array(image_path)
+        if rgb_image.size == 0:
+            return []
+        bgr_image = np.ascontiguousarray(rgb_image[:, :, ::-1])
+        try:
+            with self._lock:
+                faces = self._app.get(bgr_image)
+        except Exception as exc:
+            raise RuntimeError(f"InsightFace inference failed for {image_path}") from exc
         return [np.asarray(face.embedding, dtype=float) for face in faces]
 
 
@@ -106,6 +194,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--folders-dir",
         default=None,
         help=f"Directory for exported symlink folders (default: <scan>/{FOLDERS_DIRNAME}).",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Parallel worker processes for face encoding (1 = sequential). "
+        "Each worker loads its own backend (recommended for InsightFace).",
     )
     return parser.parse_args(argv)
 
@@ -165,28 +260,73 @@ def extract_records(
     backend: FaceBackend,
     cache_payload: dict[str, Any],
     scan_root: Path,
+    workers: int = 1,
 ) -> list[FaceRecord]:
     files_cache = cache_payload.setdefault("files", {})
     records: list[FaceRecord] = []
+    paths = list(image_paths)
 
-    for image_path in image_paths:
+    to_encode: list[Path] = []
+    for image_path in paths:
         rel = str(image_path.relative_to(scan_root))
         signature = file_signature(image_path)
         cached = files_cache.get(rel)
         if cached and cached.get("signature") == signature:
-            vectors = cached.get("encodings", [])
-        else:
-            vectors = [vector.tolist() for vector in backend.encode(image_path)]
-            files_cache[rel] = {"signature": signature, "encodings": vectors}
-
-        for index, vector in enumerate(vectors):
-            records.append(
-                FaceRecord(
-                    file_path=image_path,
-                    face_index=index,
-                    encoding=np.asarray(vector, dtype=float),
+            for index, vector in enumerate(cached.get("encodings", [])):
+                records.append(
+                    FaceRecord(
+                        file_path=image_path,
+                        face_index=index,
+                        encoding=np.asarray(vector, dtype=float),
+                    )
                 )
-            )
+        else:
+            to_encode.append(image_path)
+
+    if to_encode:
+        if workers <= 1:
+            for image_path in tqdm(to_encode, desc="Face encodings", unit="file"):
+                rel = str(image_path.relative_to(scan_root))
+                vectors = [vector.tolist() for vector in backend.encode(image_path)]
+                files_cache[rel] = {"signature": file_signature(image_path), "encodings": vectors}
+        else:
+            kind = getattr(backend, "kind", None)
+            if kind not in ("insightface", "face_recognition"):
+                raise ValueError(
+                    "Parallel --workers requires the stock face_recognition or insightface backend "
+                    f"(got {type(backend).__name__})."
+                )
+            ctx = multiprocessing.get_context("spawn")
+            with ProcessPoolExecutor(
+                max_workers=workers,
+                initializer=_parallel_worker_init,
+                initargs=(kind,),
+                mp_context=ctx,
+            ) as executor:
+                scan_s = str(scan_root)
+                future_map = {
+                    executor.submit(_parallel_encode_one, scan_s, str(p.relative_to(scan_root))): p
+                    for p in to_encode
+                }
+                for future in tqdm(
+                    as_completed(future_map),
+                    total=len(future_map),
+                    desc="Face encodings",
+                    unit="file",
+                ):
+                    rel, entry = future.result()
+                    files_cache[rel] = entry
+
+        for image_path in to_encode:
+            rel = str(image_path.relative_to(scan_root))
+            for index, vector in enumerate(files_cache[rel]["encodings"]):
+                records.append(
+                    FaceRecord(
+                        file_path=image_path,
+                        face_index=index,
+                        encoding=np.asarray(vector, dtype=float),
+                    )
+                )
     return records
 
 
@@ -326,11 +466,18 @@ def run(
     catalog_path: Path,
     cache_path: Path,
     folders_dir: Path,
+    workers: int = 1,
 ) -> dict[str, Any]:
     backend = pick_backend(backend_name)
     images = discover_images(scan_path)
     cache_payload = load_cache(cache_path)
-    records = extract_records(images, backend=backend, cache_payload=cache_payload, scan_root=scan_path)
+    records = extract_records(
+        images,
+        backend=backend,
+        cache_payload=cache_payload,
+        scan_root=scan_path,
+        workers=workers,
+    )
     result = auto_cluster(records, min_samples=min_samples, cluster_count=cluster_count)
     catalog = build_catalog(scan_path, result)
 
@@ -354,6 +501,10 @@ def main(argv: list[str] | None = None) -> int:
     cache_path = Path(args.cache_path).resolve() if args.cache_path else scan_path / CACHE_FILENAME
     folders_dir = Path(args.folders_dir).resolve() if args.folders_dir else scan_path / FOLDERS_DIRNAME
 
+    if args.workers < 1:
+        print("Error: --workers must be >= 1", file=sys.stderr)
+        return 1
+
     try:
         catalog = run(
             scan_path=scan_path,
@@ -365,6 +516,7 @@ def main(argv: list[str] | None = None) -> int:
             catalog_path=catalog_path,
             cache_path=cache_path,
             folders_dir=folders_dir,
+            workers=args.workers,
         )
     except (RuntimeError, OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
