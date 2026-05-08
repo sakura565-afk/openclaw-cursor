@@ -382,7 +382,6 @@ def iter_transcript_files(config: ReflectionConfig) -> Tuple[List[Path], List[st
     """
     Collect transcript-like files under configured directories, modified within lookback.
     """
-    notes: List[Path] = []
     cutoff = _now_utc() - timedelta(days=config.lookback_days)
     found: Dict[str, Path] = {}
     skip_reasons: List[str] = []
