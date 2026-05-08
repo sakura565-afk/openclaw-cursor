@@ -37,3 +37,80 @@ Run the focused test suite with:
 python -m unittest tests.test_ollama_model_manager
 ```
 
+## Photo Deduplication
+
+`python -m scripts.photo_deduplication` scans photo archives and groups duplicate images using perceptual/average hashing.
+
+### Supported formats
+
+- JPG / JPEG
+- PNG
+- TIFF
+- BMP
+- HEIC (requires Pillow HEIF support in environment)
+
+### Usage
+
+```bash
+python -m scripts.photo_deduplication --scan /path/to/archive --dry-run
+python -m scripts.photo_deduplication --scan /path/to/archive --move --hash-type both
+python -m scripts.photo_deduplication --scan /path/to/archive --hash-type perceptual --threshold 95
+```
+
+### CLI flags
+
+- `--scan <path>`: recursively scans directory for images.
+- `--dry-run`: generates report only, no file deletion/move.
+- `--move`: moves duplicates to `<scan>/duplicates/` instead of deleting.
+- `--hash-type [perceptual|average|both]`: hashing mode.
+- `--threshold`: duplicate similarity threshold in percent.
+- `--json-out`: path to JSON report file.
+- `--csv-out`: path to CSV duplicates list.
+
+### Tests
+
+```bash
+python -m unittest tests.test_photo_deduplication
+```
+
+## Face Clustering
+
+`python -m scripts.face_clustering` clusters face embeddings found in a photo archive.
+
+### Usage
+
+```bash
+python -m scripts.face_clustering \
+  --scan /path/to/photo_archive \
+  --cluster-count 10 \
+  --min-samples 3 \
+  --export-json \
+  --export-folders
+```
+
+### Options
+
+- `--scan <path>`: recursively scan a directory for image files.
+- `--cluster-count <N>`: optional target number of clusters; the script auto-tunes a distance threshold.
+- `--min-samples <N>`: minimum number of face samples required to keep a cluster.
+- `--export-json`: write `catalog.json` with cluster metadata and file membership.
+- `--export-folders`: create `person_001/`, `person_002/`, ... folders containing symlinks to source files.
+- `--backend`: `auto`, `face_recognition`, or `insightface`.
+
+### Output
+
+- `catalog.json` includes:
+  - clustering threshold (`eps`)
+  - list of clusters with `cluster_id`, size, and files
+  - list of noise samples that did not match cluster rules
+- `face_clusters/person_###/` directories (optional) with symlinks to clustered images.
+
+### Caching
+
+The script stores cached encodings in `.face_clustering_cache.json` under the scan root and skips re-encoding unchanged files by checking file size and nanosecond mtime.
+
+### Tests
+
+```bash
+python -m unittest tests.test_face_clustering
+```

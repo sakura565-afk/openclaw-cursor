@@ -2,3 +2,10 @@ flask
 markdown2
 python-frontmatter
 xlrd
+pillow
+imagehash
+tqdm
+pillow_heif
+face_recognition
+insightface
+numpy
