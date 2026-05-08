@@ -1,0 +1,23 @@
+name: Tool discovery
+
+on:
+  push:
+    branches: [main, "cursor/**"]
+  pull_request:
+
+jobs:
+  verify-tool-catalog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify generated tool manifest matches sources
+        run: python3 src/skills/tool_discovery.py --check
+
+      - name: Run unit tests touching discovery
+        run: python3 -m unittest tests.test_tool_discovery -v
