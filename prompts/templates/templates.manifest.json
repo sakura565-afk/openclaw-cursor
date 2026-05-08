@@ -1,0 +1,150 @@
+{
+  "version": "1",
+  "templates": [
+    {
+      "id": "code_review",
+      "taskType": "code_review",
+      "file": "code_review.md",
+      "summary": "Structured review of code for correctness, security, and maintainability.",
+      "placeholders": [
+        {
+          "name": "INPUT",
+          "description": "Code, diff, or files to review.",
+          "required": true
+        },
+        {
+          "name": "CONTEXT",
+          "description": "Language, framework, team conventions, or related modules.",
+          "required": false
+        },
+        {
+          "name": "OUTPUT_FORMAT",
+          "description": "Desired sections, severity scale, or checklist shape.",
+          "required": false
+        },
+        {
+          "name": "CONSTRAINTS",
+          "description": "Scope limits, performance goals, or compliance rules.",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "image_generation",
+      "taskType": "image_generation",
+      "file": "image_generation.md",
+      "summary": "Creative brief and constraints for an image generation model.",
+      "placeholders": [
+        {
+          "name": "INPUT",
+          "description": "Subject, scene, and key visual elements to depict.",
+          "required": true
+        },
+        {
+          "name": "CONTEXT",
+          "description": "Brand palette, aspect ratio, medium, or reference style.",
+          "required": false
+        },
+        {
+          "name": "OUTPUT_FORMAT",
+          "description": "Dimensions, file format, or number of variants.",
+          "required": false
+        },
+        {
+          "name": "CONSTRAINTS",
+          "description": "Must-not-include list, safety, copyright, or realism bounds.",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "session_summary",
+      "taskType": "session_summary",
+      "file": "session_summary.md",
+      "summary": "Summarize a working session into outcomes and next actions.",
+      "placeholders": [
+        {
+          "name": "INPUT",
+          "description": "Transcript, notes, or chronological events from the session.",
+          "required": true
+        },
+        {
+          "name": "CONTEXT",
+          "description": "Project name, goals, participants, or tooling used.",
+          "required": false
+        },
+        {
+          "name": "OUTPUT_FORMAT",
+          "description": "Sections, max length, or audience (e.g. stand-up vs. doc).",
+          "required": false
+        },
+        {
+          "name": "REFERENCES",
+          "description": "Links to PRs, tickets, commits, or docs cited in the session.",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "error_diagnosis",
+      "taskType": "error_diagnosis",
+      "file": "error_diagnosis.md",
+      "summary": "Analyze errors and logs to find likely root cause and fixes.",
+      "placeholders": [
+        {
+          "name": "INPUT",
+          "description": "Error message, stack trace, or failing command output.",
+          "required": true
+        },
+        {
+          "name": "CONTEXT",
+          "description": "OS, runtime versions, config, and recent changes.",
+          "required": false
+        },
+        {
+          "name": "OUTPUT_FORMAT",
+          "description": "Hypothesis ordering, repro steps format, or patch style.",
+          "required": false
+        },
+        {
+          "name": "CONSTRAINTS",
+          "description": "Cannot restart services, no network, or read-only env.",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "task_planning",
+      "taskType": "task_planning",
+      "file": "task_planning.md",
+      "summary": "Plan work: steps, dependencies, risks, and verification.",
+      "placeholders": [
+        {
+          "name": "INPUT",
+          "description": "Goal or feature request to plan against.",
+          "required": true
+        },
+        {
+          "name": "CONTEXT",
+          "description": "Codebase areas, deadlines, owners, or existing design docs.",
+          "required": false
+        },
+        {
+          "name": "OUTPUT_FORMAT",
+          "description": "Milestone layout, estimation style, or diagram request.",
+          "required": false
+        },
+        {
+          "name": "CONSTRAINTS",
+          "description": "Non-goals, tech limits, or policy gates.",
+          "required": false
+        },
+        {
+          "name": "REFERENCES",
+          "description": "Tickets, RFCs, or APIs the plan must align with.",
+          "required": false
+        }
+      ]
+    }
+  ]
+}
