@@ -7,3 +7,12 @@ matplotlib
 seaborn
 pyheif
 python-magic
+imagehash
+numpy
+# Face clustering / InsightFace: CPU wheels from PyPI on Windows (no C++ toolchain).
+onnxruntime>=1.16.0
+insightface>=0.7.3
+opencv-python-headless>=4.8.0
+# face_recognition depends on dlib. PyPI often has wheels; if pip install dlib fails on Windows:
+#   pip install pipwin && pipwin install dlib
+face_recognition>=1.3.0

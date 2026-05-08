@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Photo archive deduplication with perceptual and average hashes."""
+"""Photo archive deduplication with perceptual and average hashes.
+
+This module does not use InsightFace or face embeddings; it relies on ``imagehash``
+and Pillow only. For face-level clustering, see ``face_clustering.py``.
+"""
 
 from __future__ import annotations
 
