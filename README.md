@@ -37,80 +37,35 @@ Run the focused test suite with:
 python -m unittest tests.test_ollama_model_manager
 ```
 
-## Photo Deduplication
+## Photo Archive Report
 
-`python -m scripts.photo_deduplication` scans photo archives and groups duplicate images using perceptual/average hashing.
-
-### Supported formats
-
-- JPG / JPEG
-- PNG
-- TIFF
-- BMP
-- HEIC (requires Pillow HEIF support in environment)
+`python -m scripts.photo_archive_report` analyzes a photo/video archive and produces statistics in markdown tables plus JSON for charting.
 
 ### Usage
 
 ```bash
-python -m scripts.photo_deduplication --scan /path/to/archive --dry-run
-python -m scripts.photo_deduplication --scan /path/to/archive --move --hash-type both
-python -m scripts.photo_deduplication --scan /path/to/archive --hash-type perceptual --threshold 95
+python -m scripts.photo_archive_report --scan /path/to/archive
+python -m scripts.photo_archive_report --scan /path/to/archive --check-integrity
+python -m scripts.photo_archive_report --scan /path/to/archive --check-integrity --output reports/photo_archive.md
+python -m scripts.photo_archive_report --scan /path/to/archive --verbose --output reports/photo_archive.md
 ```
 
-### CLI flags
+### What it reports
 
-- `--scan <path>`: recursively scans directory for images.
-- `--dry-run`: generates report only, no file deletion/move.
-- `--move`: moves duplicates to `<scan>/duplicates/` instead of deleting.
-- `--hash-type [perceptual|average|both]`: hashing mode.
-- `--threshold`: duplicate similarity threshold in percent.
-- `--json-out`: path to JSON report file.
-- `--csv-out`: path to CSV duplicates list.
+- Total files and file counts by extension (`jpg`, `png`, `heic`, `mp4`, etc.)
+- Distribution by file modification year/month
+- File size statistics: total, average, median, max (bytes)
+- Optional integrity checks:
+  - broken image detection (`Pillow` open/verify)
+  - suspicious tiny `HEIC/JPEG` files (`< 1KB`)
+  - detailed broken/suspicious files table
+
+If `--output report.md` is provided, the tool writes:
+- markdown report to `report.md`
+- JSON payload to `report.json` (same directory/stem)
 
 ### Tests
 
 ```bash
-python -m unittest tests.test_photo_deduplication
-```
-
-## Face Clustering
-
-`python -m scripts.face_clustering` clusters face embeddings found in a photo archive.
-
-### Usage
-
-```bash
-python -m scripts.face_clustering \
-  --scan /path/to/photo_archive \
-  --cluster-count 10 \
-  --min-samples 3 \
-  --export-json \
-  --export-folders
-```
-
-### Options
-
-- `--scan <path>`: recursively scan a directory for image files.
-- `--cluster-count <N>`: optional target number of clusters; the script auto-tunes a distance threshold.
-- `--min-samples <N>`: minimum number of face samples required to keep a cluster.
-- `--export-json`: write `catalog.json` with cluster metadata and file membership.
-- `--export-folders`: create `person_001/`, `person_002/`, ... folders containing symlinks to source files.
-- `--backend`: `auto`, `face_recognition`, or `insightface`.
-
-### Output
-
-- `catalog.json` includes:
-  - clustering threshold (`eps`)
-  - list of clusters with `cluster_id`, size, and files
-  - list of noise samples that did not match cluster rules
-- `face_clusters/person_###/` directories (optional) with symlinks to clustered images.
-
-### Caching
-
-The script stores cached encodings in `.face_clustering_cache.json` under the scan root and skips re-encoding unchanged files by checking file size and nanosecond mtime.
-
-### Tests
-
-```bash
-python -m unittest tests.test_face_clustering
+python -m unittest tests.test_photo_archive_report
 ```
