@@ -7,3 +7,4 @@ matplotlib
 seaborn
 pyheif
 python-magic
+# Optional: install rawpy to enable RAW image formats (CR2/NEF/ARW/DNG/RAF/ORF)

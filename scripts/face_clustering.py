@@ -10,14 +10,20 @@ from pathlib import Path
 from typing import Any, Iterable, Protocol
 
 import numpy as np
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 
 DEFAULT_EPS = 0.6
 CACHE_FILENAME = ".face_clustering_cache.json"
 CATALOG_FILENAME = "catalog.json"
 FOLDERS_DIRNAME = "face_clusters"
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+RAW_EXTENSIONS = {".cr2", ".nef", ".arw", ".dng", ".raf", ".orf"}
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp", *RAW_EXTENSIONS}
+
+try:  # pragma: no cover - optional runtime dependency
+    import rawpy  # type: ignore
+except Exception:  # pragma: no cover - RAW support may be unavailable
+    rawpy = None
 
 
 @dataclass
@@ -46,7 +52,7 @@ class FaceRecognitionBackend:
         self._face_recognition = face_recognition
 
     def encode(self, image_path: Path) -> list[np.ndarray]:
-        image = self._face_recognition.load_image_file(str(image_path))
+        image = load_rgb_array(image_path)
         locations = self._face_recognition.face_locations(image)
         encodings = self._face_recognition.face_encodings(image, known_face_locations=locations)
         return [np.asarray(vector, dtype=float) for vector in encodings]
@@ -60,10 +66,21 @@ class InsightFaceBackend:
         self._app.prepare(ctx_id=-1)
 
     def encode(self, image_path: Path) -> list[np.ndarray]:
-        rgb_image = np.array(Image.open(image_path).convert("RGB"))
+        rgb_image = load_rgb_array(image_path)
         bgr_image = rgb_image[:, :, ::-1]
         faces = self._app.get(bgr_image)
         return [np.asarray(face.embedding, dtype=float) for face in faces]
+
+
+def load_rgb_array(image_path: Path) -> np.ndarray:
+    suffix = image_path.suffix.lower()
+    if suffix in RAW_EXTENSIONS:
+        if rawpy is None:
+            raise RuntimeError("rawpy is required for RAW formats")
+        with rawpy.imread(str(image_path)) as raw:
+            return np.asarray(raw.postprocess())
+    with Image.open(image_path) as image:
+        return np.asarray(image.convert("RGB"))
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -176,7 +193,10 @@ def extract_records(
         if cached and cached.get("signature") == signature:
             vectors = cached.get("encodings", [])
         else:
-            vectors = [vector.tolist() for vector in backend.encode(image_path)]
+            try:
+                vectors = [vector.tolist() for vector in backend.encode(image_path)]
+            except (RuntimeError, OSError, ValueError, UnidentifiedImageError):
+                continue
             files_cache[rel] = {"signature": signature, "encodings": vectors}
 
         for index, vector in enumerate(vectors):
