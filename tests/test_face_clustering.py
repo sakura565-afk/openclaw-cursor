@@ -142,6 +142,26 @@ class FaceClusteringTests(unittest.TestCase):
         self.assertEqual(len(links), 2)
         self.assertTrue(all(item.is_symlink() for item in links))
 
+    def test_pick_backend_auto_prefers_opencv_when_others_fail(self) -> None:
+        chosen = FakeBackend({})
+
+        def _fail() -> None:
+            raise RuntimeError("unavailable")
+
+        with (
+            patch.object(face_clustering, "FaceRecognitionBackend", side_effect=_fail),
+            patch.object(face_clustering, "InsightFaceBackend", side_effect=_fail),
+            patch.object(face_clustering, "OpenCvDnnFaceBackend", return_value=chosen),
+        ):
+            backend = face_clustering.pick_backend("auto")
+        self.assertIs(backend, chosen)
+
+    def test_pick_backend_explicit_opencv_dnn(self) -> None:
+        chosen = FakeBackend({})
+        with patch.object(face_clustering, "OpenCvDnnFaceBackend", return_value=chosen):
+            backend = face_clustering.pick_backend("opencv_dnn")
+        self.assertIs(backend, chosen)
+
 
 if __name__ == "__main__":
     unittest.main()

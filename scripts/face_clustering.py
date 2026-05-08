@@ -1,10 +1,28 @@
 #!/usr/bin/env python3
+"""Cluster faces in an image archive.
+
+Backends (``--backend``):
+
+- ``face_recognition`` — requires ``dlib`` (often prebuilt wheels; on Windows without
+  wheels try ``pip install pipwin`` then ``pipwin install dlib`` before
+  ``pip install face_recognition``).
+- ``insightface`` — Buffalo_L + ONNX Runtime (CPU wheels on Windows via PyPI).
+- ``opencv_dnn`` — OpenCV SSD face detector and simple patch embeddings (no InsightFace).
+- ``auto`` — tries the above in that order.
+
+Environment:
+
+- ``INSIGHTFACE_ROOT`` — optional model root passed to InsightFace when set.
+"""
+
 from __future__ import annotations
 
 import argparse
 import json
 import os
 import sys
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Protocol
@@ -14,6 +32,13 @@ from PIL import Image
 
 
 DEFAULT_EPS = 0.6
+_OPENCV_DEPLOY_URL = (
+    "https://raw.githubusercontent.com/opencv/opencv/4.10.0/samples/dnn/face_detector/deploy.prototxt"
+)
+_OPENCV_CAFFE_URL = (
+    "https://raw.githubusercontent.com/opencv/opencv_3rdparty/"
+    "dnn_samples_face_detector_20170830/res10_300x300_ssd_iter_140000_fp16.caffemodel"
+)
 CACHE_FILENAME = ".face_clustering_cache.json"
 CATALOG_FILENAME = "catalog.json"
 FOLDERS_DIRNAME = "face_clusters"
@@ -54,9 +79,21 @@ class FaceRecognitionBackend:
 
 class InsightFaceBackend:
     def __init__(self) -> None:
-        from insightface.app import FaceAnalysis  # type: ignore
+        try:
+            from insightface.app import FaceAnalysis  # type: ignore
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise RuntimeError(
+                "insightface is not installed. On most platforms: pip install insightface onnxruntime"
+            ) from exc
 
-        self._app = FaceAnalysis(name="buffalo_l")
+        root = os.environ.get("INSIGHTFACE_ROOT", "").strip()
+        kwargs: dict[str, Any] = {"name": "buffalo_l"}
+        if root:
+            kwargs["root"] = root
+        try:
+            self._app = FaceAnalysis(providers=["CPUExecutionProvider"], **kwargs)
+        except TypeError:
+            self._app = FaceAnalysis(**kwargs)
         self._app.prepare(ctx_id=-1)
 
     def encode(self, image_path: Path) -> list[np.ndarray]:
@@ -64,6 +101,122 @@ class InsightFaceBackend:
         bgr_image = rgb_image[:, :, ::-1]
         faces = self._app.get(bgr_image)
         return [np.asarray(face.embedding, dtype=float) for face in faces]
+
+
+class OpenCvDnnFaceBackend:
+    """SSD face detection (DNN) when model files are available; else Haar cascades.
+
+    Embeddings are L2-normalized flattened grayscale face patches (distinct scale from
+    InsightFace; use ``--cluster-count`` or tune ``DEFAULT_EPS`` if clusters look wrong).
+    """
+
+    def __init__(self) -> None:
+        import cv2  # type: ignore
+
+        self._cv2 = cv2
+        self._net: Any | None = None
+        self._cascade: Any | None = None
+        self._use_haar = False
+        self._model_dir = _opencv_face_model_dir()
+
+    def _ensure_dnn(self) -> bool:
+        if self._net is not None:
+            return True
+        cv2 = self._cv2
+        proto = self._model_dir / "deploy.prototxt"
+        weights = self._model_dir / "res10_300x300_ssd_iter_140000_fp16.caffemodel"
+        try:
+            _download_if_missing(proto, _OPENCV_DEPLOY_URL)
+            _download_if_missing(weights, _OPENCV_CAFFE_URL)
+            self._net = cv2.dnn.readNetFromCaffe(str(proto), str(weights))
+            return True
+        except (OSError, urllib.error.URLError, RuntimeError):
+            self._net = None
+            return False
+
+    def _ensure_haar(self) -> None:
+        if self._cascade is None:
+            path = self._cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+            self._cascade = self._cv2.CascadeClassifier(path)
+            if self._cascade.empty():  # pragma: no cover
+                raise RuntimeError("OpenCV Haar cascade for frontal faces is unavailable.")
+
+    def _face_boxes(self, bgr: np.ndarray) -> list[tuple[int, int, int, int]]:
+        cv2 = self._cv2
+        h, w = bgr.shape[:2]
+        if not self._use_haar:
+            if self._ensure_dnn():
+                blob = cv2.dnn.blobFromImage(
+                    bgr,
+                    scalefactor=1.0,
+                    size=(300, 300),
+                    mean=(104.0, 117.0, 123.0),
+                    swapRB=False,
+                    crop=False,
+                )
+                net = self._net
+                if net is None:  # pragma: no cover - defensive
+                    self._use_haar = True
+                else:
+                    net.setInput(blob)
+                    det = net.forward()
+                    boxes: list[tuple[int, int, int, int]] = []
+                    for i in range(det.shape[2]):
+                        conf = float(det[0, 0, i, 2])
+                        if conf < 0.5:
+                            continue
+                        x1, y1, x2, y2 = (det[0, 0, i, 3:7] * np.array([w, h, w, h])).astype(int)
+                        x1, y1 = max(0, x1), max(0, y1)
+                        x2, y2 = min(w - 1, x2), min(h - 1, y2)
+                        if x2 > x1 and y2 > y1:
+                            boxes.append((x1, y1, x2, y2))
+                    return boxes
+            self._use_haar = True
+
+        self._ensure_haar()
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        found = self._cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(48, 48))
+        boxes = []
+        for (x, y, fw, fh) in found:
+            boxes.append((int(x), int(y), int(x + fw), int(y + fh)))
+        return boxes
+
+    def encode(self, image_path: Path) -> list[np.ndarray]:
+        rgb_image = np.array(Image.open(image_path).convert("RGB"))
+        bgr = rgb_image[:, :, ::-1].copy()
+        out: list[np.ndarray] = []
+        for x1, y1, x2, y2 in self._face_boxes(bgr):
+            face = bgr[y1:y2, x1:x2]
+            if face.size == 0:
+                continue
+            gray = self._cv2.cvtColor(face, self._cv2.COLOR_BGR2GRAY)
+            small = self._cv2.resize(gray, (64, 64), interpolation=self._cv2.INTER_AREA)
+            vec = small.astype(np.float64).ravel()
+            mean = float(vec.mean())
+            vec = vec - mean
+            n = float(np.linalg.norm(vec))
+            if n > 1e-9:
+                vec /= n
+            out.append(vec)
+        return out
+
+
+def _opencv_face_model_dir() -> Path:
+    env = os.environ.get("FACE_CLUSTERING_MODEL_DIR", "").strip()
+    if env:
+        return Path(env).expanduser()
+    base = os.environ.get("XDG_CACHE_HOME", "").strip()
+    root = Path(base).expanduser() if base else Path.home() / ".cache"
+    return root / "face_clustering" / "opencv_dnn_face"
+
+
+def _download_if_missing(dest: Path, url: str) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists() and dest.stat().st_size > 0:
+        return
+    request = urllib.request.Request(url, headers={"User-Agent": "face_clustering/1.0"})
+    with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310 — fixed URLs
+        dest.write_bytes(response.read())
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -88,7 +241,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--export-folders", action="store_true", help="Create person_* folders with symlinks.")
     parser.add_argument(
         "--backend",
-        choices=("auto", "face_recognition", "insightface"),
+        choices=("auto", "face_recognition", "insightface", "opencv_dnn"),
         default="auto",
         help="Face detection/embedding backend.",
     )
@@ -122,17 +275,23 @@ def pick_backend(name: str) -> FaceBackend:
         return FaceRecognitionBackend()
     if name == "insightface":
         return InsightFaceBackend()
+    if name == "opencv_dnn":
+        return OpenCvDnnFaceBackend()
 
     errors: list[str] = []
-    try:
-        return FaceRecognitionBackend()
-    except Exception as exc:  # pragma: no cover - depends on optional library presence
-        errors.append(f"face_recognition: {exc}")
-    try:
-        return InsightFaceBackend()
-    except Exception as exc:  # pragma: no cover - depends on optional library presence
-        errors.append(f"insightface: {exc}")
-    raise RuntimeError("No available face backend. Install face_recognition or insightface. " + " | ".join(errors))
+    for label, factory in (
+        ("face_recognition", FaceRecognitionBackend),
+        ("insightface", InsightFaceBackend),
+        ("opencv_dnn", OpenCvDnnFaceBackend),
+    ):
+        try:
+            return factory()
+        except Exception as exc:  # pragma: no cover - depends on optional library presence
+            errors.append(f"{label}: {exc}")
+    raise RuntimeError(
+        "No available face backend. Install face_recognition, insightface (onnxruntime), "
+        "or opencv-python; or use --backend opencv_dnn. " + " | ".join(errors)
+    )
 
 
 def discover_images(scan_path: Path) -> list[Path]:
