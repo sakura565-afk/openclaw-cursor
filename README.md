@@ -2,38 +2,6 @@
 
 OpenClaw orchestration via Cursor Cloud Agent.
 
-## Image Format Migrator
-
-`python -m scripts.image_format_migrator` converts/compresses photo archives to JPEG.
-
-### Supported conversions
-
-- Input formats: PNG, TIFF, BMP, WEBP, HEIC, JPEG
-- Output format: JPEG
-- JPEG quality: configurable (`--quality`), default `85`
-- EXIF: preserved by default (`--preserve-exif`, disable via `--no-preserve-exif`)
-
-### CLI usage
-
-```bash
-# Recursive scan and conversion
-python -m scripts.image_format_migrator --scan /path/to/archive
-
-# Convert one file рядом с оригиналом
-python -m scripts.image_format_migrator --single /path/to/image.png
-
-# Custom output directory
-python -m scripts.image_format_migrator --scan /path/to/archive --output /path/to/output
-
-# Preview only (no writes)
-python -m scripts.image_format_migrator --scan /path/to/archive --dry-run
-
-# Replace originals
-python -m scripts.image_format_migrator --scan /path/to/archive --overwrite
-```
-
-For `--scan`, if `--output` is omitted and `--overwrite` is off, output is created next to the source directory with suffix `_converted`.
-
 ## Ollama Model Manager
 
 `python -m scripts.ollama_model_manager` provides a stdlib-only CLI for managing local Ollama models used by OpenClaw.
@@ -69,35 +37,22 @@ Run the focused test suite with:
 python -m unittest tests.test_ollama_model_manager
 ```
 
-## Photo Archive Report
+## Tool Discovery CLI
 
-`python -m scripts.photo_archive_report` analyzes a photo/video archive and produces statistics in markdown tables plus JSON for charting.
+`python -m scripts.tool_discovery` discovers script capabilities, maps dependencies, generates docs, and suggests tools for a goal with contextual reasoning.
 
-### Usage
-
-```bash
-python -m scripts.photo_archive_report --scan /path/to/archive
-python -m scripts.photo_archive_report --scan /path/to/archive --check-integrity
-python -m scripts.photo_archive_report --scan /path/to/archive --check-integrity --output reports/photo_archive.md
-python -m scripts.photo_archive_report --scan /path/to/archive --verbose --output reports/photo_archive.md
-```
-
-### What it reports
-
-- Total files and file counts by extension (`jpg`, `png`, `heic`, `mp4`, etc.)
-- Distribution by file modification year/month
-- File size statistics: total, average, median, max (bytes)
-- Optional integrity checks:
-  - broken image detection (`Pillow` open/verify)
-  - suspicious tiny `HEIC/JPEG` files (`< 1KB`)
-  - detailed broken/suspicious files table
-
-If `--output report.md` is provided, the tool writes:
-- markdown report to `report.md`
-- JSON payload to `report.json` (same directory/stem)
-
-### Tests
+### Commands
 
 ```bash
-python -m unittest tests.test_photo_archive_report
+python -m scripts.tool_discovery analyze --format json
+python -m scripts.tool_discovery docs --output docs/tool_discovery.md
+python -m scripts.tool_discovery suggest "monitor queue latency" --context "safe local logs" --top 3
 ```
+
+### What it analyzes
+
+- **Deep capability analysis** based on script name, functions, subcommands, and docstring signals.
+- **Dependency analysis** using direct module imports and inferred relationships from shared capabilities/import sets.
+- **Risk and I/O profiles** to distinguish low/medium/high operational risk and filesystem/network/process behavior.
+- **Contextual tool suggestion** scoring with explicit reasoning about capability fit, I/O fit, safety constraints, and possible tool chains.
+
