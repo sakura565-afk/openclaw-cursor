@@ -1,3 +1,4 @@
 logs/sync_obsidian_*.json
+logs/tool_discovery_*.json
 __pycache__/
 *.py[cod]
