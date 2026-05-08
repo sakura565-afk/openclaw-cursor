@@ -181,8 +181,12 @@ class OllamaBridge:
             return {"status": "ok", "ollama": "connected"}, 200
         except Exception:
             return {"status": "ok", "ollama": "disconnected"}, 200
-    
-    def route(self, path: str, method: str, body: dict | None) -> tuple[dict, int]:
+
+    def handle_ready(self) -> tuple[str, int]:
+        """Readiness probe: plain text for simple orchestration checks."""
+        return "READY", 200
+
+    def route(self, path: str, method: str, body: dict | None) -> tuple[dict | str, int]:
         """Route request to appropriate handler."""
         if path == "/v1/chat/completions":
             if method == "POST" and body:
@@ -192,7 +196,10 @@ class OllamaBridge:
                 return self.handle_models()
         elif path in ["/health", "/v1/health"]:
             return self.handle_health()
-        
+        elif path in ["/ready", "/v1/ready"]:
+            if method == "GET":
+                return self.handle_ready()
+
         return {"error": {"message": f"Not found: {method} {path}", "type": "not_found"}}, 404
 
 
@@ -207,29 +214,38 @@ def run_server(port: int, ollama_url: str):
         def log_message(self, format, *args):
             logger.info(f"HTTP: {args[0]}")
         
+        def _write_response(self, result: dict | str, status: int) -> None:
+            self.send_response(status)
+            if isinstance(result, str):
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(result.encode("utf-8"))
+            else:
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(result).encode("utf-8"))
+
         def do_POST(self):
             if self.path.startswith("/v1/") or self.path == "/health":
                 content_length = int(self.headers.get("Content-Length", 0))
                 body = {}
                 if content_length > 0:
                     body = json.loads(self.rfile.read(content_length).decode("utf-8"))
-                
+
                 result, status = bridge.route(self.path, "POST", body)
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps(result).encode("utf-8"))
+                self._write_response(result, status)
             else:
                 self.send_response(404)
                 self.end_headers()
         
         def do_GET(self):
-            if self.path.startswith("/v1/") or self.path == "/health":
+            if (
+                self.path.startswith("/v1/")
+                or self.path == "/health"
+                or self.path in ("/ready", "/v1/ready")
+            ):
                 result, status = bridge.route(self.path, "GET", None)
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps(result).encode("utf-8"))
+                self._write_response(result, status)
             else:
                 self.send_response(404)
                 self.end_headers()
