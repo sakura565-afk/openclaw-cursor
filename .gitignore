@@ -1,3 +1,4 @@
 logs/sync_obsidian_*.json
+logs/conversation_kb/
 __pycache__/
 *.py[cod]
