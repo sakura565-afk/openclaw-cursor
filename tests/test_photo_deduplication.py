@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image, ImageDraw
 
@@ -108,6 +109,23 @@ class PhotoDeduplicationTestCase(unittest.TestCase):
         moved_files = list(duplicates_dir.glob("*.jpg"))
         self.assertEqual(1, len(moved_files))
         self.assertTrue(img_a.exists() or img_b.exists())
+
+    def test_iter_image_paths_includes_raw_extensions(self) -> None:
+        scan_dir = self.root / "scan"
+        raw_file = scan_dir / "shot.cr2"
+        raw_file.parent.mkdir(parents=True, exist_ok=True)
+        raw_file.write_bytes(b"raw")
+
+        paths = photo_deduplication.iter_image_paths(scan_dir)
+        self.assertIn(raw_file, paths)
+
+    def test_hash_image_returns_none_for_raw_without_rawpy(self) -> None:
+        raw_file = self.root / "sample.nef"
+        raw_file.write_bytes(b"raw")
+
+        with patch("scripts.photo_deduplication.rawpy", None):
+            record = photo_deduplication.hash_image(raw_file, "both")
+        self.assertIsNone(record)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,8 @@ from PIL import Image, UnidentifiedImageError
 from tqdm import tqdm
 
 
-SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".heic"}
+RAW_EXTENSIONS = {".cr2", ".nef", ".arw", ".dng", ".raf", ".orf"}
+SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".heic", *RAW_EXTENSIONS}
 DEFAULT_THRESHOLD = 95.0
 
 
@@ -27,6 +28,11 @@ try:  # pragma: no cover - optional runtime dependency
     register_heif_opener()
 except Exception:  # pragma: no cover - HEIC may be unsupported
     pass
+
+try:  # pragma: no cover - optional runtime dependency
+    import rawpy  # type: ignore
+except Exception:  # pragma: no cover - RAW support may be unavailable
+    rawpy = None
 
 
 @dataclass(frozen=True)
@@ -73,11 +79,17 @@ def iter_image_paths(root: Path) -> list[Path]:
 
 def hash_image(path: Path, hash_type: str) -> HashRecord | None:
     try:
-        with Image.open(path) as image:
-            converted = image.convert("RGB")
+        if path.suffix.lower() in RAW_EXTENSIONS:
+            if rawpy is None:
+                raise RuntimeError("rawpy is required for RAW formats")
+            with rawpy.imread(str(path)) as raw:
+                converted = Image.fromarray(raw.postprocess()).convert("RGB")
+        else:
+            with Image.open(path) as image:
+                converted = image.convert("RGB")
             perceptual_hash = imagehash.phash(converted) if hash_type in ("perceptual", "both") else None
             average_hash = imagehash.average_hash(converted) if hash_type in ("average", "both") else None
-    except (UnidentifiedImageError, OSError, ValueError):
+    except (UnidentifiedImageError, OSError, ValueError, RuntimeError):
         return None
 
     stat = path.stat()

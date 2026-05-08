@@ -142,6 +142,28 @@ class FaceClusteringTests(unittest.TestCase):
         self.assertEqual(len(links), 2)
         self.assertTrue(all(item.is_symlink() for item in links))
 
+    def test_discover_images_includes_raw_extensions(self) -> None:
+        raw_path = self.scan_dir / "raw" / "capture.arw"
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        raw_path.write_bytes(b"raw")
+
+        discovered = face_clustering.discover_images(self.scan_dir)
+        self.assertIn(raw_path, discovered)
+
+    def test_extract_records_skips_raw_when_rawpy_missing(self) -> None:
+        raw_path = self.scan_dir / "capture.dng"
+        raw_path.write_bytes(b"raw")
+        backend = FakeBackend({"capture.dng": [[0.0, 0.0]]})
+
+        with patch("scripts.face_clustering.rawpy", None):
+            records = face_clustering.extract_records(
+                [raw_path],
+                backend=backend,
+                cache_payload={"files": {}},
+                scan_root=self.scan_dir,
+            )
+        self.assertEqual([], records)
+
 
 if __name__ == "__main__":
     unittest.main()
