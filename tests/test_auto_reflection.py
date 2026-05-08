@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -54,7 +55,7 @@ class AutoReflectionTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            insights = list(auto_reflection.read_and_extract(log_path, root))
+            insights = list(auto_reflection.read_and_extract(log_path, root, None))
         texts = [i.text.lower() for i in insights]
         self.assertTrue(any("traceback" in t for t in texts))
 
@@ -73,6 +74,7 @@ class AutoReflectionTests(unittest.TestCase):
                 since_hours=1,
                 extra_globs=[],
                 dry_run=True,
+                skip_openclaw=True,
             )
             self.assertFalse((root / ".learnings").exists())
             self.assertGreaterEqual(len(run_dry.insights), 1)
@@ -82,16 +84,33 @@ class AutoReflectionTests(unittest.TestCase):
                 since_hours=1,
                 extra_globs=[],
                 dry_run=False,
+                skip_openclaw=True,
             )
             self.assertGreater(run_full.files_scanned, 0)
             learnings = root / ".learnings"
             self.assertTrue(learnings.exists())
             self.assertTrue((learnings / "insights").exists())
             self.assertTrue((learnings / "summaries").exists())
+            self.assertTrue((learnings / "auto_reflection.md").exists())
+            ar_body = (learnings / "auto_reflection.md").read_text(encoding="utf-8")
+            self.assertIn("What went well", ar_body)
+            self.assertIn("What went wrong", ar_body)
+            self.assertIn("Actionable insights", ar_body)
             md_files = list((learnings / "insights").glob("run_*.md"))
             self.assertEqual(len(md_files), 1)
             body = md_files[0].read_text(encoding="utf-8")
             self.assertIn("Lesson learned:", body)
+
+            run_again = auto_reflection.run_reflection(
+                root,
+                since_hours=1,
+                extra_globs=[],
+                dry_run=False,
+                skip_openclaw=True,
+            )
+            self.assertGreaterEqual(len(run_again.insights), 1)
+            ar_again = (learnings / "auto_reflection.md").read_text(encoding="utf-8")
+            self.assertIn("Repeated insights omitted", ar_again)
 
     def test_post_webhook_uses_json_post(self):
         captured: dict[str, object] = {}
@@ -121,6 +140,52 @@ class AutoReflectionTests(unittest.TestCase):
         self.assertEqual(captured["data"]["text"], "hi")
         self.assertEqual(captured["data"]["meta"]["k"], 1)
 
+    def test_reflection_buckets_priority(self):
+        wrong_ins = auto_reflection.Insight(
+            text="Error: timeout connecting to API",
+            source_paths=["logs/x.log"],
+            severity="warning",
+            category="integration",
+        )
+        well_ins = auto_reflection.Insight(
+            text="Tests passed and build succeeded.",
+            source_paths=["logs/y.log"],
+            severity="info",
+            category="testing",
+        )
+        act_ins = auto_reflection.Insight(
+            text="Lesson learned: verify credentials before deploy.",
+            source_paths=["memory/z.md"],
+            severity="info",
+            category="lesson",
+        )
+        well, wrong, action = auto_reflection.reflection_buckets([wrong_ins, well_ins, act_ins])
+        self.assertEqual(len(wrong), 1)
+        self.assertEqual(len(well), 1)
+        self.assertEqual(len(action), 1)
+        self.assertIn("timeout", wrong[0].text.lower())
+
+    def test_openclaw_home_logs_included(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            ohome = Path(raw) / "fake_openclaw"
+            (ohome / "logs").mkdir(parents=True)
+            (ohome / "logs" / "session.log").write_text(
+                "Error: simulated failure from OpenClaw home.\n",
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {"OPENCLAW_HOME": str(ohome)}, clear=False):
+                run = auto_reflection.run_reflection(
+                    root,
+                    since_hours=48,
+                    extra_globs=[],
+                    dry_run=True,
+                    skip_openclaw=False,
+                )
+            self.assertGreaterEqual(len(run.insights), 1)
+            joined = " ".join(run.session_files)
+            self.assertIn(".openclaw", joined)
+
 
 class AutoReflectionMainTests(unittest.TestCase):
     def test_main_stderr_posts_log_without_network(self):
@@ -140,6 +205,7 @@ class AutoReflectionMainTests(unittest.TestCase):
                             "--since-hours",
                             "24",
                             "--stdout-summary",
+                            "--skip-openclaw",
                         ]
                     )
             self.assertEqual(rc, 0)
