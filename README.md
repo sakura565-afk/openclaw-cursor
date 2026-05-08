@@ -2,6 +2,38 @@
 
 OpenClaw orchestration via Cursor Cloud Agent.
 
+## Image Format Migrator
+
+`python -m scripts.image_format_migrator` converts/compresses photo archives to JPEG.
+
+### Supported conversions
+
+- Input formats: PNG, TIFF, BMP, WEBP, HEIC, JPEG
+- Output format: JPEG
+- JPEG quality: configurable (`--quality`), default `85`
+- EXIF: preserved by default (`--preserve-exif`, disable via `--no-preserve-exif`)
+
+### CLI usage
+
+```bash
+# Recursive scan and conversion
+python -m scripts.image_format_migrator --scan /path/to/archive
+
+# Convert one file рядом с оригиналом
+python -m scripts.image_format_migrator --single /path/to/image.png
+
+# Custom output directory
+python -m scripts.image_format_migrator --scan /path/to/archive --output /path/to/output
+
+# Preview only (no writes)
+python -m scripts.image_format_migrator --scan /path/to/archive --dry-run
+
+# Replace originals
+python -m scripts.image_format_migrator --scan /path/to/archive --overwrite
+```
+
+For `--scan`, if `--output` is omitted and `--overwrite` is off, output is created next to the source directory with suffix `_converted`.
+
 ## Ollama Model Manager
 
 `python -m scripts.ollama_model_manager` provides a stdlib-only CLI for managing local Ollama models used by OpenClaw.
