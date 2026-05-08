@@ -7,3 +7,8 @@ matplotlib
 seaborn
 pyheif
 python-magic
+numpy
+imagehash
+rawpy
+insightface
+onnxruntime
