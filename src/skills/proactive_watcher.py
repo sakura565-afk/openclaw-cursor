@@ -11,12 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-
-ERROR_PATTERN = re.compile(
-    r"\b(error|exception|traceback|failed|failure|timeout|timed out|syntaxerror|"
-    r"valueerror|keyerror|runtimeerror|typeerror|importerror)\b",
-    re.IGNORECASE,
-)
+from src.error_learning.log_signals import ERROR_SIGNAL_RE as ERROR_PATTERN, normalize_error_line
 DOC_NAMES = {"readme.md", "readme.rst", "docs.md", "docs.txt"}
 
 
@@ -53,15 +48,6 @@ def _read_text(path: Path) -> str:
         return path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return ""
-
-
-def _normalize_error_line(line: str) -> str:
-    cleaned = line.strip()
-    cleaned = re.sub(r"^\[[^\]]+\]\s*", "", cleaned)
-    cleaned = re.sub(r"^\d{4}-\d{2}-\d{2}[T ][^ ]+\s*", "", cleaned)
-    cleaned = re.sub(r"\b\d+\b", "#", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned)
-    return cleaned[:180] or "Unspecified error"
 
 
 @dataclass
@@ -206,7 +192,7 @@ class ProactiveSkillWatcher:
         for line in self._iter_log_lines():
             if not ERROR_PATTERN.search(line):
                 continue
-            normalized = _normalize_error_line(line)
+            normalized = normalize_error_line(line)
             for name, pattern in patterns.items():
                 if pattern.search(line):
                     error_buckets[name][normalized] += 1
