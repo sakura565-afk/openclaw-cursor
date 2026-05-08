@@ -469,6 +469,35 @@ class AutoImprovementEngine:
         digest_path.write_text(digest, encoding="utf-8")
         return digest
 
+    def run_self_reflection(
+        self,
+        *,
+        lookback_days: int = 7,
+        max_bytes_per_file: int = 2_000_000,
+        transcript_dirs: Optional[Sequence[Path | str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Run the transcript / ``.learnings`` self-reflection pass using this engine's paths.
+
+        Writes ``self_reflection_YYYYMMDD.{md,json}`` under ``log_dir``. Returns the report
+        as a plain dictionary (JSON-serializable).
+        """
+        from src.self_improvement.auto_reflection import ReflectionConfig, run_reflection
+
+        td: Optional[Sequence[Path]] = None
+        if transcript_dirs is not None:
+            td = [Path(p).expanduser() for p in transcript_dirs]
+
+        config = ReflectionConfig.from_env_and_args(
+            root_dir=self.root_dir,
+            log_dir=self.log_dir,
+            transcript_dirs=td,
+            lookback_days=lookback_days,
+            max_bytes_per_file=max_bytes_per_file,
+        )
+        report = run_reflection(config)
+        return report.to_dict()
+
     def format_check_result(self, result: CheckResult) -> str:
         color = Colors.GREEN
         if result.status == "warning":
@@ -488,7 +517,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="OpenClaw autonomous self-improvement engine")
     parser.add_argument(
         "command",
-        choices=["status", "check", "fix", "digest"],
+        choices=["status", "check", "fix", "digest", "reflect"],
         help="Action to run",
     )
     parser.add_argument(
@@ -542,9 +571,33 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(engine.format_action(action))
         return 0
 
-    digest = engine.generate_weekly_digest()
-    print(colorize("Weekly digest generated", Colors.CYAN, engine.color))
-    print(digest)
+    if args.command == "digest":
+        digest = engine.generate_weekly_digest()
+        print(colorize("Weekly digest generated", Colors.CYAN, engine.color))
+        print(digest)
+        return 0
+
+    report = engine.run_self_reflection()
+    print(colorize("Self-reflection report generated", Colors.CYAN, engine.color))
+    day = _now_utc().strftime("%Y%m%d")
+    print(
+        colorize(
+            f"Artifacts: {engine.log_dir / f'self_reflection_{day}.md'} "
+            f"and {engine.log_dir / f'self_reflection_{day}.json'}",
+            Colors.GREEN,
+            engine.color,
+        )
+    )
+    overall = report.get("aggregate_failure_hits", 0) <= report.get("aggregate_success_hits", 0)
+    print(
+        colorize(
+            f"Signals: success_hits={report.get('aggregate_success_hits')} "
+            f"failure_hits={report.get('aggregate_failure_hits')} "
+            f"files_scanned={report.get('files_scanned')}",
+            Colors.GREEN if overall else Colors.YELLOW,
+            engine.color,
+        )
+    )
     return 0
 
 

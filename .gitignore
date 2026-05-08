@@ -1,3 +1,5 @@
 logs/sync_obsidian_*.json
+logs/self_reflection_*.json
+logs/self_reflection_*.md
 __pycache__/
 *.py[cod]
