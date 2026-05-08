@@ -132,6 +132,55 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertIn("JSON payload was truncated", search_stdout)
         self.assertNotIn("cold restart", search_stdout)
 
+    def test_add_auto_category_infers_from_keywords(self) -> None:
+        exit_code, stdout, stderr = self.run_cli(
+            "add",
+            "auto",
+            "git pull failed with a merge conflict in pyproject.toml",
+            "Resolve conflicts locally before pushing the session bundle",
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn("Saved error learning entry.", stdout)
+        self.assertIn("git", stdout)
+        store = self.read_store()
+        self.assertEqual(store["entries"][0]["category"], "git")
+
+    def test_near_duplicate_is_rejected(self) -> None:
+        error_learning.add_entry(
+            self.log_path,
+            "parser_error",
+            "The JSON payload was truncated before the closing brace",
+            "Chunk large responses and validate JSON before parsing",
+            markdown_path=self.log_path.with_suffix(".md"),
+            near_duplicate_threshold=0.88,
+        )
+        exit_code, stdout, stderr = self.run_cli(
+            "add",
+            "parser_error",
+            "The JSON payload was truncated before the closing brace.",
+            "Chunk large responses and validate JSON before parsing.",
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn("Near-duplicate detected", stdout)
+        store = self.read_store()
+        self.assertEqual(len(store["entries"]), 1)
+
+    def test_sync_md_writes_companion_file(self) -> None:
+        error_learning.add_entry(
+            self.log_path,
+            "warning",
+            "Cold start took longer than expected",
+            "Warm up with a tiny prompt before large jobs",
+            markdown_path=self.log_path.with_suffix(".md"),
+        )
+        md_path = self.log_path.with_suffix(".md")
+        self.assertTrue(md_path.is_file())
+        text = md_path.read_text(encoding="utf-8")
+        self.assertIn("<!-- BEGIN_AUTO_ERROR_LOG -->", text)
+        self.assertIn("Cold start took longer than expected", text)
+
 
 if __name__ == "__main__":
     unittest.main()
