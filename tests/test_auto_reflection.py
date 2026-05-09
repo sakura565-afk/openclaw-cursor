@@ -88,6 +88,10 @@ class AutoReflectionTests(unittest.TestCase):
             self.assertTrue(learnings.exists())
             self.assertTrue((learnings / "insights").exists())
             self.assertTrue((learnings / "summaries").exists())
+            reflections = root / "memory" / "reflections"
+            self.assertTrue(reflections.exists())
+            md_reflect = list(reflections.glob("run_*.md"))
+            self.assertEqual(len(md_reflect), 1)
             md_files = list((learnings / "insights").glob("run_*.md"))
             self.assertEqual(len(md_files), 1)
             body = md_files[0].read_text(encoding="utf-8")
