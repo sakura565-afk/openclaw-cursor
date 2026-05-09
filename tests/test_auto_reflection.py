@@ -64,7 +64,8 @@ class AutoReflectionTests(unittest.TestCase):
             (root / "logs").mkdir(parents=True)
             (root / "logs" / "run.log").write_text(
                 "Lesson learned: verify API keys before deploying.\n"
-                "Fatal: database migration failed.\n",
+                "Fatal: database migration failed.\n"
+                "All tests passed for the migration rollback suite.\n",
                 encoding="utf-8",
             )
 
@@ -88,6 +89,10 @@ class AutoReflectionTests(unittest.TestCase):
             self.assertTrue(learnings.exists())
             self.assertTrue((learnings / "insights").exists())
             self.assertTrue((learnings / "summaries").exists())
+            self.assertTrue((learnings / "auto_insights.md").exists())
+            essence = (learnings / "auto_insights.md").read_text(encoding="utf-8")
+            self.assertIn("精华", essence)
+            self.assertIn("What worked well", essence)
             md_files = list((learnings / "insights").glob("run_*.md"))
             self.assertEqual(len(md_files), 1)
             body = md_files[0].read_text(encoding="utf-8")
