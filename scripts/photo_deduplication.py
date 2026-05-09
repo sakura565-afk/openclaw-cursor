@@ -6,8 +6,10 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import multiprocessing
 import os
 import shutil
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,8 +18,21 @@ import imagehash
 from PIL import Image, UnidentifiedImageError
 from tqdm import tqdm
 
+try:
+    from scripts.raw_pipeline import RAW_EXTENSIONS, decode_raw_to_rgb_uint8, is_raw_path
+except ImportError:  # pragma: no cover - script run with cwd on sys.path
+    from raw_pipeline import RAW_EXTENSIONS, decode_raw_to_rgb_uint8, is_raw_path
 
-SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".heic"}
+
+SUPPORTED_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".tiff",
+    ".tif",
+    ".bmp",
+    ".heic",
+} | set(RAW_EXTENSIONS)
 DEFAULT_THRESHOLD = 95.0
 
 
@@ -60,6 +75,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--json-out", type=Path, default=Path("photo_deduplication_report.json"))
     parser.add_argument("--csv-out", type=Path, default=Path("photo_deduplication_duplicates.csv"))
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Parallel worker processes for hashing (1 = sequential).",
+    )
     return parser.parse_args(argv)
 
 
@@ -73,11 +94,15 @@ def iter_image_paths(root: Path) -> list[Path]:
 
 def hash_image(path: Path, hash_type: str) -> HashRecord | None:
     try:
-        with Image.open(path) as image:
-            converted = image.convert("RGB")
-            perceptual_hash = imagehash.phash(converted) if hash_type in ("perceptual", "both") else None
-            average_hash = imagehash.average_hash(converted) if hash_type in ("average", "both") else None
-    except (UnidentifiedImageError, OSError, ValueError):
+        if is_raw_path(path):
+            rgb = decode_raw_to_rgb_uint8(path)
+            converted = Image.fromarray(rgb, mode="RGB")
+        else:
+            with Image.open(path) as image:
+                converted = image.convert("RGB")
+        perceptual_hash = imagehash.phash(converted) if hash_type in ("perceptual", "both") else None
+        average_hash = imagehash.average_hash(converted) if hash_type in ("average", "both") else None
+    except (UnidentifiedImageError, OSError, ValueError, RuntimeError):
         return None
 
     stat = path.stat()
@@ -88,6 +113,11 @@ def hash_image(path: Path, hash_type: str) -> HashRecord | None:
         file_size=stat.st_size,
         modified_time=stat.st_mtime,
     )
+
+
+def _hash_image_mp(task: tuple[str, str]) -> HashRecord | None:
+    path_str, hash_type = task
+    return hash_image(Path(path_str), hash_type)
 
 
 def _single_similarity(
@@ -268,15 +298,30 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"scan path must be an existing directory: {scan_root}")
     if args.threshold < 0 or args.threshold > 100:
         raise SystemExit("threshold must be between 0 and 100")
+    if args.workers < 1:
+        raise SystemExit("--workers must be >= 1")
     if args.dry_run and args.move:
         print("Dry-run mode enabled: no files will be moved.")
 
     image_paths = iter_image_paths(scan_root)
     records: list[HashRecord] = []
-    for image_path in tqdm(image_paths, desc="Hashing images", unit="file"):
-        record = hash_image(image_path, args.hash_type)
-        if record is not None:
-            records.append(record)
+    if args.workers == 1:
+        for image_path in tqdm(image_paths, desc="Hashing images", unit="file"):
+            record = hash_image(image_path, args.hash_type)
+            if record is not None:
+                records.append(record)
+    else:
+        tasks = [(str(p), args.hash_type) for p in image_paths]
+        ctx = multiprocessing.get_context("spawn")
+        with ProcessPoolExecutor(max_workers=args.workers, mp_context=ctx) as executor:
+            for record in tqdm(
+                executor.map(_hash_image_mp, tasks, chunksize=max(1, len(tasks) // (args.workers * 4) or 1)),
+                total=len(tasks),
+                desc="Hashing images",
+                unit="file",
+            ):
+                if record is not None:
+                    records.append(record)
 
     groups = build_duplicate_groups(records, args.hash_type, args.threshold)
     actions = process_duplicates(scan_root, groups, dry_run=args.dry_run, move_mode=args.move)

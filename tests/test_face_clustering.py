@@ -29,6 +29,10 @@ class FakeBackend:
 
 
 class FaceClusteringTests(unittest.TestCase):
+    def test_image_suffixes_include_raw_formats(self) -> None:
+        for ext in (".cr2", ".nef", ".arw", ".dng", ".raf", ".orf"):
+            self.assertIn(ext, face_clustering.IMAGE_SUFFIXES)
+
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.root = Path(self.tempdir.name)
