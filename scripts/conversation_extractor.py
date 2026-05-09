@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Extract decisions, learnings, and tool-usage highlights from OpenClaw session transcripts."""
+"""Extract decisions, errors, tools, follow-ups, and learnings from OpenClaw session transcripts.
+
+Public entry points: ``parse_session_log``, ``analyze_segments``, ``ConversationDigest``,
+``render_markdown``, ``render_summary_text``, ``run_extraction``.
+
+CLI (no prompts): ``extract`` writes markdown + JSON under ``memory/``; ``summarize`` prints
+a short stdout digest (optionally ``--json``).
+"""
 
 from __future__ import annotations
 
@@ -39,6 +46,34 @@ LEARNING_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"^\s*\*{0,2}(?:important|remember|note)\*{0,2}\s*[:\-—]\s*(.+)",
         r"(?:核心价值|关键点|经验教训|结论是|需要注意的是)\s*[：:]\s*(.+)",
     )
+)
+
+ERROR_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"^\s*(?:error|exception|failure|failed|traceback)\s*[:\-—]\s*(.+)",
+        r"^\s*(?:stderr|exit\s*code)\s*[:\-—]\s*(.+)",
+        r"(?:^|\s)(?:Traceback\s*\(most recent call last\)|Error:\s*)(.+)",
+        r"\b(?:HTTP\s*\d{3}|Connection(?:Error|Refused)|Timeout(?:Error)?|ECONNREFUSED)\b[:\s]?\s*(.{0,200})",
+        r"\b(?:RuntimeError|TypeError|ValueError|KeyError|OSError|AssertionError)\s*:\s*(.+)",
+        r"(?:命令|脚本).*(?:失败|出错)\s*[：:]\s*(.+)",
+    )
+)
+
+FOLLOWUP_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"^\s*(?:TODO|FIXME|FOLLOW[_\s-]?UP|follow[-\s]?up)\s*[:\-—]?\s*(.+)",
+        r"\b(?:next\s+steps?|action\s+items?|we\s+should\s+(?:revisit|follow\s+up))\b[:.]?\s*(.+)",
+        r"\b(?:remind\s+(?:me|us)\s+to|don'?t\s+forget\s+to|still\s+need\s+to)\b\s+(.+)",
+        r"\b(?:open\s+question|unresolved|TBD)\s*[:\-—]?\s*(.+)",
+        r"(?:待办|后续|跟进)\s*[：:]\s*(.+)",
+    )
+)
+
+_HEDGE_RE = re.compile(
+    r"\b(?:maybe|perhaps|might|unclear|not\s+sure|possibly|probably|TBD)\b",
+    re.IGNORECASE,
 )
 
 # Inline tool/function references in transcripts
@@ -424,14 +459,98 @@ def extract_tool_signals(text: str) -> Counter[str]:
 
 
 @dataclass
+class TaggedEntry:
+    """One extracted line with heuristic flags for triage."""
+
+    text: str
+    flags: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"text": self.text, "flags": list(self.flags)}
+
+
+def _item_flags(text: str, role: str | None, category: str) -> list[str]:
+    """Attach lightweight review flags to an extracted string."""
+
+    flags: list[str] = []
+    t = text.strip()
+    if len(t) < 18:
+        flags.append("brief")
+    if len(t) > 220:
+        flags.append("verbose")
+    rl = (role or "").lower()
+    if rl == "user" and category in {"decision", "error", "followup"}:
+        flags.append("user_stated")
+    if rl == "tool_output" and category == "error":
+        flags.append("tool_channel")
+    if _HEDGE_RE.search(t):
+        flags.append("hedged_language")
+    if category == "followup" and re.search(r"\b(?:TODO|FIXME)\b", t, re.I):
+        flags.append("explicit_todo")
+    return flags
+
+
+def _merge_tagged(store: dict[str, TaggedEntry], text: str, role: str | None, category: str) -> None:
+    cap = text.strip()
+    if not cap:
+        return
+    new_flags = _item_flags(cap, role, category)
+    if cap not in store:
+        store[cap] = TaggedEntry(text=cap, flags=list(dict.fromkeys(new_flags)))
+        return
+    ex = store[cap]
+    for f in new_flags:
+        if f not in ex.flags:
+            ex.flags.append(f)
+
+
+def _ordered_tagged(store: dict[str, TaggedEntry], limit: int) -> list[TaggedEntry]:
+    return [store[k] for k in list(store.keys())[:limit]]
+
+
+def _session_flags(
+    decisions: dict[str, TaggedEntry],
+    errors: dict[str, TaggedEntry],
+    followups: dict[str, TaggedEntry],
+    tools: Counter[str],
+    segment_count: int,
+) -> list[str]:
+    out: list[str] = []
+    if segment_count == 0:
+        out.append("empty_transcript")
+    if not decisions:
+        out.append("no_decisions_detected")
+    if errors:
+        out.append("errors_detected")
+    if followups:
+        out.append("followups_present")
+    if not tools:
+        out.append("no_tools_detected")
+    total_mentions = sum(tools.values())
+    if total_mentions > 40:
+        out.append("tool_heavy_session")
+    if len(errors) > 8:
+        out.append("high_error_signal_count")
+    if len(followups) > 12:
+        out.append("many_followups")
+    top = tools.most_common(1)
+    if top and total_mentions >= 10 and top[0][1] / total_mentions >= 0.55:
+        out.append("dominant_single_tool")
+    return out
+
+
+@dataclass
 class ConversationDigest:
     """Structured output for markdown + JSON."""
 
     source: str
     generated_at_utc: str
     segments: list[tuple[int, str | None, str]]
-    decisions: list[str]
-    learnings: list[str]
+    decisions: list[TaggedEntry]
+    learnings: list[TaggedEntry]
+    errors: list[TaggedEntry]
+    followups: list[TaggedEntry]
+    session_flags: list[str]
     tool_structured: Counter[str] = field(default_factory=Counter)
     tool_textual: Counter[str] = field(default_factory=Counter)
 
@@ -442,12 +561,16 @@ class ConversationDigest:
 
 
 def analyze_segments(segments: list[tuple[int, str | None, str]], source_display: str) -> ConversationDigest:
-    decisions_acc: list[str] = []
-    learnings_acc: list[str] = []
+    decisions_m: dict[str, TaggedEntry] = {}
+    learnings_m: dict[str, TaggedEntry] = {}
+    errors_m: dict[str, TaggedEntry] = {}
+    followups_m: dict[str, TaggedEntry] = {}
     structured_tools: Counter[str] = Counter()
     blobs_for_text_tools: list[str] = []
 
-    for turn, role, text in segments:
+    assistantish = {"", "assistant", "agent", None}
+
+    for _turn, role, text in segments:
         rl = (role or "").lower()
         if rl == "tool":
             tn = normalize_ws(text.replace("[tool:", "").replace("]", "").strip())
@@ -457,54 +580,120 @@ def analyze_segments(segments: list[tuple[int, str | None, str]], source_display
 
         if rl == "tool_output":
             blobs_for_text_tools.append(text)
+            for cap in match_patterns(text, ERROR_LINE_PATTERNS):
+                _merge_tagged(errors_m, cap, role, "error")
+            for cap in match_patterns(text, FOLLOWUP_LINE_PATTERNS):
+                _merge_tagged(followups_m, cap, role, "followup")
             continue
 
-        if rl in {"", "assistant", "agent"} or rl is None:
-            decisions_acc.extend(match_patterns(text, DECISION_LINE_PATTERNS))
-            learnings_acc.extend(match_patterns(text, LEARNING_LINE_PATTERNS))
+        if rl in assistantish:
+            for cap in match_patterns(text, DECISION_LINE_PATTERNS):
+                _merge_tagged(decisions_m, cap, role, "decision")
+            for cap in match_patterns(text, LEARNING_LINE_PATTERNS):
+                _merge_tagged(learnings_m, cap, role, "learning")
+            for cap in match_patterns(text, ERROR_LINE_PATTERNS):
+                _merge_tagged(errors_m, cap, role, "error")
+            for cap in match_patterns(text, FOLLOWUP_LINE_PATTERNS):
+                _merge_tagged(followups_m, cap, role, "followup")
         elif rl == "user":
-            # users sometimes phrase decisions explicitly
-            decisions_acc.extend(match_patterns(text, DECISION_LINE_PATTERNS))
+            for cap in match_patterns(text, DECISION_LINE_PATTERNS):
+                _merge_tagged(decisions_m, cap, role, "decision")
+            for cap in match_patterns(text, ERROR_LINE_PATTERNS):
+                _merge_tagged(errors_m, cap, role, "error")
+            for cap in match_patterns(text, FOLLOWUP_LINE_PATTERNS):
+                _merge_tagged(followups_m, cap, role, "followup")
+            for cap in match_patterns(text, LEARNING_LINE_PATTERNS):
+                _merge_tagged(learnings_m, cap, role, "learning")
+        elif rl == "system":
+            for cap in match_patterns(text, ERROR_LINE_PATTERNS):
+                _merge_tagged(errors_m, cap, role, "error")
+            for cap in match_patterns(text, FOLLOWUP_LINE_PATTERNS):
+                _merge_tagged(followups_m, cap, role, "followup")
+        else:
+            for cap in match_patterns(text, ERROR_LINE_PATTERNS):
+                _merge_tagged(errors_m, cap, role, "error")
+            for cap in match_patterns(text, FOLLOWUP_LINE_PATTERNS):
+                _merge_tagged(followups_m, cap, role, "followup")
 
         blobs_for_text_tools.append(text)
 
     combined = "\n\n".join(blobs_for_text_tools)
     textual_tools = extract_tool_signals(combined)
 
-    uniq = lambda xs: list(dict.fromkeys([x for x in xs if x]))  # noqa: E731
+    merged_tools: Counter[str] = Counter(structured_tools)
+    merged_tools.update(textual_tools)
+    session_flags = _session_flags(
+        decisions_m,
+        errors_m,
+        followups_m,
+        merged_tools,
+        len(segments),
+    )
 
     return ConversationDigest(
         source=source_display,
         generated_at_utc=datetime.now(timezone.utc).isoformat(),
         segments=segments,
-        decisions=uniq(decisions_acc)[:120],
-        learnings=uniq(learnings_acc)[:120],
+        decisions=_ordered_tagged(decisions_m, 120),
+        learnings=_ordered_tagged(learnings_m, 120),
+        errors=_ordered_tagged(errors_m, 120),
+        followups=_ordered_tagged(followups_m, 120),
+        session_flags=session_flags,
         tool_structured=structured_tools,
         tool_textual=textual_tools,
     )
 
 
+def _fmt_tagged_line(entry: TaggedEntry) -> str:
+    if entry.flags:
+        fl = ", ".join(entry.flags)
+        return f"- {entry.text} `[{fl}]`"
+    return f"- {entry.text}"
+
+
 def render_markdown(d: ConversationDigest) -> str:
     lines = [
-        f"# Conversation 精华 extract",
+        "# Conversation extract",
         "",
         f"- **Source**: `{d.source}`",
         f"- **Generated (UTC)**: {d.generated_at_utc}",
         f"- **Segments indexed**: {len(d.segments)}",
         "",
-        "## Decisions",
+        "## Session flags",
     ]
+
+    if d.session_flags:
+        for fl in d.session_flags:
+            lines.append(f"- `{fl}`")
+    else:
+        lines.append("- *(no session-level flags)*")
+
+    lines.extend(["", "## Decisions"])
 
     if d.decisions:
         for item in d.decisions:
-            lines.append(f"- {item}")
+            lines.append(_fmt_tagged_line(item))
     else:
         lines.append("- *(no explicit decision lines detected)*")
+
+    lines.extend(["", "## Errors & failures"])
+    if d.errors:
+        for item in d.errors:
+            lines.append(_fmt_tagged_line(item))
+    else:
+        lines.append("- *(no explicit error cues detected)*")
+
+    lines.extend(["", "## Follow-ups"])
+    if d.followups:
+        for item in d.followups:
+            lines.append(_fmt_tagged_line(item))
+    else:
+        lines.append("- *(no follow-up cues detected)*")
 
     lines.extend(["", "## Learnings & takeaways"])
     if d.learnings:
         for item in d.learnings:
-            lines.append(f"- {item}")
+            lines.append(_fmt_tagged_line(item))
     else:
         lines.append("- *(no explicit learning cues detected)*")
 
@@ -525,7 +714,7 @@ def render_markdown(d: ConversationDigest) -> str:
     else:
         lines.append("- *(no tool mentions parsed)*")
 
-    lines.extend(["", "---", "*OpenClaw conversation_extractor.py — distill session value into `memory/`.*"])
+    lines.extend(["", "---", "*OpenClaw `scripts/conversation_extractor.py` — session distill → `memory/`.*"])
     return "\n".join(lines) + "\n"
 
 
@@ -533,18 +722,63 @@ def digest_to_dict(d: ConversationDigest) -> dict[str, Any]:
     return {
         "source": d.source,
         "generated_at_utc": d.generated_at_utc,
+        "session_flags": list(d.session_flags),
         "counts": {
             "segments": len(d.segments),
             "decisions": len(d.decisions),
             "learnings": len(d.learnings),
+            "errors": len(d.errors),
+            "followups": len(d.followups),
             "tool_names_distinct": len(d.all_tools()),
         },
-        "decisions": d.decisions,
-        "learnings": d.learnings,
+        "decisions": [e.to_dict() for e in d.decisions],
+        "learnings": [e.to_dict() for e in d.learnings],
+        "errors": [e.to_dict() for e in d.errors],
+        "followups": [e.to_dict() for e in d.followups],
         "tools_ranked": d.all_tools().most_common(),
         "tools_structured": dict(d.tool_structured),
         "tools_from_text_heuristic": dict(d.tool_textual),
     }
+
+
+def render_summary_text(d: ConversationDigest, *, top_tools: int = 8) -> str:
+    """Plain-text summary for CLI ``summarize`` (no file writes)."""
+
+    lines = [
+        f"Source: {d.source}",
+        f"Segments: {len(d.segments)}",
+        f"Session flags: {', '.join(d.session_flags) or '(none)'}",
+        "",
+        f"Decisions ({len(d.decisions)}):",
+    ]
+    for e in d.decisions[:12]:
+        suf = f" [{', '.join(e.flags)}]" if e.flags else ""
+        lines.append(f"  - {e.text}{suf}")
+    if len(d.decisions) > 12:
+        lines.append(f"  … +{len(d.decisions) - 12} more")
+
+    lines.extend(["", f"Errors ({len(d.errors)}):"])
+    for e in d.errors[:10]:
+        suf = f" [{', '.join(e.flags)}]" if e.flags else ""
+        lines.append(f"  - {e.text}{suf}")
+    if len(d.errors) > 10:
+        lines.append(f"  … +{len(d.errors) - 10} more")
+
+    lines.extend(["", f"Follow-ups ({len(d.followups)}):"])
+    for e in d.followups[:10]:
+        suf = f" [{', '.join(e.flags)}]" if e.flags else ""
+        lines.append(f"  - {e.text}{suf}")
+    if len(d.followups) > 10:
+        lines.append(f"  … +{len(d.followups) - 10} more")
+
+    merged = d.all_tools()
+    lines.extend(["", f"Tools ({len(merged)} distinct):"])
+    for name, ct in merged.most_common(top_tools):
+        lines.append(f"  - {name}: {ct}")
+    if len(merged) > top_tools:
+        lines.append(f"  … +{len(merged) - top_tools} more tool names")
+
+    return "\n".join(lines) + "\n"
 
 
 def write_digest(
@@ -566,15 +800,21 @@ def write_digest(
 
 
 def run_extraction(session_path: Path, memory_dir: Path, workspace_root: Path) -> tuple[Path, Path]:
-    segments = parse_session_log(session_path.resolve())
-
-    digest = analyze_segments(segments, session_path.resolve().as_posix())
+    digest = build_digest_from_file(session_path, workspace_root)
 
     stem = session_path.stem
-    # prefer session id from parent folder if standard layout .../sessions/foo/session.json
     parent = session_path.parent.name
     if parent and parent not in {".", ""}:
         stem = f"{parent}__{session_path.stem}"
+
+    return write_digest(digest, memory_dir, stem)
+
+
+def build_digest_from_file(session_path: Path, workspace_root: Path) -> ConversationDigest:
+    """Parse transcript path and return a digest (relative ``source`` when under workspace)."""
+
+    segments = parse_session_log(session_path.resolve())
+    digest = analyze_segments(segments, session_path.resolve().as_posix())
 
     relative = session_path.resolve().as_posix()
     workspace_posix = workspace_root.resolve().as_posix()
@@ -582,77 +822,177 @@ def run_extraction(session_path: Path, memory_dir: Path, workspace_root: Path) -
         short = Path(relative[len(workspace_posix) :].lstrip("/")).as_posix()
         digest.source = short
 
-    return write_digest(digest, memory_dir, stem)
+    return digest
+
+
+def _stdin_to_temp_path(memory_dir: Path) -> Path:
+    import tempfile
+
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    payload = sys.stdin.read()
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt", prefix="stdin_session_", dir=memory_dir)
+    try:
+        path = Path(tmp.name)
+        path.write_text(payload, encoding="utf-8")
+    finally:
+        tmp.close()
+    return path
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Extract OpenClaw conversation 精华 into memory/")
-    p.add_argument(
+    p = argparse.ArgumentParser(
+        description="Extract decisions, errors, tools, and follow-ups from OpenClaw transcripts.",
+    )
+    subs = p.add_subparsers(dest="command", required=True)
+
+    p_ext = subs.add_parser("extract", help="Write markdown + JSON under memory/ (default).")
+    p_ext.add_argument(
         "session_log",
         type=Path,
         nargs="?",
         help="Path to session transcript (.json, .log, or text). Omit with --stdin.",
     )
-    p.add_argument(
+    p_ext.add_argument(
         "--stdin",
         action="store_true",
-        help="Read transcript JSON/text from stdin (written to a temp file under memory/).",
+        help="Read transcript JSON/text from stdin (temp file under memory/).",
     )
-    p.add_argument(
+    p_ext.add_argument(
         "--memory-dir",
         type=Path,
         default=None,
         help="Destination directory (default: <repo>/memory).",
     )
-    p.add_argument(
+    p_ext.add_argument(
         "--workspace-root",
         type=Path,
         default=None,
         help="Workspace root for relative paths in output (defaults to repo root).",
     )
+
+    p_sum = subs.add_parser("summarize", help="Print a short stdout summary (no markdown files).")
+    p_sum.add_argument(
+        "session_log",
+        type=Path,
+        nargs="?",
+        help="Path to transcript. Omit with --stdin.",
+    )
+    p_sum.add_argument("--stdin", action="store_true", help="Read transcript from stdin.")
+    p_sum.add_argument(
+        "--workspace-root",
+        type=Path,
+        default=None,
+        help="Workspace root for relative source label in JSON (defaults to repo root).",
+    )
+    p_sum.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit JSON (counts, flags, top tools) instead of plain text.",
+    )
+    p_sum.add_argument(
+        "--top-tools",
+        type=int,
+        default=8,
+        metavar="N",
+        help="Max tool names in text summary (default: 8).",
+    )
+
     return p
 
 
+def _argv_with_legacy_extract(argv: list[str]) -> list[str]:
+    """If the first token is an existing file, assume ``extract`` subcommand."""
+
+    if not argv:
+        return argv
+    head = argv[0]
+    if head in ("extract", "summarize", "-h", "--help"):
+        return argv
+    if head.startswith("-"):
+        return argv
+    cand = Path(head).expanduser()
+    if cand.is_file():
+        return ["extract", *argv]
+    return argv
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    argv = _argv_with_legacy_extract(argv)
+
     args = build_arg_parser().parse_args(argv)
     ws = (args.workspace_root or repo_root()).resolve()
-    memory_dir = (args.memory_dir or ws / "memory").resolve()
 
-    if args.stdin:
-        import tempfile
+    if args.command == "extract":
+        memory_dir = (args.memory_dir or ws / "memory").resolve()
+        if args.stdin:
+            path = _stdin_to_temp_path(memory_dir)
+            try:
+                digest = build_digest_from_file(path, ws)
+                digest.source = "<stdin>"
+                md_path, json_path = write_digest(digest, memory_dir, "stdin_session")
+            finally:
+                try:
+                    path.unlink(missing_ok=True)  # type: ignore[arg-type]
+                except OSError:
+                    pass
+            print(f"Wrote {md_path.as_posix()}")
+            print(f"Wrote {json_path.as_posix()}")
+            return 0
 
-        memory_dir.mkdir(parents=True, exist_ok=True)
-        payload = sys.stdin.read()
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt", prefix="stdin_session_", dir=memory_dir)
-        try:
-            path = Path(tmp.name)
-            path.write_text(payload, encoding="utf-8")
-        finally:
-            tmp.close()
+        if not args.session_log:
+            sys.stderr.write("error: session_log path required for extract unless --stdin is set.\n")
+            return 2
 
-        md_path, json_path = run_extraction(path, memory_dir, ws)
-        try:
-            path.unlink(missing_ok=True)  # type: ignore[arg-type]
-        except OSError:
-            pass
+        sp = args.session_log.resolve()
+        if not sp.exists():
+            sys.stderr.write(f"error: file not found: {sp}\n")
+            return 2
 
+        md_path, json_path = run_extraction(sp, memory_dir, ws)
         print(f"Wrote {md_path.as_posix()}")
         print(f"Wrote {json_path.as_posix()}")
         return 0
 
-    if not args.session_log:
-        sys.stderr.write("error: session_log path required unless --stdin is set.\n")
-        return 2
+    if args.command == "summarize":
+        memory_dir = (ws / "memory").resolve()
+        if args.stdin:
+            path = _stdin_to_temp_path(memory_dir)
+            try:
+                digest = build_digest_from_file(path, ws)
+                digest.source = "<stdin>"
+            finally:
+                try:
+                    path.unlink(missing_ok=True)  # type: ignore[arg-type]
+                except OSError:
+                    pass
+        else:
+            if not args.session_log:
+                sys.stderr.write("error: session_log path required for summarize unless --stdin is set.\n")
+                return 2
+            sp = args.session_log.resolve()
+            if not sp.exists():
+                sys.stderr.write(f"error: file not found: {sp}\n")
+                return 2
+            digest = build_digest_from_file(sp, ws)
 
-    sp = args.session_log.resolve()
-    if not sp.exists():
-        sys.stderr.write(f"error: file not found: {sp}\n")
-        return 2
+        if args.json:
+            payload = {
+                "source": digest.source,
+                "session_flags": digest.session_flags,
+                "counts": digest_to_dict(digest)["counts"],
+                "decisions": [e.to_dict() for e in digest.decisions[:30]],
+                "errors": [e.to_dict() for e in digest.errors[:30]],
+                "followups": [e.to_dict() for e in digest.followups[:30]],
+                "tools_top": digest.all_tools().most_common(args.top_tools),
+            }
+            sys.stdout.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+        else:
+            sys.stdout.write(render_summary_text(digest, top_tools=args.top_tools))
+        return 0
 
-    md_path, json_path = run_extraction(sp, memory_dir, ws)
-    print(f"Wrote {md_path.as_posix()}")
-    print(f"Wrote {json_path.as_posix()}")
-    return 0
+    sys.stderr.write(f"error: unknown command {args.command!r}\n")
+    return 2
 
 
 if __name__ == "__main__":
