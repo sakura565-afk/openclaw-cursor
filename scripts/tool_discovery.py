@@ -78,13 +78,6 @@ class ToolProfile:
         }
 
 
-def discover_script_paths(root: Path) -> list[Path]:
-    scripts_dir = root / "scripts"
-    if not scripts_dir.exists():
-        return []
-    return sorted(path for path in scripts_dir.glob("*.py") if path.name != "__init__.py")
-
-
 def discover_python_files(root: Path, *relative_parts: str) -> list[Path]:
     """List top-level *.py modules under root/relative (excludes __init__.py)."""
     target = root.joinpath(*relative_parts)
