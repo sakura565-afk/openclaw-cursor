@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Extract decisions, learnings, and tool-usage highlights from OpenClaw session transcripts."""
+"""Extract decisions, errors, tool calls, follow-ups, and learnings from OpenClaw session transcripts.
+
+CLI: ``extract`` writes markdown + JSON under ``memory/``; ``summarize`` prints a short digest to stdout.
+"""
 
 from __future__ import annotations
 
@@ -39,6 +42,34 @@ LEARNING_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"^\s*\*{0,2}(?:important|remember|note)\*{0,2}\s*[:\-—]\s*(.+)",
         r"(?:核心价值|关键点|经验教训|结论是|需要注意的是)\s*[：:]\s*(.+)",
     )
+)
+
+FOLLOWUP_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"^\s*(?:follow[- ]?ups?|follow\s+up)\s*[:\-—]\s*(.+)",
+        r"^\s*(?:TODO|FIXME|ACTION|NEXT\s+STEP)s?\s*[:\-—]?\s*(.+)",
+        r"(?:\bnext\s+steps?\b|\bopen\s+questions?\b|\bremaining\s+work\b)\s*[:\-—]?\s*(.{8,})",
+        r"(?:we\s+should|still\s+need\s+to|outstanding|pending)\s+(.{10,})",
+        r"(?:待办|后续|跟进|下一步)\s*[：:]\s*(.+)",
+        r"\b(?:TBD|blocker)\b\s*[:\-—]?\s*(.+)",
+    )
+)
+
+ERROR_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"^\s*(?:error|exception|traceback|failure)\s*[:\-—]\s*(.+)",
+        r"^\s*\*{0,2}(?:ERROR|FAILED)\*{0,2}\s*[:\-—]?\s*(.+)",
+    )
+)
+
+# Lines that look like failures (stack traces, CLI errors, timeouts)
+ERROR_LINE_HINT = re.compile(
+    r"(?i)(\b(traceback|exception|error\s*:|assertionerror|keyerror|valueerror|"
+    r"typeerror|runtimeerror|oserror|permission\s*denied|command\s+not\s+found|"
+    r"exit\s*code\s*[1-9]\d*|timed?\s*out|ECONNREFUSED|404\s+not\s+found|"
+    r"failed\b|\[error\])\b|^(Traceback\s*\(most recent call last\):))",
 )
 
 # Inline tool/function references in transcripts
@@ -378,33 +409,6 @@ def parse_session_log(path: Path) -> list[tuple[int, str | None, str]]:
     return parse_text_session(path)
 
 
-def match_patterns(text: str, patterns: tuple[re.Pattern[str], ...]) -> list[str]:
-    hits: list[str] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        for pat in patterns:
-            m = pat.search(line)
-            if m:
-                cap = (m.group(1) if m.lastindex else m.group(0)).strip()
-                if len(cap) > 80:
-                    cap = cap[:77] + "..."
-                hits.append(cap)
-                break
-
-    compact = normalize_ws(text.replace("\n", " "))
-    for pat in patterns:
-        if pat.pattern.startswith("^"):
-            continue
-        m = pat.search(compact)
-        if m:
-            cap = (m.group(1) if m.lastindex else m.group(0)).strip()
-            short = cap if len(cap) <= 240 else cap[:237] + "..."
-            hits.append(short)
-    return hits
-
-
 def normalize_ws(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
@@ -423,6 +427,95 @@ def extract_tool_signals(text: str) -> Counter[str]:
     return counts
 
 
+def _clip_snippet(s: str, limit: int = 280) -> str:
+    s = s.strip()
+    if len(s) <= limit:
+        return s
+    return s[: max(0, limit - 3)] + "..."
+
+
+def _match_patterns_with_turn(turn: int, text: str, patterns: tuple[re.Pattern[str], ...]) -> list[tuple[int, str]]:
+    hits: list[tuple[int, str]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        for pat in patterns:
+            m = pat.search(line)
+            if m:
+                cap = (m.group(1) if m.lastindex else m.group(0)).strip()
+                hits.append((turn, _clip_snippet(cap, 200)))
+                break
+    compact = normalize_ws(text.replace("\n", " "))
+    for pat in patterns:
+        if pat.pattern.startswith("^"):
+            continue
+        m = pat.search(compact)
+        if m:
+            cap = (m.group(1) if m.lastindex else m.group(0)).strip()
+            hits.append((turn, _clip_snippet(cap, 240)))
+    return hits
+
+
+def _error_hint_lines(turn: int, text: str) -> list[tuple[int, str]]:
+    found: list[tuple[int, str]] = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or len(s) < 8:
+            continue
+        if ERROR_LINE_HINT.search(s):
+            found.append((turn, _clip_snippet(s, 300)))
+    return found
+
+
+def _dedupe_turn_pairs(pairs: list[tuple[int, str]], limit: int) -> tuple[list[str], list[tuple[int, str]]]:
+    texts: list[str] = []
+    kept: list[tuple[int, str]] = []
+    seen: set[str] = set()
+    for turn, txt in pairs:
+        key = txt.strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        texts.append(txt)
+        kept.append((turn, txt))
+        if len(texts) >= limit:
+            break
+    return texts, kept
+
+
+def _build_flagged(
+    errors: list[tuple[int, str]],
+    decisions: list[tuple[int, str]],
+    followups: list[tuple[int, str]],
+    learnings: list[tuple[int, str]],
+    tools: Counter[str],
+) -> list[dict[str, Any]]:
+    """Ordered list of notable items for review (errors and blockers first)."""
+
+    flags: list[dict[str, Any]] = []
+    for turn, txt in errors[:50]:
+        flags.append({"kind": "error", "text": txt, "priority": "high", "turn": turn})
+    for turn, txt in decisions[:40]:
+        flags.append({"kind": "decision", "text": txt, "priority": "medium", "turn": turn})
+    for turn, txt in followups[:50]:
+        pri = "high" if re.search(r"(?i)\b(blocker|critical|must|urgent)\b", txt) else "low"
+        flags.append({"kind": "followup", "text": txt, "priority": pri, "turn": turn})
+    for turn, txt in learnings[:30]:
+        pri = "medium" if re.search(r"(?i)\b(important|critical|never|always)\b", txt) else "low"
+        flags.append({"kind": "learning", "text": txt, "priority": pri, "turn": turn})
+    for name, ct in tools.most_common(15):
+        flags.append(
+            {
+                "kind": "tool_call",
+                "text": f"{name} (x{ct})",
+                "priority": "low",
+                "turn": None,
+            }
+        )
+    return flags
+
+
 @dataclass
 class ConversationDigest:
     """Structured output for markdown + JSON."""
@@ -432,6 +525,9 @@ class ConversationDigest:
     segments: list[tuple[int, str | None, str]]
     decisions: list[str]
     learnings: list[str]
+    errors: list[str] = field(default_factory=list)
+    followups: list[str] = field(default_factory=list)
+    flagged: list[dict[str, Any]] = field(default_factory=list)
     tool_structured: Counter[str] = field(default_factory=Counter)
     tool_textual: Counter[str] = field(default_factory=Counter)
 
@@ -442,10 +538,25 @@ class ConversationDigest:
 
 
 def analyze_segments(segments: list[tuple[int, str | None, str]], source_display: str) -> ConversationDigest:
-    decisions_acc: list[str] = []
-    learnings_acc: list[str] = []
+    decisions_pairs: list[tuple[int, str]] = []
+    learnings_pairs: list[tuple[int, str]] = []
+    followup_pairs: list[tuple[int, str]] = []
+    structured_errors: list[tuple[int, str]] = []
+    hint_errors: list[tuple[int, str]] = []
     structured_tools: Counter[str] = Counter()
     blobs_for_text_tools: list[str] = []
+
+    text_roles = frozenset(
+        {
+            "",
+            "assistant",
+            "agent",
+            "user",
+            "human",
+            "system",
+            "tool_output",
+        }
+    )
 
     for turn, role, text in segments:
         rl = (role or "").lower()
@@ -455,30 +566,58 @@ def analyze_segments(segments: list[tuple[int, str | None, str]], source_display
                 structured_tools[tn.split("(", 1)[0].strip()] += 1
             continue
 
+        if rl in text_roles:
+            if rl in {"assistant", "agent", ""}:
+                decisions_pairs.extend(_match_patterns_with_turn(turn, text, DECISION_LINE_PATTERNS))
+                learnings_pairs.extend(_match_patterns_with_turn(turn, text, LEARNING_LINE_PATTERNS))
+                followup_pairs.extend(_match_patterns_with_turn(turn, text, FOLLOWUP_LINE_PATTERNS))
+                structured_errors.extend(_match_patterns_with_turn(turn, text, ERROR_LINE_PATTERNS))
+                hint_errors.extend(_error_hint_lines(turn, text))
+            elif rl in {"user", "human"}:
+                decisions_pairs.extend(_match_patterns_with_turn(turn, text, DECISION_LINE_PATTERNS))
+                learnings_pairs.extend(_match_patterns_with_turn(turn, text, LEARNING_LINE_PATTERNS))
+                followup_pairs.extend(_match_patterns_with_turn(turn, text, FOLLOWUP_LINE_PATTERNS))
+                structured_errors.extend(_match_patterns_with_turn(turn, text, ERROR_LINE_PATTERNS))
+                hint_errors.extend(_error_hint_lines(turn, text))
+            elif rl in {"system", "tool_output"}:
+                structured_errors.extend(_match_patterns_with_turn(turn, text, ERROR_LINE_PATTERNS))
+                hint_errors.extend(_error_hint_lines(turn, text))
+                followup_pairs.extend(_match_patterns_with_turn(turn, text, FOLLOWUP_LINE_PATTERNS))
+
         if rl == "tool_output":
             blobs_for_text_tools.append(text)
             continue
 
-        if rl in {"", "assistant", "agent"} or rl is None:
-            decisions_acc.extend(match_patterns(text, DECISION_LINE_PATTERNS))
-            learnings_acc.extend(match_patterns(text, LEARNING_LINE_PATTERNS))
-        elif rl == "user":
-            # users sometimes phrase decisions explicitly
-            decisions_acc.extend(match_patterns(text, DECISION_LINE_PATTERNS))
-
-        blobs_for_text_tools.append(text)
+        if rl in text_roles and rl != "tool_output":
+            blobs_for_text_tools.append(text)
 
     combined = "\n\n".join(blobs_for_text_tools)
     textual_tools = extract_tool_signals(combined)
 
-    uniq = lambda xs: list(dict.fromkeys([x for x in xs if x]))  # noqa: E731
+    decisions, _ = _dedupe_turn_pairs(decisions_pairs, 120)
+    learnings, _ = _dedupe_turn_pairs(learnings_pairs, 120)
+    followups, _ = _dedupe_turn_pairs(followup_pairs, 120)
+
+    err_pairs = structured_errors + hint_errors
+    errors, _ = _dedupe_turn_pairs(err_pairs, 120)
+
+    _, error_f = _dedupe_turn_pairs(err_pairs, 80)
+    _, decision_f = _dedupe_turn_pairs(decisions_pairs, 80)
+    _, follow_f = _dedupe_turn_pairs(followup_pairs, 80)
+    _, learn_f = _dedupe_turn_pairs(learnings_pairs, 40)
+    merged_tools: Counter[str] = Counter(structured_tools)
+    merged_tools.update(textual_tools)
+    flagged = _build_flagged(error_f, decision_f, follow_f, learn_f, merged_tools)
 
     return ConversationDigest(
         source=source_display,
         generated_at_utc=datetime.now(timezone.utc).isoformat(),
         segments=segments,
-        decisions=uniq(decisions_acc)[:120],
-        learnings=uniq(learnings_acc)[:120],
+        decisions=decisions,
+        learnings=learnings,
+        errors=errors,
+        followups=followups,
+        flagged=flagged,
         tool_structured=structured_tools,
         tool_textual=textual_tools,
     )
@@ -507,6 +646,46 @@ def render_markdown(d: ConversationDigest) -> str:
             lines.append(f"- {item}")
     else:
         lines.append("- *(no explicit learning cues detected)*")
+
+    lines.extend(["", "## Errors & failures"])
+    if d.errors:
+        for item in d.errors:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- *(no error-shaped lines detected)*")
+
+    lines.extend(["", "## Follow-ups & open work"])
+    if d.followups:
+        for item in d.followups:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- *(no follow-up cues detected)*")
+
+    lines.extend(["", "## Flagged (review queue)"])
+    high = [x for x in d.flagged if x.get("priority") == "high"]
+    med = [x for x in d.flagged if x.get("priority") == "medium"]
+    rest = [x for x in d.flagged if x.get("priority") not in {"high", "medium"}]
+    if not d.flagged:
+        lines.append("- *(nothing flagged)*")
+    else:
+        if high:
+            lines.append("### High")
+            for it in high[:30]:
+                turn = it.get("turn")
+                tag = f"turn {turn} — " if turn is not None else ""
+                lines.append(f"- **{it['kind']}** {tag}{it['text']}")
+        if med:
+            lines.append("### Medium")
+            for it in med[:25]:
+                turn = it.get("turn")
+                tag = f"turn {turn} — " if turn is not None else ""
+                lines.append(f"- **{it['kind']}** {tag}{it['text']}")
+        if rest:
+            lines.append("### Other")
+            for it in rest[:25]:
+                turn = it.get("turn")
+                tag = f"turn {turn} — " if turn is not None else ""
+                lines.append(f"- **{it['kind']}** {tag}{it['text']}")
 
     lines.extend(["", "## Tool usage"])
 
@@ -537,14 +716,68 @@ def digest_to_dict(d: ConversationDigest) -> dict[str, Any]:
             "segments": len(d.segments),
             "decisions": len(d.decisions),
             "learnings": len(d.learnings),
+            "errors": len(d.errors),
+            "followups": len(d.followups),
+            "flagged": len(d.flagged),
             "tool_names_distinct": len(d.all_tools()),
         },
         "decisions": d.decisions,
         "learnings": d.learnings,
+        "errors": d.errors,
+        "followups": d.followups,
+        "flagged": d.flagged,
         "tools_ranked": d.all_tools().most_common(),
         "tools_structured": dict(d.tool_structured),
         "tools_from_text_heuristic": dict(d.tool_textual),
     }
+
+
+def session_stem(session_path: Path) -> str:
+    stem = session_path.stem
+    parent = session_path.parent.name
+    if parent and parent not in {".", ""}:
+        stem = f"{parent}__{session_path.stem}"
+    return stem
+
+
+def build_digest(session_path: Path, workspace_root: Path) -> ConversationDigest:
+    segments = parse_session_log(session_path.resolve())
+    digest = analyze_segments(segments, session_path.resolve().as_posix())
+    relative = session_path.resolve().as_posix()
+    workspace_posix = workspace_root.resolve().as_posix()
+    if relative.startswith(workspace_posix):
+        digest.source = Path(relative[len(workspace_posix) :].lstrip("/")).as_posix()
+    return digest
+
+
+def render_summary_text(d: ConversationDigest, *, max_items: int = 10) -> str:
+    lines = [
+        f"Source: {d.source}",
+        f"segments={len(d.segments)} decisions={len(d.decisions)} learnings={len(d.learnings)} "
+        f"errors={len(d.errors)} followups={len(d.followups)} tools={len(d.all_tools())}",
+        "",
+        "Flagged (high priority):",
+    ]
+    high = [x for x in d.flagged if x.get("priority") == "high"][:max_items]
+    if high:
+        lines.extend(f"  * [{x['kind']}] {x['text']}" for x in high)
+    else:
+        lines.append("  (none)")
+
+    sections: tuple[tuple[str, list[str]], ...] = (
+        ("Decisions", d.decisions),
+        ("Errors", d.errors),
+        ("Follow-ups", d.followups),
+        ("Learnings", d.learnings),
+        ("Tool calls (top)", [f"{n} ({c})" for n, c in d.all_tools().most_common(max_items)]),
+    )
+    for title, items in sections:
+        lines.extend(["", f"{title}:"])
+        if items:
+            lines.extend(f"  - {x}" for x in items[:max_items])
+        else:
+            lines.append("  (none)")
+    return "\n".join(lines) + "\n"
 
 
 def write_digest(
@@ -566,93 +799,122 @@ def write_digest(
 
 
 def run_extraction(session_path: Path, memory_dir: Path, workspace_root: Path) -> tuple[Path, Path]:
-    segments = parse_session_log(session_path.resolve())
+    digest = build_digest(session_path, workspace_root)
+    return write_digest(digest, memory_dir, session_stem(session_path))
 
-    digest = analyze_segments(segments, session_path.resolve().as_posix())
 
-    stem = session_path.stem
-    # prefer session id from parent folder if standard layout .../sessions/foo/session.json
-    parent = session_path.parent.name
-    if parent and parent not in {".", ""}:
-        stem = f"{parent}__{session_path.stem}"
+def _resolve_session_path(args: argparse.Namespace, memory_dir: Path) -> tuple[Path, bool]:
+    """Return transcript path and whether it should be deleted (stdin temp file)."""
 
-    relative = session_path.resolve().as_posix()
-    workspace_posix = workspace_root.resolve().as_posix()
-    if relative.startswith(workspace_posix):
-        short = Path(relative[len(workspace_posix) :].lstrip("/")).as_posix()
-        digest.source = short
+    if getattr(args, "stdin", False):
+        import tempfile
 
-    return write_digest(digest, memory_dir, stem)
+        memory_dir.mkdir(parents=True, exist_ok=True)
+        payload = sys.stdin.read()
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt", prefix="stdin_session_", dir=memory_dir)
+        path = Path(tmp.name)
+        try:
+            path.write_text(payload, encoding="utf-8")
+        finally:
+            tmp.close()
+        return path, True
+
+    if not args.session_log:
+        raise ValueError("session_log path required unless --stdin is set.")
+
+    sp = args.session_log.resolve()
+    if not sp.exists():
+        raise FileNotFoundError(str(sp))
+    return sp, False
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Extract OpenClaw conversation 精华 into memory/")
-    p.add_argument(
+    p = argparse.ArgumentParser(
+        description="Extract decisions, errors, tool calls, and follow-ups from OpenClaw session transcripts."
+    )
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
         "session_log",
         type=Path,
         nargs="?",
         help="Path to session transcript (.json, .log, or text). Omit with --stdin.",
     )
-    p.add_argument(
+    common.add_argument(
         "--stdin",
         action="store_true",
-        help="Read transcript JSON/text from stdin (written to a temp file under memory/).",
+        help="Read transcript JSON/text from stdin (temp file under memory/ for extract).",
     )
-    p.add_argument(
-        "--memory-dir",
-        type=Path,
-        default=None,
-        help="Destination directory (default: <repo>/memory).",
-    )
-    p.add_argument(
+    common.add_argument(
         "--workspace-root",
         type=Path,
         default=None,
         help="Workspace root for relative paths in output (defaults to repo root).",
     )
+
+    sub = p.add_subparsers(dest="command", required=True)
+
+    ex = sub.add_parser("extract", parents=[common], help="Write markdown + JSON digest under memory/.")
+    ex.add_argument(
+        "--memory-dir",
+        type=Path,
+        default=None,
+        help="Destination directory (default: <repo>/memory).",
+    )
+
+    sm = sub.add_parser("summarize", parents=[common], help="Print a short text or JSON digest to stdout.")
+    sm.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+        help="Output format (default: text).",
+    )
+    sm.add_argument(
+        "--max-items",
+        type=int,
+        default=10,
+        metavar="N",
+        help="Cap list sections in text output (default: 10).",
+    )
+
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     ws = (args.workspace_root or repo_root()).resolve()
-    memory_dir = (args.memory_dir or ws / "memory").resolve()
+    memory_dir = (getattr(args, "memory_dir", None) or ws / "memory").resolve()
 
-    if args.stdin:
-        import tempfile
-
-        memory_dir.mkdir(parents=True, exist_ok=True)
-        payload = sys.stdin.read()
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt", prefix="stdin_session_", dir=memory_dir)
-        try:
-            path = Path(tmp.name)
-            path.write_text(payload, encoding="utf-8")
-        finally:
-            tmp.close()
-
-        md_path, json_path = run_extraction(path, memory_dir, ws)
-        try:
-            path.unlink(missing_ok=True)  # type: ignore[arg-type]
-        except OSError:
-            pass
-
-        print(f"Wrote {md_path.as_posix()}")
-        print(f"Wrote {json_path.as_posix()}")
-        return 0
-
-    if not args.session_log:
-        sys.stderr.write("error: session_log path required unless --stdin is set.\n")
+    try:
+        path, cleanup = _resolve_session_path(args, memory_dir)
+    except ValueError as e:
+        sys.stderr.write(f"error: {e}\n")
+        return 2
+    except FileNotFoundError as e:
+        sys.stderr.write(f"error: file not found: {e}\n")
         return 2
 
-    sp = args.session_log.resolve()
-    if not sp.exists():
-        sys.stderr.write(f"error: file not found: {sp}\n")
-        return 2
+    try:
+        digest = build_digest(path, ws)
+        if args.command == "extract":
+            md_path, json_path = write_digest(digest, memory_dir, session_stem(path))
+            print(f"Wrote {md_path.as_posix()}")
+            print(f"Wrote {json_path.as_posix()}")
+            return 0
+        if args.command == "summarize":
+            if args.format == "json":
+                sys.stdout.write(json.dumps(digest_to_dict(digest), indent=2, ensure_ascii=False) + "\n")
+            else:
+                sys.stdout.write(render_summary_text(digest, max_items=args.max_items))
+            return 0
+    finally:
+        if cleanup:
+            try:
+                path.unlink(missing_ok=True)  # type: ignore[arg-type]
+            except OSError:
+                pass
 
-    md_path, json_path = run_extraction(sp, memory_dir, ws)
-    print(f"Wrote {md_path.as_posix()}")
-    print(f"Wrote {json_path.as_posix()}")
-    return 0
+    sys.stderr.write("error: unknown command\n")
+    return 2
 
 
 if __name__ == "__main__":
