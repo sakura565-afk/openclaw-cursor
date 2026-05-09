@@ -34,6 +34,7 @@ class ToolDiscoveryTests(unittest.TestCase):
                 import json
                 import requests
                 import subprocess
+                import bs4
 
                 def monitor_queue():
                     return 1
@@ -55,6 +56,8 @@ class ToolDiscoveryTests(unittest.TestCase):
                 import argparse
                 import json
                 import pathlib
+                import requests
+                import bs4
 
                 def build_report():
                     return {}
@@ -82,6 +85,7 @@ class ToolDiscoveryTests(unittest.TestCase):
         profile = tool_discovery.ToolProfile(
             name="sync_obsidian",
             path=Path("scripts/sync_obsidian.py"),
+            kind="script",
             description="Sync Obsidian notes",
             commands=["sync"],
             capabilities=["Data synchronization"],
@@ -100,6 +104,7 @@ class ToolDiscoveryTests(unittest.TestCase):
             tool_discovery.ToolProfile(
                 name="queue_manager",
                 path=Path("scripts/queue_manager.py"),
+                kind="script",
                 description="Manage queue workload",
                 commands=["list", "watch"],
                 capabilities=["Queue orchestration", "Monitoring and observability"],
@@ -109,6 +114,7 @@ class ToolDiscoveryTests(unittest.TestCase):
             tool_discovery.ToolProfile(
                 name="telegram_sender",
                 path=Path("scripts/telegram_sender.py"),
+                kind="script",
                 description="Send notifications",
                 commands=["send"],
                 capabilities=["Messaging and notifications"],
@@ -196,6 +202,43 @@ class ToolDiscoveryTests(unittest.TestCase):
         payload = json.loads(buffer.getvalue())
         self.assertEqual(payload["goal"], "send notification")
         self.assertEqual(len(payload["suggestions"]), 1)
+
+    def test_analyze_includes_src_modules(self) -> None:
+        root = self._build_repo()
+        src_dir = root / "src" / "skills"
+        src_dir.mkdir(parents=True)
+        (src_dir / "queue_watch.py").write_text(
+            textwrap.dedent(
+                '''
+                """Watch queues from skills package."""
+                import json
+
+                def watch():
+                    return 0
+                '''
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+
+        profiles = tool_discovery.analyze_scripts(root)
+        names = {p.name for p in profiles}
+        self.assertIn("skills.queue_watch", names)
+        skill = next(p for p in profiles if p.name == "skills.queue_watch")
+        self.assertEqual(skill.kind, "src_module")
+        self.assertIn("watch", skill.functions)
+
+    def test_docs_default_writes_tool_discovery_md(self) -> None:
+        root = self._build_repo()
+        (root / "scripts" / "alpha.py").write_text(
+            '"""Alpha tool."""\n',
+            encoding="utf-8",
+        )
+        exit_code = tool_discovery.main(["--root", str(root), "docs"])
+        self.assertEqual(exit_code, 0)
+        default_path = root / "docs" / "tool_discovery.md"
+        self.assertTrue(default_path.exists())
+        self.assertIn("alpha", default_path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
