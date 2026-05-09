@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract decisions, learnings, and tool-usage highlights from OpenClaw session transcripts."""
+"""Extract session transcript patterns: tool sequences, prompts that drove tooling, error recovery."""
 
 from __future__ import annotations
 
@@ -62,6 +62,19 @@ STRUCT_TOOL_KEYS = frozenset(
         "calls",
     }
 )
+
+# Heuristics for pattern mining (tool success, prompts, error → recovery)
+_FAILURE_SIGNAL = re.compile(
+    r"\b(?:error|failed|failure|exception|traceback|cannot\s+find|could\s+not|"
+    r"command\s+not\s+found|exit\s+code\s*[1-9]|ECONNREFUSED|404|500)\b",
+    re.IGNORECASE,
+)
+_RECOVERY_SIGNAL = re.compile(
+    r"\b(?:fixed|resolved|worked|retry|retried|succeeded|success|workaround|"
+    r"solution|passing|green|recovered|corrected)\b",
+    re.IGNORECASE,
+)
+PATTERNS_SCHEMA_VERSION = 1
 
 
 def utc_stamp() -> str:
@@ -547,6 +560,293 @@ def digest_to_dict(d: ConversationDigest) -> dict[str, Any]:
     }
 
 
+def _norm_tool_token(text: str) -> str:
+    tn = normalize_ws(text.replace("[tool:", "").replace("]", "").strip())
+    return tn.split("(", 1)[0].strip() if tn else ""
+
+
+def _first_assistant_blob_after(segments: list[tuple[int, str | None, str]], start_idx: int) -> str | None:
+    """Concatenate assistant / agent / tool_output text until the next user turn."""
+
+    parts: list[str] = []
+    for turn, role, text in segments[start_idx:]:
+        rl = (role or "").lower()
+        if rl == "user":
+            break
+        if rl in {"assistant", "agent", "tool_output", "system", ""} or rl is None:
+            if text.strip():
+                parts.append(text.strip())
+    return "\n".join(parts) if parts else None
+
+
+def _user_prompt_led_to_tools(segments: list[tuple[int, str | None, str]], user_idx: int) -> bool:
+    for turn, role, text in segments[user_idx + 1 :]:
+        rl = (role or "").lower()
+        if rl == "user":
+            return False
+        if rl == "tool":
+            return True
+        if rl in {"assistant", "agent", "tool_output", ""} or role is None:
+            if extract_tool_signals(text):
+                return True
+    return False
+
+
+def _truncate_snippet(s: str, limit: int = 220) -> str:
+    s = normalize_ws(s)
+    if len(s) <= limit:
+        return s
+    return s[: limit - 3] + "..."
+
+
+def extract_patterns(
+    segments: list[tuple[int, str | None, str]],
+    source: str,
+) -> dict[str, Any]:
+    """Mine tool orderings, user prompts tied to tooling, and error→recovery spans."""
+
+    generated = datetime.now(timezone.utc).isoformat()
+    tool_sequences_raw: list[tuple[tuple[str, ...], bool]] = []
+    i = 0
+    n = len(segments)
+    while i < n:
+        turn, role, text = segments[i]
+        rl = (role or "").lower()
+        if rl == "tool":
+            chain: list[str] = []
+            j = i
+            while j < n:
+                t2, r2, tx2 = segments[j]
+                r2l = (r2 or "").lower()
+                if r2l == "tool_output":
+                    j += 1
+                    continue
+                if r2l != "tool":
+                    break
+                name = _norm_tool_token(tx2)
+                if name:
+                    chain.append(name)
+                j += 1
+            if len(chain) >= 2:
+                blob = _first_assistant_blob_after(segments, j)
+                likely_ok = True
+                if blob:
+                    if _FAILURE_SIGNAL.search(blob) and not _RECOVERY_SIGNAL.search(blob):
+                        likely_ok = False
+                tool_sequences_raw.append((tuple(chain), likely_ok))
+            i = j
+            continue
+        i += 1
+
+    prompt_hits: list[str] = []
+    seen_prompts: set[str] = set()
+    for idx, (turn, role, text) in enumerate(segments):
+        rl = (role or "").lower()
+        if rl != "user":
+            continue
+        body = text.strip()
+        if len(body) < 24:
+            continue
+        if not _user_prompt_led_to_tools(segments, idx):
+            continue
+        key = normalize_ws(body)[:400]
+        if key in seen_prompts:
+            continue
+        seen_prompts.add(key)
+        prompt_hits.append(_truncate_snippet(body, 900))
+
+    recovery: list[dict[str, str]] = []
+    transcript = "\n\n".join(
+        t.strip()
+        for _, __, t in segments
+        if t.strip()
+    )
+    pos = 0
+    while pos < len(transcript):
+        m_err = _FAILURE_SIGNAL.search(transcript, pos)
+        if not m_err:
+            break
+        window = transcript[m_err.start() : m_err.start() + 4500]
+        m_rec = _RECOVERY_SIGNAL.search(window)
+        if m_rec and m_rec.start() > 0:
+            err_snip = _truncate_snippet(window[: m_rec.start()], 280)
+            rec_snip = _truncate_snippet(window[m_rec.start() : m_rec.start() + 320], 280)
+            recovery.append({"error_context": err_snip, "recovery_context": rec_snip})
+        pos = m_err.end()
+
+    seq_entries: list[dict[str, Any]] = []
+    for seq, ok in tool_sequences_raw:
+        seq_entries.append(
+            {
+                "sequence": list(seq),
+                "count": 1,
+                "likely_success": ok,
+                "sources": [source],
+            }
+        )
+
+    prompt_entries = [{"text": p, "count": 1, "sources": [source]} for p in prompt_hits]
+
+    recovery_entries = [
+        {
+            "error_context": item["error_context"],
+            "recovery_context": item["recovery_context"],
+            "count": 1,
+            "sources": [source],
+        }
+        for item in recovery
+    ]
+
+    return {
+        "schema_version": PATTERNS_SCHEMA_VERSION,
+        "source": source,
+        "generated_at_utc": generated,
+        "successful_tool_sequences": seq_entries,
+        "prompt_templates": prompt_entries,
+        "error_recovery_patterns": recovery_entries,
+    }
+
+
+def save_patterns_to_memory(
+    patterns: dict[str, Any],
+    memory_dir: Path,
+    *,
+    filename: str = "patterns.json",
+    merge: bool = True,
+    output_path: Path | None = None,
+) -> Path:
+    """Write (or merge) aggregated patterns next to other memory artifacts."""
+
+    path = output_path if output_path is not None else (memory_dir / filename)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _dedupe_sources(xs: list[str]) -> list[str]:
+        return list(dict.fromkeys([s for s in xs if s]))[:12]
+
+    if merge and path.exists():
+        try:
+            prior = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            prior = {}
+
+        if isinstance(prior, dict) and prior.get("schema_version") == PATTERNS_SCHEMA_VERSION:
+            seq_map: dict[str, dict[str, Any]] = {}
+            for row in prior.get("successful_tool_sequences", []):
+                if not isinstance(row, dict):
+                    continue
+                seq = row.get("sequence")
+                if isinstance(seq, list) and all(isinstance(x, str) for x in seq):
+                    key = json.dumps(seq, ensure_ascii=False)
+                    seq_map[key] = dict(row)
+
+            for row in patterns.get("successful_tool_sequences", []):
+                if not isinstance(row, dict):
+                    continue
+                seq = row.get("sequence")
+                if not isinstance(seq, list):
+                    continue
+                key = json.dumps(seq, ensure_ascii=False)
+                if key not in seq_map:
+                    seq_map[key] = {
+                        "sequence": list(seq),
+                        "count": 0,
+                        "likely_success": row.get("likely_success", True),
+                        "sources": [],
+                    }
+                tgt = seq_map[key]
+                tgt["count"] = int(tgt.get("count", 0)) + int(row.get("count", 1))
+                tgt["likely_success"] = bool(tgt.get("likely_success", True)) or bool(
+                    row.get("likely_success", True)
+                )
+                tgt["sources"] = _dedupe_sources(
+                    list(tgt.get("sources", [])) + list(row.get("sources", []))
+                )
+
+            tmpl_map: dict[str, dict[str, Any]] = {}
+            for row in prior.get("prompt_templates", []):
+                if isinstance(row, dict) and isinstance(row.get("text"), str):
+                    tmpl_map[row["text"]] = dict(row)
+
+            for row in patterns.get("prompt_templates", []):
+                if not isinstance(row, dict) or not isinstance(row.get("text"), str):
+                    continue
+                t = row["text"]
+                if t not in tmpl_map:
+                    tmpl_map[t] = {"text": t, "count": 0, "sources": []}
+                tmpl_map[t]["count"] = int(tmpl_map[t].get("count", 0)) + int(row.get("count", 1))
+                tmpl_map[t]["sources"] = _dedupe_sources(
+                    list(tmpl_map[t].get("sources", [])) + list(row.get("sources", []))
+                )
+
+            rec_map: dict[str, dict[str, Any]] = {}
+            for row in prior.get("error_recovery_patterns", []):
+                if not isinstance(row, dict):
+                    continue
+                ek = json.dumps(
+                    [row.get("error_context", ""), row.get("recovery_context", "")],
+                    ensure_ascii=False,
+                )
+                rec_map[ek] = dict(row)
+
+            for row in patterns.get("error_recovery_patterns", []):
+                if not isinstance(row, dict):
+                    continue
+                ek = json.dumps(
+                    [row.get("error_context", ""), row.get("recovery_context", "")],
+                    ensure_ascii=False,
+                )
+                if ek not in rec_map:
+                    rec_map[ek] = {
+                        "error_context": row.get("error_context", ""),
+                        "recovery_context": row.get("recovery_context", ""),
+                        "count": 0,
+                        "sources": [],
+                    }
+                tgt = rec_map[ek]
+                tgt["count"] = int(tgt.get("count", 0)) + int(row.get("count", 1))
+                tgt["sources"] = _dedupe_sources(
+                    list(tgt.get("sources", [])) + list(row.get("sources", []))
+                )
+
+            out_doc = {
+                "schema_version": PATTERNS_SCHEMA_VERSION,
+                "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+                "last_source": patterns.get("source", ""),
+                "successful_tool_sequences": sorted(
+                    seq_map.values(),
+                    key=lambda r: int(r.get("count", 0)),
+                    reverse=True,
+                ),
+                "prompt_templates": sorted(
+                    tmpl_map.values(),
+                    key=lambda r: int(r.get("count", 0)),
+                    reverse=True,
+                ),
+                "error_recovery_patterns": sorted(
+                    rec_map.values(),
+                    key=lambda r: int(r.get("count", 0)),
+                    reverse=True,
+                ),
+            }
+        else:
+            out_doc = None
+    else:
+        out_doc = None
+
+    if out_doc is None:
+        out_doc = {
+            "schema_version": PATTERNS_SCHEMA_VERSION,
+            "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "last_source": patterns.get("source", ""),
+            "successful_tool_sequences": list(patterns.get("successful_tool_sequences", [])),
+            "prompt_templates": list(patterns.get("prompt_templates", [])),
+            "error_recovery_patterns": list(patterns.get("error_recovery_patterns", [])),
+        }
+
+    path.write_text(json.dumps(out_doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return path
+
+
 def write_digest(
     digest: ConversationDigest,
     memory_dir: Path,
@@ -565,7 +865,14 @@ def write_digest(
     return md_path, js_path
 
 
-def run_extraction(session_path: Path, memory_dir: Path, workspace_root: Path) -> tuple[Path, Path]:
+def run_extraction(
+    session_path: Path,
+    memory_dir: Path,
+    workspace_root: Path,
+    *,
+    patterns_json: Path | None = None,
+    merge_patterns: bool = True,
+) -> tuple[Path, Path, Path]:
     segments = parse_session_log(session_path.resolve())
 
     digest = analyze_segments(segments, session_path.resolve().as_posix())
@@ -582,7 +889,20 @@ def run_extraction(session_path: Path, memory_dir: Path, workspace_root: Path) -
         short = Path(relative[len(workspace_posix) :].lstrip("/")).as_posix()
         digest.source = short
 
-    return write_digest(digest, memory_dir, stem)
+    md_path, js_path = write_digest(digest, memory_dir, stem)
+    pattern_doc = extract_patterns(segments, digest.source)
+    if patterns_json is not None:
+        pj = patterns_json if patterns_json.is_absolute() else (workspace_root / patterns_json).resolve()
+    else:
+        pj = (memory_dir / "patterns.json").resolve()
+    patterns_path = save_patterns_to_memory(
+        pattern_doc,
+        pj.parent,
+        filename=pj.name,
+        merge=merge_patterns,
+        output_path=pj,
+    )
+    return md_path, js_path, patterns_path
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -610,6 +930,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Workspace root for relative paths in output (defaults to repo root).",
     )
+    p.add_argument(
+        "--patterns-json",
+        type=Path,
+        default=None,
+        help="Where to write patterns.json (default: <memory-dir>/patterns.json).",
+    )
+    p.add_argument(
+        "--no-merge-patterns",
+        action="store_true",
+        help="Replace patterns.json instead of merging with an existing file.",
+    )
     return p
 
 
@@ -630,7 +961,13 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             tmp.close()
 
-        md_path, json_path = run_extraction(path, memory_dir, ws)
+        md_path, json_path, patterns_path = run_extraction(
+            path,
+            memory_dir,
+            ws,
+            patterns_json=args.patterns_json,
+            merge_patterns=not args.no_merge_patterns,
+        )
         try:
             path.unlink(missing_ok=True)  # type: ignore[arg-type]
         except OSError:
@@ -638,6 +975,7 @@ def main(argv: list[str] | None = None) -> int:
 
         print(f"Wrote {md_path.as_posix()}")
         print(f"Wrote {json_path.as_posix()}")
+        print(f"Wrote {patterns_path.as_posix()}")
         return 0
 
     if not args.session_log:
@@ -649,9 +987,16 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"error: file not found: {sp}\n")
         return 2
 
-    md_path, json_path = run_extraction(sp, memory_dir, ws)
+    md_path, json_path, patterns_path = run_extraction(
+        sp,
+        memory_dir,
+        ws,
+        patterns_json=args.patterns_json,
+        merge_patterns=not args.no_merge_patterns,
+    )
     print(f"Wrote {md_path.as_posix()}")
     print(f"Wrote {json_path.as_posix()}")
+    print(f"Wrote {patterns_path.as_posix()}")
     return 0
 
 
