@@ -6,9 +6,23 @@ import ast
 import json
 import re
 import sys
+from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
+
+STOPWORDS = frozenset(
+    """
+    a an the and or for of to in on at by from with without into over under is are was were
+    be been being as if then else when while do does did done not no yes so such this that these those
+    it its we you they he she them their our your my any some all each every both few more most other
+    such than too very can could should would may might must will shall also just only same own about
+    into through during before after above below between own same few lot next same how what which who
+    """.split()
+)
+
+INDEX_VERSION = 1
 
 KEYWORD_CAPABILITIES: tuple[tuple[str, str], ...] = (
     ("monitor", "Monitoring and observability"),
@@ -35,6 +49,7 @@ class ToolProfile:
     name: str
     path: Path
     description: str
+    kind: str = "script"
     imports: set[str] = field(default_factory=set)
     functions: list[str] = field(default_factory=list)
     commands: list[str] = field(default_factory=list)
@@ -43,11 +58,13 @@ class ToolProfile:
     io_profile: list[str] = field(default_factory=list)
     dependencies: list[str] = field(default_factory=list)
     examples: list[str] = field(default_factory=list)
+    keywords: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return {
             "name": self.name,
             "path": str(self.path),
+            "kind": self.kind,
             "description": self.description,
             "imports": sorted(self.imports),
             "functions": self.functions,
@@ -57,14 +74,218 @@ class ToolProfile:
             "io_profile": self.io_profile,
             "dependencies": self.dependencies,
             "examples": self.examples,
+            "keywords": self.keywords,
         }
 
 
-def discover_script_paths(root: Path) -> list[Path]:
-    scripts_dir = root / "scripts"
-    if not scripts_dir.exists():
+def discover_python_files(root: Path, *relative_parts: str) -> list[Path]:
+    """List top-level *.py modules under root/relative (excludes __init__.py)."""
+    target = root.joinpath(*relative_parts)
+    if not target.is_dir():
         return []
-    return sorted(path for path in scripts_dir.glob("*.py") if path.name != "__init__.py")
+    return sorted(p for p in target.glob("*.py") if p.name != "__init__.py")
+
+
+def _split_camel_and_snake(token: str) -> list[str]:
+    if not token:
+        return []
+    step1 = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", token)
+    parts = re.split(r"[_\s]+", step1)
+    out: list[str] = []
+    for p in parts:
+        sub = re.findall(r"[A-Za-z][a-z]+|[A-Z]+(?=[A-Z][a-z]|\b)|\d+", p)
+        if sub:
+            out.extend(s.lower() for s in sub if len(s) > 1 or s.isdigit())
+        elif len(p) > 1:
+            out.append(p.lower())
+    return out
+
+
+def _tokenize_free_text(text: str) -> list[str]:
+    return [m.group(0).lower() for m in re.finditer(r"[A-Za-z][A-Za-z0-9_-]{1,}", text)]
+
+
+def extract_keywords(profile: ToolProfile) -> list[str]:
+    bag: set[str] = set()
+    bag.update(_split_camel_and_snake(profile.name))
+    bag.update(_tokenize_free_text(profile.description))
+    for cap in profile.capabilities:
+        bag.update(w for w in _tokenize_free_text(cap) if w not in STOPWORDS)
+    for cmd in profile.commands:
+        bag.update(_split_camel_and_snake(cmd))
+    for fn in profile.functions:
+        bag.update(_split_camel_and_snake(fn))
+    parts = Path(profile.path).parts
+    for part in parts:
+        stem = Path(part).stem if "." in part else part
+        bag.update(_split_camel_and_snake(stem))
+    bag.discard("")
+    return sorted(bag)
+
+
+def entry_id(profile: ToolProfile) -> str:
+    return profile.path.as_posix()
+
+
+def build_keyword_index(profiles: list[ToolProfile]) -> dict[str, list[str]]:
+    """Inverted index: keyword -> sorted unique entry ids (posix relative paths)."""
+    inverted: dict[str, set[str]] = defaultdict(set)
+    for profile in profiles:
+        eid = entry_id(profile)
+        for kw in profile.keywords:
+            inverted[kw].add(eid)
+        inverted[profile.kind].add(eid)
+        inverted[profile.name.lower()].add(eid)
+    return {kw: sorted(ids) for kw, ids in sorted(inverted.items())}
+
+
+def build_json_index(root: Path, profiles: list[ToolProfile]) -> dict[str, object]:
+    root_s = root.resolve().as_posix()
+    entries: list[dict[str, object]] = []
+    for profile in profiles:
+        d = profile.to_dict()
+        d["id"] = entry_id(profile)
+        entries.append(d)
+    return {
+        "version": INDEX_VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "root": root_s,
+        "entry_count": len(entries),
+        "entries": entries,
+        "keyword_index": build_keyword_index(profiles),
+    }
+
+
+def search_by_keywords(
+    profiles: list[ToolProfile], query: str, top_n: int = 10
+) -> list[dict[str, object]]:
+    """Score profiles by overlap between query tokens and indexed keywords + names."""
+    raw_tokens = _tokenize_free_text(query)
+    query_tokens = [t.lower() for t in raw_tokens if t.lower() not in STOPWORDS]
+    query_tokens.extend(_split_camel_and_snake(query.replace(" ", "_")))
+    tokens = sorted(set(t for t in query_tokens if len(t) > 1))
+
+    scored: list[tuple[int, float, ToolProfile, list[str]]] = []
+    for profile in profiles:
+        kw_set = set(profile.keywords)
+        name_lower = profile.name.lower()
+        reasons: list[str] = []
+        score_i = 0
+        partial = 0.0
+        for t in tokens:
+            if t in kw_set:
+                score_i += 4
+                reasons.append(f"keyword:{t}")
+            elif t in name_lower:
+                score_i += 6
+                reasons.append(f"name:{t}")
+            else:
+                for kw in kw_set:
+                    if t in kw or kw in t:
+                        partial += 1.5
+                        reasons.append(f"partial:{t}~{kw}")
+                        break
+                path_text = profile.path.as_posix().lower()
+                if t in path_text:
+                    partial += 1.0
+                    reasons.append(f"path:{t}")
+        total = score_i + partial
+        if tokens and total == 0:
+            continue
+        if not tokens:
+            total = 1
+            reasons.append("empty query; full catalog")
+        scored.append((score_i, total, profile, reasons))
+
+    scored.sort(key=lambda row: (row[1], row[0], row[2].name), reverse=True)
+    results: list[dict[str, object]] = []
+    for score_i, total, profile, reasons in scored[:top_n]:
+        results.append(
+            {
+                "id": entry_id(profile),
+                "name": profile.name,
+                "kind": profile.kind,
+                "path": str(profile.path),
+                "score": round(total, 3),
+                "exact_keyword_hits": score_i,
+                "matched": sorted(set(reasons))[:20],
+            }
+        )
+    return results
+
+
+def analyze_python_file(root: Path, path: Path, kind: str) -> ToolProfile | None:
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        tree = ast.parse(source, filename=str(path))
+    except SyntaxError as exc:
+        print(f"tool_discovery: skipping {path}: {exc}", file=sys.stderr)
+        return None
+    rel = path.relative_to(root)
+    name = path.stem
+    imports = extract_imports(tree)
+    functions = extract_functions(tree)
+    commands = extract_cli_commands(tree)
+    description = extract_description(tree)
+    capabilities = infer_capabilities(name, description, commands, functions)
+    io_profile = infer_io_profile(imports, source)
+    risk_level = infer_risk_level(imports, commands)
+    return ToolProfile(
+        name=name,
+        path=rel,
+        description=description,
+        kind=kind,
+        imports=imports,
+        functions=functions,
+        commands=commands,
+        capabilities=capabilities,
+        risk_level=risk_level,
+        io_profile=io_profile,
+    )
+
+
+def analyze_python_directory(root: Path, relative_dir: str, kind: str) -> list[ToolProfile]:
+    profiles: list[ToolProfile] = []
+    for path in discover_python_files(root, *relative_dir.split("/")):
+        profile = analyze_python_file(root, path, kind)
+        if profile:
+            profiles.append(profile)
+    return profiles
+
+
+def finalize_profiles(profiles: list[ToolProfile]) -> None:
+    enrich_dependency_graph(profiles)
+    for profile in profiles:
+        profile.keywords = extract_keywords(profile)
+        profile.examples = build_examples(profile)
+
+
+def collect_profiles(root: Path) -> list[ToolProfile]:
+    """Scan scripts/, tools/, skills/, and src/skills/ for Python modules."""
+    root = root.resolve()
+    seen: set[Path] = set()
+    merged: list[ToolProfile] = []
+    for relative, kind in (
+        ("scripts", "script"),
+        ("tools", "tool"),
+        ("skills", "skill"),
+        ("src/skills", "skill"),
+    ):
+        for profile in analyze_python_directory(root, relative, kind):
+            abs_path = root / profile.path
+            try:
+                key = abs_path.resolve()
+            except OSError:
+                key = abs_path
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(profile)
+    finalize_profiles(merged)
+    return merged
 
 
 def _literal_string(node: ast.AST) -> str | None:
@@ -145,46 +366,26 @@ def infer_io_profile(imports: set[str], text: str) -> list[str]:
 
 
 def analyze_scripts(root: Path) -> list[ToolProfile]:
-    profiles: list[ToolProfile] = []
-    for path in discover_script_paths(root):
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source, filename=str(path))
-        name = path.stem
-        imports = extract_imports(tree)
-        functions = extract_functions(tree)
-        commands = extract_cli_commands(tree)
-        description = extract_description(tree)
-        capabilities = infer_capabilities(name, description, commands, functions)
-        io_profile = infer_io_profile(imports, source)
-        risk_level = infer_risk_level(imports, commands)
-        profiles.append(
-            ToolProfile(
-                name=name,
-                path=path.relative_to(root),
-                description=description,
-                imports=imports,
-                functions=functions,
-                commands=commands,
-                capabilities=capabilities,
-                risk_level=risk_level,
-                io_profile=io_profile,
-            )
-        )
-    enrich_dependency_graph(profiles)
-    for profile in profiles:
-        profile.examples = build_examples(profile)
+    """Analyze only ``scripts/*.py`` (used by tests and narrow tooling)."""
+    root = root.resolve()
+    profiles = analyze_python_directory(root, "scripts", "script")
+    finalize_profiles(profiles)
     return profiles
 
 
 def enrich_dependency_graph(profiles: list[ToolProfile]) -> None:
-    by_name = {profile.name: profile for profile in profiles}
+    by_name: dict[str, list[ToolProfile]] = defaultdict(list)
+    for profile in profiles:
+        by_name[profile.name].append(profile)
+
     for profile in profiles:
         deps: set[str] = set()
         for imported in profile.imports:
-            if imported in by_name and imported != profile.name:
-                deps.add(imported)
+            for peer in by_name.get(imported, []):
+                if peer.path != profile.path:
+                    deps.add(peer.name)
         for peer in profiles:
-            if peer.name == profile.name:
+            if peer.path == profile.path:
                 continue
             shared_imports = profile.imports.intersection(peer.imports)
             shared_caps = set(profile.capabilities).intersection(peer.capabilities)
@@ -194,7 +395,13 @@ def enrich_dependency_graph(profiles: list[ToolProfile]) -> None:
 
 
 def build_examples(profile: ToolProfile) -> list[str]:
-    base = f"python -m scripts.{profile.name}"
+    rel = profile.path.as_posix()
+    if profile.kind == "script":
+        base = f"python -m scripts.{profile.name}"
+    elif profile.kind == "tool":
+        base = f"python {rel}"
+    else:
+        base = f"python {rel}"
     examples: list[str] = []
     if profile.commands:
         for command in profile.commands[:3]:
@@ -212,18 +419,18 @@ def generate_markdown(profiles: list[ToolProfile]) -> str:
     lines = [
         "# Tool Discovery Report",
         "",
-        "Auto-generated capability and dependency analysis for scripts/ tools.",
+        "Auto-generated capability and dependency analysis for scripts/, tools/, and skills.",
         "",
         "## Summary",
         "",
-        f"- Total tools discovered: **{len(profiles)}**",
+        f"- Total entries discovered: **{len(profiles)}**",
         f"- High-risk tools: **{sum(1 for p in profiles if p.risk_level == 'high')}**",
         "",
     ]
     for profile in profiles:
         lines.extend(
             [
-                f"## `{profile.name}`",
+                f"## `{profile.name}` ({profile.kind})",
                 "",
                 f"- Path: `{profile.path}`",
                 f"- Description: {profile.description}",
@@ -231,6 +438,11 @@ def generate_markdown(profiles: list[ToolProfile]) -> str:
                 f"- Capabilities: {', '.join(profile.capabilities)}",
                 f"- I/O profile: {', '.join(profile.io_profile)}",
                 f"- Dependencies: {', '.join(profile.dependencies) if profile.dependencies else 'none'}",
+                (
+                    f"- Keywords: {', '.join(profile.keywords[:24])}{'…' if len(profile.keywords) > 24 else ''}"
+                    if profile.keywords
+                    else "- Keywords: —"
+                ),
                 "",
                 "### Commands",
                 "",
@@ -306,6 +518,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     analyze = subparsers.add_parser("analyze", help="Run deep tool capability analysis")
     analyze.add_argument("--format", choices=("json", "text"), default="json")
+    analyze.add_argument(
+        "--scope",
+        choices=("all", "scripts"),
+        default="all",
+        help="Discover scripts/ only, or scripts/, tools/, skills/, src/skills/",
+    )
+
+    index_cmd = subparsers.add_parser("index", help="Write searchable JSON index (entries + keyword_index)")
+    index_cmd.add_argument("--output", "-o", help="Write JSON to this path instead of stdout")
+
+    search_cmd = subparsers.add_parser("search", help="Keyword match against extracted metadata")
+    search_cmd.add_argument("query", nargs="+", help="Search terms")
+    search_cmd.add_argument("--top", type=int, default=15, help="Max results")
 
     docs = subparsers.add_parser("docs", help="Generate Markdown tool documentation")
     docs.add_argument("--output", help="Write docs to this path instead of stdout")
@@ -320,7 +545,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     root = Path(args.root).resolve()
-    profiles = analyze_scripts(root)
+
+    if args.command == "analyze" and getattr(args, "scope", "all") == "scripts":
+        profiles = analyze_scripts(root)
+    elif args.command == "analyze":
+        profiles = collect_profiles(root)
+    else:
+        profiles = collect_profiles(root)
 
     if args.command == "analyze":
         if args.format == "json":
@@ -328,6 +559,24 @@ def main(argv: list[str] | None = None) -> int:
         else:
             for profile in profiles:
                 print(f"{profile.name}: {', '.join(profile.capabilities)} | deps={profile.dependencies}")
+        return 0
+
+    if args.command == "index":
+        payload = build_json_index(root, profiles)
+        blob = json.dumps(payload, indent=2)
+        out = getattr(args, "output", None)
+        if out:
+            dest = Path(out)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(blob, encoding="utf-8")
+        else:
+            print(blob)
+        return 0
+
+    if args.command == "search":
+        query = " ".join(args.query)
+        ranked = search_by_keywords(profiles, query, top_n=max(1, args.top))
+        print(json.dumps({"query": query, "results": ranked}, indent=2))
         return 0
 
     if args.command == "docs":
