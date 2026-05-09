@@ -60,19 +60,29 @@ class ErrorLearningTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(second_stderr, "")
-        self.assertIn("Duplicate entry detected", second_stdout)
+        self.assertIn("Repeat occurrence merged", second_stdout)
 
         store = self.read_store()
-        self.assertEqual(store["schema_version"], 1)
+        self.assertEqual(store["schema_version"], 2)
         self.assertEqual(len(store["entries"]), 1)
 
         entry = store["entries"][0]
-        self.assertEqual(
-            set(entry.keys()),
-            {"id", "timestamp", "category", "error", "lesson", "resolved"},
-        )
+        required = {
+            "id",
+            "timestamp",
+            "category",
+            "error",
+            "lesson",
+            "resolved",
+            "category_kind",
+            "pattern_key",
+            "occurrence_count",
+            "failed_fix_attempts",
+        }
+        self.assertEqual(set(entry.keys()), required)
         self.assertEqual(entry["category"], "runtime_error")
         self.assertTrue(entry["resolved"])
+        self.assertEqual(entry["occurrence_count"], 2)
 
     def test_list_command_outputs_colorized_entries_and_status(self) -> None:
         error_learning.add_entry(
