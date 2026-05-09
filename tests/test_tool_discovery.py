@@ -197,6 +197,69 @@ class ToolDiscoveryTests(unittest.TestCase):
         self.assertEqual(payload["goal"], "send notification")
         self.assertEqual(len(payload["suggestions"]), 1)
 
+    def test_skills_directory_scanned(self) -> None:
+        root = self._build_repo()
+        skills_dir = root / "src" / "skills"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "alpha_skill.py").write_text(
+            textwrap.dedent(
+                '''
+                """Watchdog helper for coordination."""
+
+                import json
+
+                def run_watchdog():
+                    return 0
+                '''
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+
+        profiles = tool_discovery.analyze_scripts(root)
+        by_id = {p.entry_id: p for p in profiles}
+        self.assertIn("skills:src_skills_alpha_skill", by_id)
+        self.assertEqual(by_id["skills:src_skills_alpha_skill"].category, "skills")
+
+    def test_keyword_index_and_search(self) -> None:
+        root = self._build_repo()
+        skills_dir = root / "skills"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "notify_skill.py").write_text(
+            textwrap.dedent(
+                '''
+                """Telegram notification bridge."""
+
+                import argparse
+
+                def parse_args():
+                    parser = argparse.ArgumentParser()
+                    subs = parser.add_subparsers(dest="cmd")
+                    subs.add_parser("send")
+                    return parser.parse_args()
+                '''
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+
+        profiles = tool_discovery.analyze_scripts(root)
+        payload = tool_discovery.build_search_index_payload(root, profiles)
+        self.assertIn("keyword_index", payload)
+        self.assertIn("telegram", payload["keyword_index"])
+
+        hits = tool_discovery.search_by_keywords(profiles, "telegram notify", limit=5)
+        self.assertTrue(hits)
+        self.assertIn("telegram", hits[0]["entry"]["description"].lower())
+
+    def test_syntax_error_profile_is_recorded(self) -> None:
+        root = self._build_repo()
+        (root / "scripts" / "broken.py").write_text("def x(\n", encoding="utf-8")
+
+        profiles = tool_discovery.analyze_scripts(root)
+        broken = next(p for p in profiles if p.name == "broken")
+        self.assertIn("Syntax error", broken.description)
+
 
 if __name__ == "__main__":
     unittest.main()
