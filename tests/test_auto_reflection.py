@@ -93,6 +93,13 @@ class AutoReflectionTests(unittest.TestCase):
             body = md_files[0].read_text(encoding="utf-8")
             self.assertIn("Lesson learned:", body)
 
+            day_name = f"{auto_reflection.utc_now().date().isoformat()}.md"
+            daily = learnings / day_name
+            self.assertTrue(daily.exists(), msg=f"expected date-named journal {daily}")
+            self.assertIn("# Self-reflection", daily.read_text(encoding="utf-8"))
+            latest = json.loads((learnings / "latest.json").read_text(encoding="utf-8"))
+            self.assertEqual(latest["daily_learning_md"], f".learnings/{day_name}")
+
     def test_post_webhook_uses_json_post(self):
         captured: dict[str, object] = {}
 

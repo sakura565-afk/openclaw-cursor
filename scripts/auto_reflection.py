@@ -3,8 +3,10 @@
 Cron-friendly self-reflection over recent agent-style logs and session artifacts.
 
 Scans configurable paths for logs and JSON, extracts recurring failure patterns and
-actionable notes, writes structured outputs under `.learnings/`, builds a periodic
-summary, and optionally posts the summary (Telegram or generic webhook).
+actionable notes, writes structured outputs under `.learnings/` (including a
+UTC date-named journal `YYYY-MM-DD.md`, run snapshots under `insights/`, and
+weekly rollups under `summaries/`), and optionally posts the summary (Telegram
+or generic webhook).
 
 Example crontab (daily at 09:00 UTC):
 
@@ -334,13 +336,51 @@ def write_insight_artifacts(root: Path, run: ReflectionRun) -> tuple[Path, Path]
     return md_path, json_path
 
 
-def write_latest_pointers(root: Path, md_path: Path, weekly_path: Path) -> None:
+def daily_learning_path(root: Path, run_at: datetime) -> Path:
+    """Top-level `.learnings/YYYY-MM-DD.md` (UTC date) for cron-friendly review."""
+
+    return root / LEARNINGS_DIR / f"{run_at.date().isoformat()}.md"
+
+
+def append_daily_learning_journal(root: Path, run_at: datetime, run: ReflectionRun) -> Path:
+    """Append this run to the calendar-day file; create day header on first write."""
+
+    path = daily_learning_path(root, run_at)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    section_lines = [
+        "",
+        f"## Run {run.run_id}",
+        "",
+        f"- Started: {run.started_at_utc}",
+        f"- Finished: {run.finished_at_utc}",
+        f"- Files scanned: {run.files_scanned}",
+        "",
+        run.summary_markdown.rstrip(),
+        "",
+    ]
+    chunk = "\n".join(section_lines)
+    if path.exists():
+        existing = path.read_text(encoding="utf-8").rstrip()
+        marker = f"## Run {run.run_id}"
+        if marker in existing:
+            return path
+        path.write_text(existing + "\n" + chunk + "\n", encoding="utf-8")
+    else:
+        header = f"# Self-reflection — {run_at.date().isoformat()} (UTC)\n"
+        path.write_text(header + chunk + "\n", encoding="utf-8")
+    return path
+
+
+def write_latest_pointers(
+    root: Path, md_path: Path, weekly_path: Path, daily_path: Path
+) -> None:
     """Small files for automation consumers."""
 
     ptr = root / LEARNINGS_DIR / "latest.json"
     data = {
         "insights_md": md_path.relative_to(root).as_posix(),
         "weekly_summary_md": weekly_path.relative_to(root).as_posix(),
+        "daily_learning_md": daily_path.relative_to(root).as_posix(),
         "generated_at_utc": utc_now().replace(microsecond=0).isoformat(),
     }
     ptr.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -464,7 +504,8 @@ def run_reflection(
 
     md_path, _ = write_insight_artifacts(root, run)
     weekly_path = update_weekly_summary(root, started, summary)
-    write_latest_pointers(root, md_path, weekly_path)
+    daily_path = append_daily_learning_journal(root, started, run)
+    write_latest_pointers(root, md_path, weekly_path, daily_path)
 
     state["last_run_utc"] = finished.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     state["last_run_id"] = run_id
