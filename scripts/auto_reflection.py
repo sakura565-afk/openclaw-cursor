@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
 """
-Cron-friendly self-reflection over recent agent-style logs and session artifacts.
+Cron-friendly self-reflection over recent agent sessions.
 
-Scans configurable paths for logs and JSON, extracts recurring failure patterns and
-actionable notes, writes structured outputs under `.learnings/`, builds a periodic
-summary, and optionally posts the summary (Telegram or generic webhook).
+Analyzes conversation logs and transcripts under the OpenClaw workspace (default
+``~/.openclaw/workspace/memory/`` and ``logs/``). Extracts patterns — what worked,
+what failed, actionable lessons — and writes 精华 to ``.learnings/auto_insights.md``.
+Per-run artifacts and weekly rollups stay under ``.learnings/``.
 
-Example crontab (daily at 09:00 UTC):
+Crontab examples:
 
-    0 9 * * * cd /path/to/repo && /usr/bin/python3 -m scripts.auto_reflection
+    # Daily at 09:00 (≈24h window when no prior state)
+    0 9 * * * /usr/bin/env python3 /path/to/repo/scripts/auto_reflection.py --period daily --quiet
+
+    # Weekly on Monday (≈7d window when no prior state)
+    0 9 * * 1 /usr/bin/env python3 /path/to/repo/scripts/auto_reflection.py --period weekly --quiet
+
+    0 9 * * * cd /path/to/repo && /usr/bin/python3 -m scripts.auto_reflection --period daily
 
 Environment (all optional unless posting):
 
-- AUTO_REFLECTION_ROOT — workspace root (default: current working directory)
+- AUTO_REFLECTION_ROOT — workspace root (default: ~/.openclaw/workspace if present, else cwd)
 - AUTO_REFLECTION_SESSION_GLOBS — extra comma-separated glob patterns relative to root
 - TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID — post summary via Telegram sendMessage
 - REFLECTION_WEBHOOK_URL — POST JSON {\"text\": \"...\", \"meta\": {...}} to this URL
@@ -39,13 +46,16 @@ LEARNINGS_DIR = ".learnings"
 INSIGHTS_SUBDIR = "insights"
 SUMMARIES_SUBDIR = "summaries"
 STATE_NAME = ".state.json"
+AUTO_INSIGHTS_MD = "auto_insights.md"
 
-DEFAULT_SINCE_HOURS = 24 * 7
+DEFAULT_OPENCLAW_WORKSPACE = Path.home() / ".openclaw" / "workspace"
+DEFAULT_SINCE_HOURS_DAILY = 24.0
+DEFAULT_SINCE_HOURS_WEEKLY = 24.0 * 7
 DEFAULT_SESSION_GLOBS = (
+    "memory/**/*.md",
+    "memory/**/*.json",
     "logs/**/*.log",
     "logs/**/*.json",
-    "memory/**/*_log.md",
-    "memory/**/*.md",
 )
 
 FAILURE_HINTS = re.compile(
@@ -55,6 +65,11 @@ FAILURE_HINTS = re.compile(
 LESSON_HINTS = re.compile(
     r"(?i)(\blesson learned\b|\btakeaway\b|\bremember to\b|\bnext time\b|"
     r"\bavoid\b|\bshould have\b|\broot cause\b)"
+)
+SUCCESS_HINTS = re.compile(
+    r"(?i)(\ball tests passed\b|\bcompleted successfully\b|\bfix verified\b|"
+    r"\bworks as expected\b|\bresolved successfully\b|\bno errors found\b|"
+    r"\bgreen build\b|\bsucceeded\b|\bworked well\b)"
 )
 MAX_FILE_BYTES = 2 * 1024 * 1024
 TELEGRAM_TEXT_LIMIT = 4000
@@ -68,6 +83,7 @@ class Insight:
     source_paths: list[str] = field(default_factory=list)
     severity: str = "info"  # info | warning | error
     category: str = "general"
+    bucket: str = "issue"  # positive | issue | action
 
 
 @dataclass
@@ -85,6 +101,19 @@ class ReflectionRun:
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def resolve_workspace_root(explicit: Path | None) -> Path:
+    """Prefer AUTO_REFLECTION_ROOT, then ~/.openclaw/workspace, then cwd."""
+
+    if explicit is not None:
+        return explicit.expanduser().resolve()
+    env = os.environ.get("AUTO_REFLECTION_ROOT", "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+    if DEFAULT_OPENCLAW_WORKSPACE.is_dir():
+        return DEFAULT_OPENCLAW_WORKSPACE.resolve()
+    return Path(".").resolve()
 
 
 def _state_path(root: Path) -> Path:
@@ -139,7 +168,9 @@ def _severity_for_line(line: str) -> str:
     return "info"
 
 
-def _category_for_line(line: str) -> str:
+def _category_for_line(line: str, bucket: str) -> str:
+    if bucket == "positive":
+        return "success"
     if LESSON_HINTS.search(line):
         return "lesson"
     if re.search(r"(?i)\b(test|pytest|unittest)\b", line):
@@ -161,22 +192,46 @@ def insight_fingerprint(text: str) -> str:
     return hashlib.sha256(text.lower().encode("utf-8")).hexdigest()[:16]
 
 
+def classify_line_bucket(stripped: str) -> str | None:
+    """Assign insight bucket, or None to skip the line."""
+
+    if FAILURE_HINTS.search(stripped):
+        if len(stripped) < 12:
+            return None
+        return "issue"
+    if LESSON_HINTS.search(stripped):
+        if len(stripped) < 12:
+            return None
+        return "action"
+    if SUCCESS_HINTS.search(stripped):
+        if len(stripped) < 10:
+            return None
+        return "positive"
+    return None
+
+
 def extract_insights_from_text(path: Path, root: Path, raw: str) -> Iterator[Insight]:
     rel = path.relative_to(root).as_posix()
     for line in raw.splitlines():
         stripped = line.strip()
-        if len(stripped) < 12:
+        bucket = classify_line_bucket(stripped)
+        if bucket is None:
             continue
-        if FAILURE_HINTS.search(stripped) or LESSON_HINTS.search(stripped):
-            text = normalize_insight_text(stripped)
-            if not text:
-                continue
-            yield Insight(
-                text=text,
-                source_paths=[rel],
-                severity=_severity_for_line(stripped),
-                category=_category_for_line(stripped),
-            )
+        text = normalize_insight_text(stripped)
+        if not text:
+            continue
+        yield Insight(
+            text=text,
+            source_paths=[rel],
+            severity=_severity_for_line(stripped),
+            category=_category_for_line(stripped, bucket),
+            bucket=bucket,
+        )
+
+
+def _merge_bucket(a: str, b: str) -> str:
+    rank = {"issue": 3, "action": 2, "positive": 1}
+    return a if rank.get(a, 0) >= rank.get(b, 0) else b
 
 
 def extract_insights_from_json(path: Path, root: Path, raw: str) -> Iterator[Insight]:
@@ -192,14 +247,18 @@ def extract_insights_from_json(path: Path, root: Path, raw: str) -> Iterator[Ins
     def walk(obj: Any) -> None:
         if isinstance(obj, dict):
             for k, v in obj.items():
-                if isinstance(k, str) and re.search(r"(?i)\b(error|stderr|message|detail)\b", k):
+                if isinstance(k, str) and re.search(
+                    r"(?i)\b(error|stderr|message|detail|result|output|content|text)\b", k
+                ):
                     if isinstance(v, str) and v.strip():
                         strings.append(v.strip())
                 walk(v)
         elif isinstance(obj, list):
             for item in obj:
                 walk(item)
-        elif isinstance(obj, str) and FAILURE_HINTS.search(obj):
+        elif isinstance(obj, str) and (
+            FAILURE_HINTS.search(obj) or SUCCESS_HINTS.search(obj) or LESSON_HINTS.search(obj)
+        ):
             strings.append(obj.strip())
 
     walk(data)
@@ -231,6 +290,7 @@ def dedupe_insights(insights: Iterable[Insight]) -> list[Insight]:
                 source_paths=list(ins.source_paths),
                 severity=ins.severity,
                 category=ins.category,
+                bucket=ins.bucket,
             )
         else:
             for p in ins.source_paths:
@@ -239,6 +299,7 @@ def dedupe_insights(insights: Iterable[Insight]) -> list[Insight]:
             sev_rank = {"error": 3, "warning": 2, "info": 1}
             if sev_rank.get(ins.severity, 0) > sev_rank.get(existing.severity, 0):
                 existing.severity = ins.severity
+            existing.bucket = _merge_bucket(existing.bucket, ins.bucket)
     return list(buckets.values())
 
 
@@ -290,6 +351,74 @@ def build_summary_markdown(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def build_auto_insights_markdown(
+    run: ReflectionRun,
+    nominal_since_hours: float,
+    period_label: str,
+) -> str:
+    """Single-file 精华 digest for ~/.openclaw/workspace/.learnings/auto_insights.md."""
+
+    started = datetime.fromisoformat(run.started_at_utc.replace("Z", "+00:00"))
+    positive = [i for i in run.insights if i.bucket == "positive"]
+    issues = [i for i in run.insights if i.bucket == "issue"]
+    actions = [i for i in run.insights if i.bucket == "action"]
+
+    def bullets(items: Sequence[Insight], limit: int = 25) -> list[str]:
+        rank = {"error": 0, "warning": 1, "info": 2}
+        ordered = sorted(items, key=lambda x: (rank.get(x.severity, 9), x.text.lower()))[:limit]
+        lines_out: list[str] = []
+        for ins in ordered:
+            src = ", ".join(f"`{s}`" for s in ins.source_paths[:2])
+            if len(ins.source_paths) > 2:
+                src += ", …"
+            lines_out.append(f"- {ins.text} _(from {src})_")
+        return lines_out
+
+    lines = [
+        "# 精华 · Auto insights",
+        "",
+        f"_Generated {started.strftime('%Y-%m-%d %H:%M')} UTC · run `{run.run_id}` · "
+        f"period `{period_label}` (~{nominal_since_hours:g}h nominal window) · "
+        f"files scanned: **{run.files_scanned}** · distinct signals: **{len(run.insights)}**_",
+        "",
+        "## What worked well (亮点)",
+    ]
+    lines.extend(
+        bullets(positive)
+        or ["_No explicit success signals in this window (add richer logs or extend SUCCESS patterns)._"]
+    )
+    lines.extend(["", "## What went wrong (问题与失败信号)"])
+    lines.extend(
+        bullets(issues) or ["_No failure signals matched._"]
+    )
+    lines.extend(["", "## Actionable insights (可执行改进)"])
+    lines.extend(
+        bullets(actions) or ["_No lesson-style lines matched._"]
+    )
+    lines.extend(
+        [
+            "",
+            "---",
+            "",
+            "See also: `.learnings/summaries/` for weekly rollups and `.learnings/insights/` for raw runs.",
+            "",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_auto_insights_file(
+    root: Path,
+    run: ReflectionRun,
+    nominal_since_hours: float,
+    period_label: str,
+) -> Path:
+    path = root / LEARNINGS_DIR / AUTO_INSIGHTS_MD
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(build_auto_insights_markdown(run, nominal_since_hours, period_label), encoding="utf-8")
+    return path
+
+
 def weekly_report_path(root: Path, dt: datetime) -> Path:
     iso = dt.isocalendar()
     week = f"{iso.year}-W{iso.week:02d}"
@@ -334,13 +463,14 @@ def write_insight_artifacts(root: Path, run: ReflectionRun) -> tuple[Path, Path]
     return md_path, json_path
 
 
-def write_latest_pointers(root: Path, md_path: Path, weekly_path: Path) -> None:
+def write_latest_pointers(root: Path, md_path: Path, weekly_path: Path, auto_insights_path: Path) -> None:
     """Small files for automation consumers."""
 
     ptr = root / LEARNINGS_DIR / "latest.json"
     data = {
         "insights_md": md_path.relative_to(root).as_posix(),
         "weekly_summary_md": weekly_path.relative_to(root).as_posix(),
+        "auto_insights_md": auto_insights_path.relative_to(root).as_posix(),
         "generated_at_utc": utc_now().replace(microsecond=0).isoformat(),
     }
     ptr.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -418,6 +548,7 @@ def run_reflection(
     extra_globs: Sequence[str],
     overlap_minutes: int = 90,
     dry_run: bool = False,
+    period_label: str = "weekly",
 ) -> ReflectionRun:
     started = utc_now()
     state = load_state(root)
@@ -464,7 +595,8 @@ def run_reflection(
 
     md_path, _ = write_insight_artifacts(root, run)
     weekly_path = update_weekly_summary(root, started, summary)
-    write_latest_pointers(root, md_path, weekly_path)
+    auto_insights_path = write_auto_insights_file(root, run, since_hours, period_label)
+    write_latest_pointers(root, md_path, weekly_path, auto_insights_path)
 
     state["last_run_utc"] = finished.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     state["last_run_id"] = run_id
@@ -519,13 +651,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--root",
         type=Path,
         default=None,
-        help="Workspace root (default: AUTO_REFLECTION_ROOT or cwd).",
+        help="Workspace root (default: AUTO_REFLECTION_ROOT, else ~/.openclaw/workspace if present, else cwd).",
+    )
+    parser.add_argument(
+        "--period",
+        choices=("daily", "weekly"),
+        default="weekly",
+        help="Nominal scan window when --since-hours is omitted: daily=24h, weekly=168h.",
     )
     parser.add_argument(
         "--since-hours",
         type=float,
-        default=DEFAULT_SINCE_HOURS,
-        help=f"Hours of history to include when no prior state exists (default: {DEFAULT_SINCE_HOURS}).",
+        default=None,
+        help="Hours of history when no prior state exists (overrides --period).",
     )
     parser.add_argument(
         "--glob",
@@ -544,25 +682,41 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the markdown summary to stdout.",
     )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress stderr diagnostics from posting hooks (cron-friendly).",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
-    root = args.root or Path(os.environ.get("AUTO_REFLECTION_ROOT", "") or ".").resolve()
-    if args.dry_run:
-        print(f"[dry-run] root={root}", file=sys.stderr)
+    since_hours = args.since_hours
+    if since_hours is None:
+        since_hours = (
+            DEFAULT_SINCE_HOURS_DAILY if args.period == "daily" else DEFAULT_SINCE_HOURS_WEEKLY
+        )
+
+    root = resolve_workspace_root(args.root)
+    if args.dry_run and not args.quiet:
+        print(
+            f"[dry-run] root={root} period={args.period} since_hours={since_hours}",
+            file=sys.stderr,
+        )
 
     run = run_reflection(
         root,
-        since_hours=args.since_hours,
+        since_hours=since_hours,
         extra_globs=args.glob,
         dry_run=args.dry_run,
+        period_label=args.period,
     )
 
     for line in maybe_post_results(run, dry_run=args.dry_run):
-        print(line, file=sys.stderr)
+        if not args.quiet:
+            print(line, file=sys.stderr)
 
     if args.stdout_summary:
         print(run.summary_markdown)
