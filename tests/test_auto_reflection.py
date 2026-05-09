@@ -8,6 +8,7 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
@@ -88,6 +89,10 @@ class AutoReflectionTests(unittest.TestCase):
             self.assertTrue(learnings.exists())
             self.assertTrue((learnings / "insights").exists())
             self.assertTrue((learnings / "summaries").exists())
+            started = datetime.fromisoformat(run_full.started_at_utc.replace("Z", "+00:00"))
+            daily_md = learnings / f"{started.date().isoformat()}.md"
+            self.assertTrue(daily_md.exists())
+            self.assertIn("Lesson learned:", daily_md.read_text(encoding="utf-8"))
             md_files = list((learnings / "insights").glob("run_*.md"))
             self.assertEqual(len(md_files), 1)
             body = md_files[0].read_text(encoding="utf-8")
