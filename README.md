@@ -39,20 +39,29 @@ python -m unittest tests.test_ollama_model_manager
 
 ## Tool Discovery CLI
 
-`python -m scripts.tool_discovery` discovers script capabilities, maps dependencies, generates docs, and suggests tools for a goal with contextual reasoning.
+`python3 -m scripts.tool_discovery` scans `scripts/` and `src/`, infers capabilities, I/O behavior, and risk profiles, writes `docs/tool_discovery.md` by default, and suggests tools for a goal.
 
 ### Commands
 
 ```bash
-python -m scripts.tool_discovery analyze --format json
-python -m scripts.tool_discovery docs --output docs/tool_discovery.md
-python -m scripts.tool_discovery suggest "monitor queue latency" --context "safe local logs" --top 3
+python3 -m scripts.tool_discovery analyze --format json
+python3 -m scripts.tool_discovery docs
+python3 -m scripts.tool_discovery docs --output docs/tool_discovery.md
+python3 -m scripts.tool_discovery docs --output -
+python3 -m scripts.tool_discovery suggest "monitor queue latency" --context "safe local logs" --top 3
 ```
 
 ### What it analyzes
 
-- **Deep capability analysis** based on script name, functions, subcommands, and docstring signals.
-- **Dependency analysis** using direct module imports and inferred relationships from shared capabilities/import sets.
-- **Risk and I/O profiles** to distinguish low/medium/high operational risk and filesystem/network/process behavior.
-- **Contextual tool suggestion** scoring with explicit reasoning about capability fit, I/O fit, safety constraints, and possible tool chains.
+- **Scripts and source modules** under `scripts/*.py` and `src/**/*.py` (excluding `__init__.py`), with dotted names for `src/` packages.
+- **Capabilities** from names, docstrings, argparse subcommands, and public function names.
+- **Dependency hints** from import overlap, import-to-module name matches, and shared capability clusters.
+- **Risk and I/O profiles** to distinguish low, medium, and high operational risk and filesystem, network, process, or structured-data behavior.
+- **Contextual tool suggestion** scoring with reasoning about capability fit, I/O fit, safety constraints, and possible tool chains.
+
+### Tests
+
+```bash
+python3 -m unittest tests.test_tool_discovery
+```
 
