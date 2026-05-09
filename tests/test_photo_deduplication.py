@@ -2,7 +2,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import numpy as np
 from PIL import Image, ImageDraw
 
 from scripts import photo_deduplication
@@ -108,6 +110,39 @@ class PhotoDeduplicationTestCase(unittest.TestCase):
         moved_files = list(duplicates_dir.glob("*.jpg"))
         self.assertEqual(1, len(moved_files))
         self.assertTrue(img_a.exists() or img_b.exists())
+
+    @patch.object(photo_deduplication, "decode_raw_to_rgb_uint8")
+    def test_hash_image_decodes_raw_extensions(self, mock_decode) -> None:
+        mock_decode.return_value = np.full((32, 32, 3), 200, dtype=np.uint8)
+        raw_path = self.root / "frame.CR2"
+        raw_path.touch()
+        record = photo_deduplication.hash_image(raw_path, "both")
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record.path, raw_path.resolve())
+        mock_decode.assert_called_once()
+
+    def test_main_workers_parallel_path(self) -> None:
+        scan_dir = self.root / "parallel_scan"
+        self._create_image(scan_dir / "p1.jpg", (90, 90, 90))
+        self._create_image(scan_dir / "p2.jpg", (210, 20, 20))
+        json_report = self.root / "w.json"
+        csv_report = self.root / "w.csv"
+        exit_code = photo_deduplication.main(
+            [
+                "--scan",
+                str(scan_dir),
+                "--dry-run",
+                "--workers",
+                "2",
+                "--json-out",
+                str(json_report),
+                "--csv-out",
+                str(csv_report),
+            ]
+        )
+        self.assertEqual(0, exit_code)
+        self.assertTrue(json_report.exists())
 
 
 if __name__ == "__main__":
