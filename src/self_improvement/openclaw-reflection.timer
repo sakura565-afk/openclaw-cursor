@@ -1,0 +1,12 @@
+# Runs the companion service on a calendar schedule (adjust OnCalendar as needed).
+
+[Unit]
+Description=Periodic OpenClaw self-reflection
+
+[Timer]
+OnCalendar=*-*-* 09:00:00
+Persistent=true
+Unit=openclaw-reflection.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,14 @@
+# User systemd unit: copy to ~/.config/systemd/user/ and replace /path/to/openclaw-cursor
+# with the absolute path to this repository, then:
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now openclaw-reflection.timer
+
+[Unit]
+Description=OpenClaw self-reflection (scan logs, write .learnings/)
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=AUTO_REFLECTION_ROOT=/path/to/openclaw-cursor
+WorkingDirectory=/path/to/openclaw-cursor
+ExecStart=/usr/bin/python3 /path/to/openclaw-cursor/scripts/auto_reflection.py
