@@ -471,6 +471,21 @@ def run_reflection(
     state["last_insight_count"] = len(insights)
     save_state(root, state)
 
+    try:
+        from src.coordination.iskra_kara_shared_memory import notify_kara_from_iskra
+
+        notify_kara_from_iskra(
+            "reflection",
+            {
+                "summary_markdown": run.summary_markdown,
+                "run_id": run.run_id,
+                "files_scanned": run.files_scanned,
+                "insight_count": len(run.insights),
+            },
+        )
+    except Exception:
+        pass
+
     return run
 
 

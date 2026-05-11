@@ -154,7 +154,23 @@ class DreamTracker:
             ],
             "path": "",
         }
-        return self._store_dream(dream)
+        stored = self._store_dream(dream)
+        try:
+            from src.coordination.iskra_kara_shared_memory import notify_kara_from_iskra
+
+            notify_kara_from_iskra(
+                "dream",
+                {
+                    "dream_id": stored["id"],
+                    "title": stored["title"],
+                    "description": stored.get("description", ""),
+                    "source": stored.get("source", ""),
+                    "path": stored.get("path", ""),
+                },
+            )
+        except Exception:
+            pass
+        return stored
 
     def list_dreams(self):
         self.auto_generate_dreams()
