@@ -63,13 +63,28 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertIn("Duplicate entry detected", second_stdout)
 
         store = self.read_store()
-        self.assertEqual(store["schema_version"], 1)
+        self.assertEqual(store["schema_version"], 2)
         self.assertEqual(len(store["entries"]), 1)
 
         entry = store["entries"][0]
         self.assertEqual(
             set(entry.keys()),
-            {"id", "timestamp", "category", "error", "lesson", "resolved"},
+            {
+                "id",
+                "fingerprint",
+                "timestamp",
+                "first_seen",
+                "last_seen",
+                "occurrence_count",
+                "category",
+                "error",
+                "lesson",
+                "resolved",
+                "pattern_tags",
+                "root_cause_hint",
+                "actionable_insights",
+                "sources",
+            },
         )
         self.assertEqual(entry["category"], "runtime_error")
         self.assertTrue(entry["resolved"])
@@ -131,6 +146,81 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertEqual(search_stderr, "")
         self.assertIn("JSON payload was truncated", search_stdout)
         self.assertNotIn("cold restart", search_stdout)
+
+    def test_fingerprint_merge_bumps_occurrence_and_combines_lessons(self) -> None:
+        first, s1 = error_learning.add_entry(
+            self.log_path,
+            "service",
+            "ollama list returned exit code 1",
+            "Check ollama service status.",
+            resolved=False,
+        )
+        self.assertEqual(s1, "created")
+        second, s2 = error_learning.add_entry(
+            self.log_path,
+            "service",
+            "ollama list returned exit code 1",
+            "Verify model cache permissions.",
+            resolved=False,
+        )
+        self.assertEqual(s2, "merged")
+        self.assertEqual(first["fingerprint"], second["fingerprint"])
+        self.assertEqual(second["occurrence_count"], 2)
+        self.assertIn("permissions", second["lesson"].lower())
+
+    def test_sync_cli_ingests_auto_improvement_failures(self) -> None:
+        imp_dir = self.root / "logs"
+        imp_dir.mkdir(parents=True, exist_ok=True)
+        log_file = imp_dir / "auto_improvements_20990101.json"
+        log_file.write_text(
+            json.dumps(
+                [
+                    {
+                        "timestamp": "2099-01-01T00:00:00+00:00",
+                        "category": "service",
+                        "action": "restart_ollama",
+                        "outcome": "failed",
+                        "details": {"stderr": "connection refused", "returncode": 1},
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        exit_code, stdout, stderr = self.run_cli(
+            "sync",
+            "--improvement-log-dir",
+            str(imp_dir),
+            "--since-days",
+            "36500",
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn("learned", stdout)
+        store = self.read_store()
+        self.assertEqual(len(store["entries"]), 1)
+        self.assertIn("connection refused", store["entries"][0]["error"])
+
+    def test_patterns_json_output(self) -> None:
+        error_learning.add_entry(
+            self.log_path,
+            "a",
+            "same failure text",
+            "lesson one",
+            resolved=False,
+        )
+        error_learning.add_entry(
+            self.log_path,
+            "a",
+            "same failure text",
+            "lesson two",
+            resolved=False,
+        )
+        exit_code, stdout, stderr = self.run_cli("patterns", "--json", "--min-occurrences", "1")
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        data = json.loads(stdout)
+        self.assertEqual(len(data), 1)
+        self.assertGreaterEqual(data[0]["occurrence_total"], 2)
 
 
 if __name__ == "__main__":

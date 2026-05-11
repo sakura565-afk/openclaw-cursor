@@ -408,6 +408,33 @@ class AutoImprovementEngine:
         entries.append(action.as_dict())
         path.write_text(json.dumps(entries, indent=2, sort_keys=True), encoding="utf-8")
 
+    def sync_error_learning(
+        self,
+        error_log_path: Path | str | None = None,
+        *,
+        since_days: Optional[int] = 30,
+    ) -> Dict[str, Any]:
+        """Merge failures and health warnings from this engine's JSON logs into the error learning store.
+
+        Uses ``scripts.error_learning`` (same defaults as the CLI ``sync`` command): writes to
+        ``<root_dir>/.learnings/error_log.json`` unless ``error_log_path`` is set.
+        """
+
+        try:
+            from scripts import error_learning
+        except ImportError as exc:  # pragma: no cover - minimal installs
+            return {
+                "processed": 0,
+                "learned": 0,
+                "skipped": 0,
+                "duplicate": 0,
+                "merged": 0,
+                "updated": 0,
+                "error": f"error_learning unavailable: {exc}",
+            }
+        target = Path(error_log_path or self.root_dir / ".learnings" / "error_log.json")
+        return error_learning.sync_from_auto_improvement(target, self.log_dir, since_days=since_days)
+
     def iter_log_entries(self, *, since_days: Optional[int] = None) -> Iterable[Dict[str, Any]]:
         cutoff: Optional[date] = None
         if since_days is not None:

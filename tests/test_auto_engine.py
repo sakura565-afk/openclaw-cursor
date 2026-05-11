@@ -143,6 +143,30 @@ class AutoEngineTests(unittest.TestCase):
         self.assertIn("restart_ollama", digest)
         self.assertTrue((self.logs / "weekly_auto_improvement_digest.md").exists())
 
+    def test_sync_error_learning_ingests_failed_actions(self):
+        log_file = self.logs / "auto_improvements_20990101.json"
+        log_file.write_text(
+            json.dumps(
+                [
+                    {
+                        "timestamp": "2099-01-01T00:00:00+00:00",
+                        "category": "service",
+                        "action": "restart_ollama",
+                        "outcome": "failed",
+                        "details": {"stderr": "unit test failure", "returncode": 1},
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        engine = self.make_engine()
+        err_log = self.root / ".learnings" / "error_log.json"
+        summary = engine.sync_error_learning(err_log, since_days=36500)
+        self.assertGreaterEqual(summary.get("learned", 0), 1)
+        payload = json.loads(err_log.read_text(encoding="utf-8"))
+        self.assertEqual(len(payload["entries"]), 1)
+        self.assertIn("unit test failure", payload["entries"][0]["error"])
+
 
 if __name__ == "__main__":
     unittest.main()
