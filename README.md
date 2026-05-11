@@ -39,20 +39,36 @@ python -m unittest tests.test_ollama_model_manager
 
 ## Tool Discovery CLI
 
-`python -m scripts.tool_discovery` discovers script capabilities, maps dependencies, generates docs, and suggests tools for a goal with contextual reasoning.
+The `tool_discovery.py` module at the repository root (also available as `python -m scripts.tool_discovery`) scans the tree for `SKILL.md` files, analyzes `scripts/*.py` plus runnable `src/**/*.py` modules (argparse + `__main__`), writes a JSON catalog, tracks usage counts for ranking, and suggests tools or skills from a task description.
 
 ### Commands
 
 ```bash
-python -m scripts.tool_discovery analyze --format json
-python -m scripts.tool_discovery docs --output docs/tool_discovery.md
-python -m scripts.tool_discovery suggest "monitor queue latency" --context "safe local logs" --top 3
+python3 tool_discovery.py --root . index
+python3 tool_discovery.py --root . list
+python3 tool_discovery.py --root . list --format json
+python3 tool_discovery.py analyze --format json
+python3 tool_discovery.py analyze --scripts-only --format json
+python3 tool_discovery.py docs --output docs/tool_discovery.md
+python3 tool_discovery.py suggest "monitor queue latency" --context "safe local logs" --top 3
+python3 tool_discovery.py suggest "monitor queue latency" --track
+python3 tool_discovery.py suggest-all "sync notes to Obsidian" --top 5
+python3 tool_discovery.py record-usage ollama_monitor --delta 1
 ```
+
+Catalog output defaults to `$OPENCLAW_WORKSPACE/catalog/`, `$OPENCLAW_TOOL_CATALOG_DIR`, or `./.openclaw/catalog/`, containing `tool_skill_index.json`, `tool_usage.json`, and a short `README.txt`.
 
 ### What it analyzes
 
-- **Deep capability analysis** based on script name, functions, subcommands, and docstring signals.
+- **Skills**: any `SKILL.md` under the repo root, `~/.openclaw/workspace`, or `~/.openclaw/skills` (skipping `.git`, `node_modules`, virtualenvs), with title, description, and use-case bullets.
+- **Deep capability analysis** for tools from script name, functions, subcommands, and docstring signals.
 - **Dependency analysis** using direct module imports and inferred relationships from shared capabilities/import sets.
 - **Risk and I/O profiles** to distinguish low/medium/high operational risk and filesystem/network/process behavior.
-- **Contextual tool suggestion** scoring with explicit reasoning about capability fit, I/O fit, safety constraints, and possible tool chains.
+- **Contextual tool suggestion** scoring with explicit reasoning about capability fit, I/O fit, safety constraints, possible tool chains, and optional usage-frequency boosts.
+
+Run tests with:
+
+```bash
+python3 -m unittest tests.test_tool_discovery
+```
 
