@@ -2,13 +2,15 @@
 """
 Cron-friendly self-reflection over recent agent-style logs and session artifacts.
 
-Scans configurable paths for logs and JSON, extracts recurring failure patterns and
-actionable notes, writes structured outputs under `.learnings/`, builds a periodic
-summary, and optionally posts the summary (Telegram or generic webhook).
+Scans configurable paths for logs and JSON, classifies lines into errors, corrections,
+successful completions, and explicit lessons, clusters recurring signals, attaches
+heuristic fix hints where possible, writes structured outputs under `.learnings/`
+(including `recurring_mistakes.json` and `action_items.md`), builds a periodic summary,
+and optionally posts the summary (Telegram or generic webhook).
 
 Example crontab (daily at 09:00 UTC):
 
-    0 9 * * * cd /path/to/repo && /usr/bin/python3 -m scripts.auto_reflection
+    0 9 * * * cd /path/to/repo && /usr/bin/python3 -m scripts.auto_reflection --quiet
 
 Environment (all optional unless posting):
 
@@ -39,6 +41,9 @@ LEARNINGS_DIR = ".learnings"
 INSIGHTS_SUBDIR = "insights"
 SUMMARIES_SUBDIR = "summaries"
 STATE_NAME = ".state.json"
+RECURRING_JSON = "recurring_mistakes.json"
+ACTION_ITEMS_MD = "action_items.md"
+ERROR_LOG_JSON = "error_log.json"
 
 DEFAULT_SINCE_HOURS = 24 * 7
 DEFAULT_SESSION_GLOBS = (
@@ -56,8 +61,80 @@ LESSON_HINTS = re.compile(
     r"(?i)(\blesson learned\b|\btakeaway\b|\bremember to\b|\bnext time\b|"
     r"\bavoid\b|\bshould have\b|\broot cause\b)"
 )
+CORRECTION_HINTS = re.compile(
+    r"(?i)(\bcorrection\b|\bactually\b[,:\s]|\binstead (of|use)\b|\bfixed by\b|\bupdated to\b|"
+    r"\breplaced\b.+\bwith\b|\bwas wrong\b|\bmistake\b[:\s]|\berrata\b|\buse the correct\b|"
+    r"\bthe (real |)issue was\b|\brollback\b|\brevert(ed|ing)?\b)"
+)
+SUCCESS_HINTS = re.compile(
+    r"(?i)(\ball tests passed\b|\btests passed\b|\bcompleted successfully\b|\btask complete\b|"
+    r"\b(done|shipped|merged)\b.*\b(PR|pull request|#)\b|\b\[OK\]\b|\bgreen build\b|"
+    r"\bCI passed\b|\bdeploy(ed)? successfully\b|\bresolution\b[:\s].*(fixed|resolved|closed)|"
+    r"\b(successfully|success)\b.*\b(complet|finish|merg))"
+)
 MAX_FILE_BYTES = 2 * 1024 * 1024
 TELEGRAM_TEXT_LIMIT = 4000
+RECURRING_MIN_HITS = 2
+CONCISE_MAX_LINES = 14
+
+# (pattern, actionable fix hint) — keep strings concrete, not generic platitudes.
+FIX_HEURISTICS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"ModuleNotFoundError|No module named", re.I),
+        "Install the missing dependency in the active venv (`pip install` / `uv sync`) or fix "
+        "imports/PYTHONPATH so the module resolves before the next run.",
+    ),
+    (
+        re.compile(r"ImportError:\s*cannot import name", re.I),
+        "Align symbol names with the package API (check re-exports and `__init__.py`); run a local "
+        "import of the failing module to confirm.",
+    ),
+    (
+        re.compile(r"Permission denied|EACCES", re.I),
+        "Fix filesystem permissions (`chmod`/`chown`) or write under an allowed directory; avoid "
+        "sudo in agent scripts unless explicitly required.",
+    ),
+    (
+        re.compile(r"timed?\s*out|timeout|ReadTimeout|ConnectTimeout", re.I),
+        "Raise client/server timeouts, add bounded retries with backoff, and shrink payloads or "
+        "batch requests.",
+    ),
+    (
+        re.compile(r"connection refused|ECONNREFUSED|Name or service not known", re.I),
+        "Verify the target host/port, that the daemon is running, and DNS/VPN/firewall rules "
+        "before retrying.",
+    ),
+    (
+        re.compile(r"\b401\b|\b403\b|Unauthorized|Forbidden|invalid token|expired token", re.I),
+        "Rotate or export fresh credentials, confirm OAuth scopes, and check clock skew on the "
+        "runner.",
+    ),
+    (
+        re.compile(r"merge conflict|CONFLICT", re.I),
+        "Resolve conflicts locally (`git status`), re-run tests, then complete the merge commit "
+        "with a clean tree.",
+    ),
+    (
+        re.compile(r"KeyError|AttributeError|TypeError", re.I),
+        "Add a failing unit test around the edge case, validate inputs at the boundary, and align "
+        "types with the real payload shape.",
+    ),
+    (
+        re.compile(r"FileNotFoundError|ENOENT", re.I),
+        "Confirm paths relative to the workspace root; generate missing dirs with `mkdir -p` or "
+        "adjust config to the actual artifact location.",
+    ),
+    (
+        re.compile(r"JSONDecodeError|Unexpected token", re.I),
+        "Validate JSON at the source (truncated download, HTML error page); re-fetch or tighten "
+        "response parsing with explicit error handling.",
+    ),
+    (
+        re.compile(r"exit code\s*[1-9]|command failed|non-zero exit", re.I),
+        "Re-run the failing command with verbose flags, capture stderr to a log file, and gate "
+        "retries on the specific exit code.",
+    ),
+)
 
 
 @dataclass
@@ -68,6 +145,9 @@ class Insight:
     source_paths: list[str] = field(default_factory=list)
     severity: str = "info"  # info | warning | error
     category: str = "general"
+    pattern_type: str = "general"  # error | correction | success | lesson | general
+    hit_count: int = 1
+    suggested_fix: str = ""
 
 
 @dataclass
@@ -81,10 +161,62 @@ class ReflectionRun:
     session_files: list[str]
     insights: list[Insight]
     summary_markdown: str
+    recurring_from_sessions: list[dict[str, Any]] = field(default_factory=list)
+    error_log_highlights: list[dict[str, Any]] = field(default_factory=list)
 
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def classify_pattern_type(line: str) -> str:
+    """Prefer hard failures over softer signals when multiple hints match."""
+
+    if FAILURE_HINTS.search(line):
+        return "error"
+    if LESSON_HINTS.search(line):
+        return "lesson"
+    if CORRECTION_HINTS.search(line):
+        return "correction"
+    if SUCCESS_HINTS.search(line):
+        return "success"
+    return "general"
+
+
+def suggest_fix_for_line(line: str, pattern_type: str) -> str:
+    """Concrete, tool-oriented hints; empty string when the line already implies the fix."""
+
+    if pattern_type == "error":
+        for rx, hint in FIX_HEURISTICS:
+            if rx.search(line):
+                return hint
+        return ""
+    if pattern_type == "correction":
+        return (
+            "When this symptom shows up again, apply this correction before making broader edits "
+            "or rerunning the failing command."
+        )
+    if pattern_type == "success":
+        return (
+            "Record the exact command sequence or settings that produced this pass so the next "
+            "run can mirror them (script, Makefile target, or `memory/` note)."
+        )
+    return ""
+
+
+def merge_pattern_types(a: str, b: str) -> str:
+    rank = {"error": 4, "lesson": 3, "correction": 2, "success": 2, "general": 0}
+    return a if rank.get(a, 0) >= rank.get(b, 0) else b
+
+
+def merge_suggested_fix(existing: str, new: str) -> str:
+    if not existing:
+        return new
+    if not new:
+        return existing
+    if new in existing or existing in new:
+        return existing if len(existing) >= len(new) else new
+    return existing
 
 
 def _state_path(root: Path) -> Path:
@@ -139,8 +271,12 @@ def _severity_for_line(line: str) -> str:
     return "info"
 
 
-def _category_for_line(line: str) -> str:
-    if LESSON_HINTS.search(line):
+def _category_for_line(line: str, pattern_type: str) -> str:
+    if pattern_type == "correction":
+        return "correction"
+    if pattern_type == "success":
+        return "success"
+    if pattern_type == "lesson":
         return "lesson"
     if re.search(r"(?i)\b(test|pytest|unittest)\b", line):
         return "testing"
@@ -167,16 +303,27 @@ def extract_insights_from_text(path: Path, root: Path, raw: str) -> Iterator[Ins
         stripped = line.strip()
         if len(stripped) < 12:
             continue
-        if FAILURE_HINTS.search(stripped) or LESSON_HINTS.search(stripped):
-            text = normalize_insight_text(stripped)
-            if not text:
-                continue
-            yield Insight(
-                text=text,
-                source_paths=[rel],
-                severity=_severity_for_line(stripped),
-                category=_category_for_line(stripped),
-            )
+        ptype = classify_pattern_type(stripped)
+        if ptype == "general":
+            continue
+        text = normalize_insight_text(stripped)
+        if not text:
+            continue
+        fix = suggest_fix_for_line(stripped, ptype)
+        sev = _severity_for_line(stripped)
+        if ptype == "success":
+            sev = "info"
+        elif ptype in ("correction", "lesson"):
+            sev = "info" if sev == "info" else sev
+        yield Insight(
+            text=text,
+            source_paths=[rel],
+            severity=sev,
+            category=_category_for_line(stripped, ptype),
+            pattern_type=ptype,
+            hit_count=1,
+            suggested_fix=fix,
+        )
 
 
 def extract_insights_from_json(path: Path, root: Path, raw: str) -> Iterator[Insight]:
@@ -199,7 +346,12 @@ def extract_insights_from_json(path: Path, root: Path, raw: str) -> Iterator[Ins
         elif isinstance(obj, list):
             for item in obj:
                 walk(item)
-        elif isinstance(obj, str) and FAILURE_HINTS.search(obj):
+        elif isinstance(obj, str) and (
+            FAILURE_HINTS.search(obj)
+            or SUCCESS_HINTS.search(obj)
+            or CORRECTION_HINTS.search(obj)
+            or LESSON_HINTS.search(obj)
+        ):
             strings.append(obj.strip())
 
     walk(data)
@@ -231,15 +383,94 @@ def dedupe_insights(insights: Iterable[Insight]) -> list[Insight]:
                 source_paths=list(ins.source_paths),
                 severity=ins.severity,
                 category=ins.category,
+                pattern_type=ins.pattern_type,
+                hit_count=ins.hit_count,
+                suggested_fix=ins.suggested_fix,
             )
         else:
+            existing.hit_count += ins.hit_count
             for p in ins.source_paths:
                 if p not in existing.source_paths:
                     existing.source_paths.append(p)
             sev_rank = {"error": 3, "warning": 2, "info": 1}
             if sev_rank.get(ins.severity, 0) > sev_rank.get(existing.severity, 0):
                 existing.severity = ins.severity
+            existing.pattern_type = merge_pattern_types(existing.pattern_type, ins.pattern_type)
+            existing.suggested_fix = merge_suggested_fix(existing.suggested_fix, ins.suggested_fix)
     return list(buckets.values())
+
+
+def build_recurring_payloads(
+    insights: Sequence[Insight], min_hits: int = RECURRING_MIN_HITS
+) -> list[dict[str, Any]]:
+    """Surface lines that fire more than once across files or repeated lines."""
+
+    out: list[dict[str, Any]] = []
+    for ins in insights:
+        if ins.hit_count < min_hits:
+            continue
+        fix = ins.suggested_fix
+        if ins.pattern_type == "error" and not fix:
+            fix = (
+                "Same signature across multiple runs: add a regression test, tighten logging at "
+                "the callsite, or add a cheap preflight step so the agent stops before repeating "
+                "the failure."
+            )
+        out.append(
+            {
+                "pattern_type": ins.pattern_type,
+                "text": ins.text,
+                "hits": ins.hit_count,
+                "sources": ins.source_paths[:8],
+                "suggested_fix": fix,
+                "severity": ins.severity,
+            }
+        )
+    out.sort(key=lambda x: (-int(x["hits"]), x["pattern_type"], x["text"].lower()))
+    return out
+
+
+def load_error_log_highlights(root: Path) -> list[dict[str, Any]]:
+    """Mine `.learnings/error_log.json` for repeated normalized errors (pairs with error_learning.py)."""
+
+    path = root / LEARNINGS_DIR / ERROR_LOG_JSON
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    entries = data.get("entries") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        return []
+    counts: Counter[str] = Counter()
+    sample_by_norm: dict[str, dict[str, Any]] = {}
+    for raw in entries:
+        if not isinstance(raw, dict):
+            continue
+        err = str(raw.get("error", "")).strip()
+        if len(err) < 8:
+            continue
+        norm = normalize_insight_text(err)[:220]
+        counts[norm] += 1
+        sample_by_norm.setdefault(norm, raw)
+
+    out: list[dict[str, Any]] = []
+    for norm, cnt in counts.most_common(16):
+        if cnt < RECURRING_MIN_HITS:
+            continue
+        sample = sample_by_norm.get(norm, {})
+        lesson = str(sample.get("lesson", "")).strip()
+        out.append(
+            {
+                "normalized_error": norm,
+                "occurrences_in_log": cnt,
+                "lesson": lesson[:500],
+                "resolved": bool(sample.get("resolved", False)),
+                "category": str(sample.get("category", "")).strip(),
+            }
+        )
+    return out
 
 
 def build_summary_markdown(
@@ -247,7 +478,11 @@ def build_summary_markdown(
     files_scanned: int,
     insights: Sequence[Insight],
     top_sessions: Sequence[str],
+    recurring: Sequence[dict[str, Any]] | None = None,
+    error_log_highlights: Sequence[dict[str, Any]] | None = None,
 ) -> str:
+    recurring = list(recurring or ())
+    error_log_highlights = list(error_log_highlights or ())
     lines = [
         f"# Reflection summary ({run_at.date().isoformat()} UTC)",
         "",
@@ -260,9 +495,34 @@ def build_summary_markdown(
         for p in top_sessions[:15]:
             lines.append(f"- `{p}`")
         lines.append("")
+    if recurring:
+        lines.append("## Recurring session signals")
+        lines.append(
+            "_Clusters below hit multiple times in the scanned window — treat as backlog items._"
+        )
+        lines.append("")
+        for block in recurring[:18]:
+            fix = block.get("suggested_fix") or ""
+            lines.append(
+                f"- **[{block['pattern_type']}] ×{block['hits']}** {block['text']}"
+                + (f"\n  - **Fix:** {fix}" if fix else "")
+            )
+        lines.append("")
+    if error_log_highlights:
+        lines.append("## Recurring errors from `error_log.json`")
+        for row in error_log_highlights[:12]:
+            status = "resolved" if row.get("resolved") else "open"
+            cat = row.get("category") or "uncategorized"
+            lines.append(
+                f"- **[{status}] [{cat}]** ({row['occurrences_in_log']}×) `{row['normalized_error'][:160]}`"
+            )
+            if row.get("lesson"):
+                lines.append(f"  - **Recorded lesson:** {row['lesson'][:280]}")
+        lines.append("")
     if not insights:
-        lines.append("_No notable patterns in the scanned window._")
-        return "\n".join(lines)
+        if not recurring and not error_log_highlights:
+            lines.append("_No notable patterns in the scanned window._")
+        return "\n".join(lines).rstrip() + "\n"
 
     lines.append("## Insights")
     by_cat: dict[str, list[Insight]] = {}
@@ -280,7 +540,11 @@ def build_summary_markdown(
             sources = ", ".join(f"`{s}`" for s in ins.source_paths[:3])
             if len(ins.source_paths) > 3:
                 sources += ", …"
-            lines.append(f"- **[{badge}]** {ins.text} _(sources: {sources})_")
+            hits = f" ×{ins.hit_count}" if ins.hit_count > 1 else ""
+            fix = f"\n  - **Suggested:** {ins.suggested_fix}" if ins.suggested_fix else ""
+            lines.append(
+                f"- **[{badge}] [{ins.pattern_type}]{hits}** {ins.text} _(sources: {sources})_{fix}"
+            )
         lines.append("")
 
     ctr = Counter(i.category for i in insights)
@@ -288,6 +552,62 @@ def build_summary_markdown(
     for cat, n in ctr.most_common():
         lines.append(f"- **{cat}**: {n}")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def build_concise_lessons_summary(run: ReflectionRun) -> str:
+    """Short stdout digest for humans and cron mail — favors recurring items and fixes."""
+
+    lines: list[str] = [
+        f"Lessons ({run.run_id}): scanned {run.files_scanned} file(s); "
+        f"{len(run.insights)} distinct signal(s).",
+    ]
+    for block in run.recurring_from_sessions:
+        if len(lines) >= CONCISE_MAX_LINES:
+            break
+        fix = str(block.get("suggested_fix") or "").strip()
+        tag = str(block.get("pattern_type", "?")).upper()
+        hits = int(block["hits"])
+        text = str(block["text"])
+        if len(text) > 118:
+            text = text[:115] + "..."
+        lines.append(f"- [{tag} ×{hits}] {text}")
+        if fix and len(lines) < CONCISE_MAX_LINES:
+            lines.append(f"  → {fix}")
+
+    for row in run.error_log_highlights:
+        if len(lines) >= CONCISE_MAX_LINES:
+            break
+        n = int(row["occurrences_in_log"])
+        snippet = str(row["normalized_error"])
+        if len(snippet) > 100:
+            snippet = snippet[:97] + "..."
+        lines.append(f"- [ERROR_LOG ×{n}] {snippet}")
+        lesson = str(row.get("lesson") or "").strip()
+        if lesson and len(lines) < CONCISE_MAX_LINES:
+            lines.append(f"  → {lesson[:220]}")
+
+    if len(lines) == 1:
+        errs = [i for i in run.insights if i.pattern_type == "error"]
+        errs.sort(
+            key=lambda x: ({"error": 0, "warning": 1, "info": 2}.get(x.severity, 9), -len(x.text))
+        )
+        for ins in errs:
+            if len(lines) >= CONCISE_MAX_LINES:
+                break
+            t = ins.text if len(ins.text) <= 120 else ins.text[:117] + "..."
+            lines.append(f"- [ERROR] {t}")
+            if ins.suggested_fix and len(lines) < CONCISE_MAX_LINES:
+                lines.append(f"  → {ins.suggested_fix}")
+        for ins in [i for i in run.insights if i.pattern_type == "success"][:2]:
+            if len(lines) >= CONCISE_MAX_LINES:
+                break
+            t = ins.text if len(ins.text) <= 100 else ins.text[:97] + "..."
+            lines.append(f"- [SUCCESS] {t}")
+
+    if len(lines) == 1:
+        lines.append("- No prioritized signals in this window (tune globs or --since-hours).")
+
+    return "\n".join(lines[:CONCISE_MAX_LINES]) + "\n"
 
 
 def weekly_report_path(root: Path, dt: datetime) -> Path:
@@ -334,15 +654,90 @@ def write_insight_artifacts(root: Path, run: ReflectionRun) -> tuple[Path, Path]
     return md_path, json_path
 
 
-def write_latest_pointers(root: Path, md_path: Path, weekly_path: Path) -> None:
+def write_recurring_and_action_artifacts(root: Path, run: ReflectionRun) -> tuple[Path, Path]:
+    """Persist recurring clusters and a short action list for humans and automation."""
+
+    learn = root / LEARNINGS_DIR
+    learn.mkdir(parents=True, exist_ok=True)
+    recurring_path = learn / RECURRING_JSON
+    recurring_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_id": run.run_id,
+                "generated_at_utc": run.finished_at_utc,
+                "recurring_from_sessions": run.recurring_from_sessions,
+                "error_log_highlights": run.error_log_highlights,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    lines: list[str] = [
+        f"# Action items — `{run.run_id}`",
+        "",
+        f"_UTC {run.finished_at_utc}. Prioritize rows below for playbooks, tests, or guardrails._",
+        "",
+    ]
+    if run.recurring_from_sessions:
+        lines.append("## Recurring session clusters")
+        lines.append("")
+        for block in run.recurring_from_sessions[:25]:
+            lines.append(f"### ({block['hits']}×) [{block['pattern_type']}] {block['text'][:260]}")
+            lines.append("")
+            fix = block.get("suggested_fix") or "—"
+            lines.append(f"- **Suggested fix:** {fix}")
+            lines.append("")
+            srcs = block.get("sources") or []
+            if srcs:
+                lines.append("- **Seen in:** " + ", ".join(f"`{s}`" for s in srcs[:8]))
+                lines.append("")
+
+    if run.error_log_highlights:
+        lines.append("## Recurring structured errors (`error_log.json`)")
+        lines.append("")
+        for row in run.error_log_highlights[:18]:
+            lines.append(
+                f"- **{row['occurrences_in_log']}×** [{row.get('category') or '—'}] "
+                f"`{row['normalized_error'][:200]}`"
+            )
+            if row.get("lesson"):
+                lines.append(f"  - **Apply:** {str(row['lesson'])[:360]}")
+            lines.append("")
+
+    if not run.recurring_from_sessions and not run.error_log_highlights:
+        lines.append(
+            "_No recurring clusters this pass; see `insights/` for the full per-run digest._"
+        )
+        lines.append("")
+
+    action_path = learn / ACTION_ITEMS_MD
+    action_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return recurring_path, action_path
+
+
+def write_latest_pointers(
+    root: Path,
+    md_path: Path,
+    weekly_path: Path,
+    *,
+    recurring_json: Path | None = None,
+    action_md: Path | None = None,
+) -> None:
     """Small files for automation consumers."""
 
     ptr = root / LEARNINGS_DIR / "latest.json"
-    data = {
+    data: dict[str, Any] = {
         "insights_md": md_path.relative_to(root).as_posix(),
         "weekly_summary_md": weekly_path.relative_to(root).as_posix(),
         "generated_at_utc": utc_now().replace(microsecond=0).isoformat(),
     }
+    if recurring_json is not None:
+        data["recurring_mistakes_json"] = recurring_json.relative_to(root).as_posix()
+    if action_md is not None:
+        data["action_items_md"] = action_md.relative_to(root).as_posix()
     ptr.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
@@ -441,10 +836,19 @@ def run_reflection(
         insights.extend(read_and_extract(sf, root))
 
     insights = dedupe_insights(insights)
+    recurring = build_recurring_payloads(insights)
+    error_log_highlights = load_error_log_highlights(root)
     insights.sort(key=lambda x: (x.category, x.severity, x.text))
 
     top_sessions = [p.relative_to(root).as_posix() for p in session_files[:20]]
-    summary = build_summary_markdown(started, len(session_files), insights, top_sessions)
+    summary = build_summary_markdown(
+        started,
+        len(session_files),
+        insights,
+        top_sessions,
+        recurring,
+        error_log_highlights,
+    )
 
     finished = utc_now()
     run_id = started.strftime("%Y%m%d_%H%M%S")
@@ -457,14 +861,23 @@ def run_reflection(
         session_files=[p.relative_to(root).as_posix() for p in session_files],
         insights=insights,
         summary_markdown=summary,
+        recurring_from_sessions=recurring,
+        error_log_highlights=error_log_highlights,
     )
 
     if dry_run:
         return run
 
     md_path, _ = write_insight_artifacts(root, run)
+    recurring_path, action_path = write_recurring_and_action_artifacts(root, run)
     weekly_path = update_weekly_summary(root, started, summary)
-    write_latest_pointers(root, md_path, weekly_path)
+    write_latest_pointers(
+        root,
+        md_path,
+        weekly_path,
+        recurring_json=recurring_path,
+        action_md=action_path,
+    )
 
     state["last_run_utc"] = finished.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     state["last_run_id"] = run_id
@@ -488,6 +901,8 @@ def maybe_post_results(run: ReflectionRun, *, dry_run: bool) -> list[str]:
             "started_at": run.started_at_utc,
             "files_scanned": run.files_scanned,
             "insight_count": len(run.insights),
+            "recurring_session_clusters": len(run.recurring_from_sessions),
+            "error_log_clusters": len(run.error_log_highlights),
         },
     }
 
@@ -542,7 +957,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--stdout-summary",
         action="store_true",
-        help="Print the markdown summary to stdout.",
+        help="Print the full markdown summary to stdout (default is a short lessons digest).",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress stdout (keep stderr notices); useful for cron when mail is unwanted.",
     )
     return parser
 
@@ -564,8 +984,11 @@ def main(argv: list[str] | None = None) -> int:
     for line in maybe_post_results(run, dry_run=args.dry_run):
         print(line, file=sys.stderr)
 
-    if args.stdout_summary:
-        print(run.summary_markdown)
+    if not args.quiet:
+        if args.stdout_summary:
+            print(run.summary_markdown)
+        else:
+            print(build_concise_lessons_summary(run), end="")
 
     return 0
 

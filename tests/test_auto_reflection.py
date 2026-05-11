@@ -88,6 +88,11 @@ class AutoReflectionTests(unittest.TestCase):
             self.assertTrue(learnings.exists())
             self.assertTrue((learnings / "insights").exists())
             self.assertTrue((learnings / "summaries").exists())
+            self.assertTrue((learnings / "recurring_mistakes.json").is_file())
+            self.assertTrue((learnings / "action_items.md").is_file())
+            latest = json.loads((learnings / "latest.json").read_text(encoding="utf-8"))
+            self.assertIn("recurring_mistakes_json", latest)
+            self.assertIn("action_items_md", latest)
             md_files = list((learnings / "insights").glob("run_*.md"))
             self.assertEqual(len(md_files), 1)
             body = md_files[0].read_text(encoding="utf-8")
@@ -121,8 +126,82 @@ class AutoReflectionTests(unittest.TestCase):
         self.assertEqual(captured["data"]["text"], "hi")
         self.assertEqual(captured["data"]["meta"]["k"], 1)
 
+    def test_extract_classifies_success_and_correction(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            p = root / "memory" / "run.md"
+            p.parent.mkdir(parents=True)
+            p.write_text(
+                "All tests passed on the integration branch.\n"
+                "Correction: use DATABASE_URL instead of DATABASE_URI for this service.\n",
+                encoding="utf-8",
+            )
+            insights = list(auto_reflection.read_and_extract(p, root))
+        types = {i.pattern_type for i in insights}
+        self.assertIn("success", types)
+        self.assertIn("correction", types)
+
+    def test_error_log_highlights_repeated_entries(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            learn = root / ".learnings"
+            learn.mkdir(parents=True)
+            err = "OpenClaw session crashed after a timeout"
+            learn.joinpath("error_log.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "entries": [
+                            {
+                                "id": "a1",
+                                "timestamp": "2026-01-01T00:00:00Z",
+                                "category": "infra",
+                                "error": err,
+                                "lesson": "Purge stale artifacts before retrying long sessions",
+                                "resolved": False,
+                            },
+                            {
+                                "id": "a2",
+                                "timestamp": "2026-01-02T00:00:00Z",
+                                "category": "infra",
+                                "error": err,
+                                "lesson": "Purge stale artifacts before retrying long sessions",
+                                "resolved": False,
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "logs").mkdir(parents=True)
+            (root / "logs" / "x.log").write_text("Error: something else entirely.\n", encoding="utf-8")
+
+            run = auto_reflection.run_reflection(
+                root, since_hours=24, extra_globs=[], dry_run=False
+            )
+        self.assertTrue(run.error_log_highlights)
+        self.assertEqual(run.error_log_highlights[0]["occurrences_in_log"], 2)
+
 
 class AutoReflectionMainTests(unittest.TestCase):
+    def test_main_prints_concise_lessons_by_default(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "logs").mkdir(parents=True)
+            (root / "logs" / "a.log").write_text("Error: Connection timed out to API\n", encoding="utf-8")
+            (root / "logs" / "b.log").write_text("Error: Connection timed out to API\n", encoding="utf-8")
+
+            stderr = io.StringIO()
+            stdout = io.StringIO()
+            with mock.patch.object(auto_reflection.sys, "stderr", stderr):
+                with mock.patch.object(auto_reflection.sys, "stdout", stdout):
+                    rc = auto_reflection.main(["--root", str(root), "--since-hours", "24"])
+            self.assertEqual(rc, 0)
+            out = stdout.getvalue()
+            self.assertIn("Lessons (", out)
+            self.assertIn("ERROR", out)
+            self.assertIn("×2", out)
+
     def test_main_stderr_posts_log_without_network(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
