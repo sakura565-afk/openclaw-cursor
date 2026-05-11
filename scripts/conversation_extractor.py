@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Extract decisions, learnings, and tool-usage highlights from OpenClaw session transcripts."""
+"""Extract reusable agent-improvement patterns from session transcripts.
+
+Writes tagged records under ``.learnings/`` (JSONL + state for incremental runs),
+with optional markdown/JSON digests under ``memory/``.
+"""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -11,9 +16,28 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from scripts.optimize_context import TURN_PATTERN, read_text, repo_root
+
+SCHEMA_VERSION = 1
+PATTERNS_FILE = "patterns.jsonl"
+STATE_FILE = "conversation_extractor_state.json"
+PATTERN_INDEX_FILE = "pattern_id_index.json"
+
+# Primary ``type`` field values (also duplicated in ``tags`` for queries).
+PATTERN_TYPES = frozenset(
+    {
+        "error_fix",
+        "optimization",
+        "workflow",
+        "decision",
+        "solution",
+        "learning",
+        "tooling",
+        "context",
+    }
+)
 
 # -----------------------------------------------------------------------------
 # Patterns: decisions / commitments / takeaways (English + common mixed usage)
@@ -38,6 +62,50 @@ LEARNING_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"^\s*(?:learning|lesson|takeaway|insight|key\s+learning)\s*[:\-—]\s*(.+)",
         r"^\s*\*{0,2}(?:important|remember|note)\*{0,2}\s*[:\-—]\s*(.+)",
         r"(?:核心价值|关键点|经验教训|结论是|需要注意的是)\s*[：:]\s*(.+)",
+    )
+)
+
+# User pushback / corrections (prefer whole line as body).
+CORRECTION_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"(?:actually|not\s+quite|that'?s\s+wrong|incorrect|i\s+meant|correction)\s*[:\-—]?\s*(.+)",
+        r"(?:no,?\s+(?:that|this|it)|don'?t\s+do\s+that|undo\s+that|revert)\b[.!]?\s*(.*)",
+        r"(?:should\s+be|use\s+\S+\s+instead\s+of|not\s+\S+\s+but)\s+(.+)",
+        r"(?:you\s+(?:misunderstood|missed|ignored))\b[:\-]?\s*(.+)",
+    )
+)
+
+SOLUTION_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"(?:that\s+worked|works\s+now|problem\s+solved|all\s+set|we'?re\s+good)\b[.!]?\s*(.*)",
+        r"(?:tests?\s+pass|CI\s+is\s+green|build\s+is\s+green|merged|shipped)\b[.!]?\s*(.*)",
+        r"(?:successfully|fixed\s+the\s+issue|resolved\s+the\s+(?:issue|bug))\b[.!]?\s*(.*)",
+    )
+)
+
+WORKFLOW_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"(?:always\s+(?:start|begin|do|run)|first\s+step|workflow|playbook|rubric|checklist)\b\s*[:\-—]?\s*(.+)",
+        r"(?:before\s+you\s+|when\s+debugging|when\s+implementing)\b[,:]?\s*(.+)",
+    )
+)
+
+OPTIMIZATION_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"(?:cache|memoiz|batch\s+requests?|paralleliz|reduce\s+tokens|latency|throughput)\b[^.!?]{0,120}",
+        r"(?:O\([^)]+\)|time\s+complexity|memory\s+bloat|hot\s+path)\b[^.!?]{0,120}",
+    )
+)
+
+CONTEXT_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"(?:constraint|must\s+not|never\s+|always\s+enforce|hard\s+requirement)\b\s*[:\-—]?\s*(.+)",
+        r"(?:security|PII|secret|credential)\b[^.!?]{0,160}",
     )
 )
 
@@ -66,6 +134,259 @@ STRUCT_TOOL_KEYS = frozenset(
 
 def utc_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _normalize_key(text: str) -> str:
+    return " ".join(text.strip().lower().split())
+
+
+def pattern_stable_id(source: str, pattern_type: str, summary: str) -> str:
+    payload = json.dumps(
+        {"source": source, "type": pattern_type, "summary": _normalize_key(summary)},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def learnings_dir(workspace: Path, override: Path | None) -> Path:
+    base = (override or (workspace / ".learnings")).resolve()
+    return base
+
+
+def _patterns_path(learnings: Path) -> Path:
+    return learnings / PATTERNS_FILE
+
+
+def _state_path(learnings: Path) -> Path:
+    return learnings / STATE_FILE
+
+
+def _id_index_path(learnings: Path) -> Path:
+    return learnings / PATTERN_INDEX_FILE
+
+
+def _load_json(path: Path, default: Any) -> Any:
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def _atomic_write_json(path: Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def load_pattern_id_index(learnings: Path) -> set[str]:
+    raw = _load_json(_id_index_path(learnings), None)
+    if isinstance(raw, dict) and isinstance(raw.get("ids"), list):
+        return {str(x) for x in raw["ids"] if isinstance(x, str)}
+    return set()
+
+
+def save_pattern_id_index(learnings: Path, ids: set[str]) -> None:
+    _atomic_write_json(_id_index_path(learnings), {"schema_version": SCHEMA_VERSION, "ids": sorted(ids)})
+
+
+def merge_pattern_ids(learnings: Path, new_ids: Iterable[str]) -> set[str]:
+    cur = load_pattern_id_index(learnings)
+    cur.update(new_ids)
+    save_pattern_id_index(learnings, cur)
+    return cur
+
+
+def load_extractor_state(learnings: Path) -> dict[str, Any]:
+    doc = _load_json(_state_path(learnings), {})
+    if not isinstance(doc, dict):
+        return {"schema_version": SCHEMA_VERSION, "sources": {}}
+    doc.setdefault("schema_version", SCHEMA_VERSION)
+    doc.setdefault("sources", {})
+    if not isinstance(doc["sources"], dict):
+        doc["sources"] = {}
+    return doc
+
+
+def save_extractor_state(learnings: Path, state: dict[str, Any]) -> None:
+    _atomic_write_json(_state_path(learnings), state)
+
+
+def append_patterns_jsonl(learnings: Path, records: list[dict[str, Any]]) -> int:
+    if not records:
+        return 0
+    path = _patterns_path(learnings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    return len(records)
+
+
+def iter_patterns_jsonl(learnings: Path) -> Iterable[dict[str, Any]]:
+    path = _patterns_path(learnings)
+    if not path.exists():
+        return
+    with path.open(encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict):
+                yield obj
+
+
+def _truncate(s: str, limit: int) -> str:
+    s = s.strip()
+    if len(s) <= limit:
+        return s
+    return s[: limit - 3] + "..."
+
+
+def _classify_line(
+    line: str,
+    role: str | None,
+) -> list[tuple[str, str, list[str]]]:
+    """Return list of (type, summary, extra_tags) for one line."""
+
+    rl = (role or "").lower()
+    hits: list[tuple[str, str, list[str]]] = []
+
+    def add(pat_type: str, summary: str, tags: list[str]) -> None:
+        summary = _truncate(summary, 400)
+        if len(summary) < 8:
+            return
+        hits.append((pat_type, summary, tags))
+
+    if rl == "user":
+        for pat in CORRECTION_LINE_PATTERNS:
+            m = pat.search(line)
+            if m:
+                cap = (m.group(1) if m.lastindex else m.group(0)).strip() or line.strip()
+                add("error_fix", cap, ["user_correction"])
+                break
+
+    for pat in SOLUTION_LINE_PATTERNS:
+        m = pat.search(line)
+        if m:
+            cap = (m.group(1) if m.lastindex else m.group(0)).strip() or line.strip()
+            add("solution", cap, ["success_signal"])
+            break
+
+    for pat in DECISION_LINE_PATTERNS:
+        m = pat.search(line)
+        if m:
+            cap = (m.group(1) if m.lastindex else m.group(0)).strip()
+            add("decision", cap, [])
+            break
+
+    for pat in LEARNING_LINE_PATTERNS:
+        m = pat.search(line)
+        if m:
+            cap = (m.group(1) if m.lastindex else m.group(0)).strip()
+            add("learning", cap, [])
+            break
+
+    for pat in WORKFLOW_LINE_PATTERNS:
+        m = pat.search(line)
+        if m:
+            cap = (m.group(1) if m.lastindex else m.group(0)).strip() or line.strip()
+            add("workflow", cap, [])
+            break
+
+    for pat in OPTIMIZATION_LINE_PATTERNS:
+        m = pat.search(line)
+        if m:
+            cap = m.group(0).strip()
+            add("optimization", cap, [])
+            break
+
+    for pat in CONTEXT_LINE_PATTERNS:
+        m = pat.search(line)
+        if m:
+            cap = (m.group(1) if m.lastindex else m.group(0)).strip() or line.strip()
+            add("context", cap, [])
+            break
+
+    return hits
+
+
+def extract_patterns_from_segments(
+    segments: list[tuple[int, str | None, str]],
+    source_display: str,
+    *,
+    max_tooling: int = 24,
+) -> list[dict[str, Any]]:
+    """Build persisted pattern dicts aimed at future agent performance."""
+
+    out: list[dict[str, Any]] = []
+    extracted_at = datetime.now(timezone.utc).isoformat()
+    seen_tool: set[str] = set()
+
+    for turn, role, text in segments:
+        rl = (role or "").lower()
+        if rl == "tool":
+            name = normalize_ws(text.replace("[tool:", "").replace("]", "").strip()).split("(", 1)[0].strip()
+            if name and name not in seen_tool and len(seen_tool) < max_tooling:
+                seen_tool.add(name)
+                summary = f"Transcript shows tool invocation: `{name}`"
+                pid = pattern_stable_id(source_display, "tooling", summary)
+                tags = ["tooling", "tool_invocation", name.lower().replace(" ", "_")[:48]]
+                out.append(
+                    {
+                        "id": pid,
+                        "type": "tooling",
+                        "summary": summary,
+                        "body": "",
+                        "turn": turn,
+                        "role": "tool",
+                        "tags": tags,
+                        "source": source_display,
+                        "extracted_at_utc": extracted_at,
+                    }
+                )
+            continue
+
+        if rl == "tool_output":
+            continue
+
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if len(line) < 12:
+                continue
+            for ptype, summary, extra_tags in _classify_line(line, role):
+                tags = list(dict.fromkeys([ptype, *extra_tags]))
+                pid = pattern_stable_id(source_display, ptype, summary)
+                out.append(
+                    {
+                        "id": pid,
+                        "type": ptype,
+                        "summary": summary,
+                        "body": _truncate(line, 800),
+                        "turn": turn,
+                        "role": rl or None,
+                        "tags": tags,
+                        "source": source_display,
+                        "extracted_at_utc": extracted_at,
+                    }
+                )
+
+    return out
 
 
 def _infer_turn(blob: dict[str, Any], index: int) -> int:
@@ -525,7 +846,13 @@ def render_markdown(d: ConversationDigest) -> str:
     else:
         lines.append("- *(no tool mentions parsed)*")
 
-    lines.extend(["", "---", "*OpenClaw conversation_extractor.py — distill session value into `memory/`.*"])
+    lines.extend(
+        [
+            "",
+            "---",
+            "*OpenClaw conversation_extractor.py — patterns in `.learnings/`; optional digest in `memory/`.*",
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -565,58 +892,251 @@ def write_digest(
     return md_path, js_path
 
 
-def run_extraction(session_path: Path, memory_dir: Path, workspace_root: Path) -> tuple[Path, Path]:
+def _relative_source(session_path: Path, workspace_root: Path) -> str:
+    absolute = session_path.resolve().as_posix()
+    root_posix = workspace_root.resolve().as_posix()
+    if absolute.startswith(root_posix):
+        return Path(absolute[len(root_posix) :].lstrip("/")).as_posix()
+    return absolute
+
+
+def run_extraction(
+    session_path: Path,
+    memory_dir: Path,
+    workspace_root: Path,
+) -> tuple[Path, Path]:
     segments = parse_session_log(session_path.resolve())
 
     digest = analyze_segments(segments, session_path.resolve().as_posix())
 
     stem = session_path.stem
-    # prefer session id from parent folder if standard layout .../sessions/foo/session.json
     parent = session_path.parent.name
     if parent and parent not in {".", ""}:
         stem = f"{parent}__{session_path.stem}"
 
-    relative = session_path.resolve().as_posix()
-    workspace_posix = workspace_root.resolve().as_posix()
-    if relative.startswith(workspace_posix):
-        short = Path(relative[len(workspace_posix) :].lstrip("/")).as_posix()
-        digest.source = short
+    digest.source = _relative_source(session_path, workspace_root)
 
     return write_digest(digest, memory_dir, stem)
 
 
+def extract_and_store_patterns(
+    session_path: Path,
+    learnings: Path,
+    workspace_root: Path,
+    *,
+    incremental: bool = True,
+) -> tuple[bool, int, list[dict[str, Any]]]:
+    """Parse transcript, append new patterns to JSONL, update incremental state.
+
+    Returns ``(skipped_incremental, new_count, new_records)``.
+    """
+
+    resolved = session_path.resolve()
+    if not resolved.exists():
+        raise FileNotFoundError(resolved)
+
+    segments = parse_session_log(resolved)
+    source_display = _relative_source(resolved, workspace_root)
+    patterns = extract_patterns_from_segments(segments, source_display)
+
+    state = load_extractor_state(learnings)
+    sources = state.setdefault("sources", {})
+    if not isinstance(sources, dict):
+        sources = {}
+        state["sources"] = sources
+
+    source_key = resolved.as_posix()
+    content_hash = _sha256_file(resolved)
+    if incremental and isinstance(sources.get(source_key), dict):
+        prev = sources[source_key].get("sha256")
+        if isinstance(prev, str) and prev == content_hash:
+            return True, 0, []
+
+    existing_ids = load_pattern_id_index(learnings)
+    new_recs = [p for p in patterns if p["id"] not in existing_ids]
+    append_patterns_jsonl(learnings, new_recs)
+    if new_recs:
+        merge_pattern_ids(learnings, (p["id"] for p in new_recs))
+
+    sources[source_key] = {
+        "sha256": content_hash,
+        "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "relative_source": source_display,
+    }
+    save_extractor_state(learnings, state)
+    return False, len(new_recs), new_recs
+
+
+def query_patterns(
+    learnings: Path,
+    *,
+    keywords: list[str],
+    tags: list[str],
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Filter persisted patterns: any keyword hit (if given) AND any tag/type (if given)."""
+
+    kw = [k.strip().lower() for k in keywords if k and k.strip()]
+    tg = [t.strip().lower() for t in tags if t and t.strip()]
+    out: list[dict[str, Any]] = []
+    for rec in iter_patterns_jsonl(learnings):
+        if not isinstance(rec, dict):
+            continue
+        tags_list = rec.get("tags") if isinstance(rec.get("tags"), list) else []
+        blob = " ".join(
+            [
+                str(rec.get("summary", "")),
+                str(rec.get("body", "")),
+                str(rec.get("source", "")),
+                " ".join(str(x) for x in tags_list),
+            ]
+        ).lower()
+        ptype = str(rec.get("type", "")).lower()
+        rec_tags = [str(x).lower() for x in rec.get("tags") or []] if isinstance(rec.get("tags"), list) else []
+
+        if kw and not any(k in blob for k in kw):
+            continue
+        if tg:
+            if not any(t == ptype or t in rec_tags for t in tg):
+                continue
+        out.append(rec)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _prepend_extract_command(argv: list[str]) -> list[str]:
+    if not argv:
+        return argv
+    if argv[0] in {"extract", "query", "-h", "--help"}:
+        return argv
+    if argv[0] in {"--stdin"}:
+        return ["extract", *argv]
+    if argv[0].startswith("-"):
+        return ["extract", *argv]
+    return ["extract", *argv]
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Extract OpenClaw conversation 精华 into memory/")
-    p.add_argument(
+    p = argparse.ArgumentParser(
+        description="Extract tagged, reusable patterns from agent transcripts into .learnings/",
+    )
+    sub = p.add_subparsers(dest="command", required=True)
+
+    ex = sub.add_parser("extract", help="Parse a transcript and append patterns (optional memory digest).")
+    ex.add_argument(
         "session_log",
         type=Path,
         nargs="?",
-        help="Path to session transcript (.json, .log, or text). Omit with --stdin.",
+        help="Session transcript (.json, .log, or text). Required unless --stdin.",
     )
-    p.add_argument(
+    ex.add_argument(
         "--stdin",
         action="store_true",
-        help="Read transcript JSON/text from stdin (written to a temp file under memory/).",
+        help="Read transcript from stdin (temp file; not incremental).",
     )
-    p.add_argument(
+    ex.add_argument(
+        "--learnings-dir",
+        type=Path,
+        default=None,
+        help="Directory for patterns.jsonl and state (default: <workspace>/.learnings).",
+    )
+    ex.add_argument(
+        "--no-incremental",
+        action="store_true",
+        help="Reprocess even when transcript bytes unchanged.",
+    )
+    ex.add_argument(
+        "--memory-digest",
+        action="store_true",
+        help="Also write markdown + JSON digest under memory/ (legacy summary).",
+    )
+    ex.add_argument(
         "--memory-dir",
         type=Path,
         default=None,
-        help="Destination directory (default: <repo>/memory).",
+        help="Destination for digest when --memory-digest is set (default: <repo>/memory).",
     )
-    p.add_argument(
+    ex.add_argument(
         "--workspace-root",
         type=Path,
         default=None,
-        help="Workspace root for relative paths in output (defaults to repo root).",
+        help="Workspace root for relative paths (default: repository root).",
     )
+
+    qu = sub.add_parser("query", help="Search persisted patterns by keyword and/or tag.")
+    qu.add_argument(
+        "-k",
+        "--keyword",
+        action="append",
+        default=[],
+        help="Substring match on summary/body/source/tags (repeatable; OR logic).",
+    )
+    qu.add_argument(
+        "-t",
+        "--tag",
+        action="append",
+        default=[],
+        help="Match pattern type or any tag (repeatable; OR logic among values).",
+    )
+    qu.add_argument(
+        "--limit",
+        type=int,
+        default=80,
+        help="Maximum rows to print (default: 80).",
+    )
+    qu.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit JSON array instead of human-readable lines.",
+    )
+    qu.add_argument(
+        "--learnings-dir",
+        type=Path,
+        default=None,
+        help="Directory containing patterns.jsonl (default: <workspace>/.learnings).",
+    )
+    qu.add_argument(
+        "--workspace-root",
+        type=Path,
+        default=None,
+        help="Workspace root when resolving default learnings dir.",
+    )
+
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = _prepend_extract_command(list(sys.argv[1:] if argv is None else argv))
     args = build_arg_parser().parse_args(argv)
     ws = (args.workspace_root or repo_root()).resolve()
+    learnings = learnings_dir(ws, getattr(args, "learnings_dir", None))
+
+    if args.command == "query":
+        rows = query_patterns(
+            learnings,
+            keywords=list(args.keyword),
+            tags=list(args.tag),
+            limit=max(1, args.limit),
+        )
+        if args.json:
+            print(json.dumps(rows, indent=2, ensure_ascii=False))
+            return 0
+        if not rows:
+            print("(no matches)")
+            return 0
+        for rec in rows:
+            tid = rec.get("id", "")
+            ptype = rec.get("type", "")
+            summary = rec.get("summary", "")
+            src = rec.get("source", "")
+            print(f"[{tid}] {ptype}: {summary}")
+            print(f"    source={src}")
+        return 0
+
+    # extract
     memory_dir = (args.memory_dir or ws / "memory").resolve()
+    incremental = not args.no_incremental
 
     if args.stdin:
         import tempfile
@@ -624,24 +1144,28 @@ def main(argv: list[str] | None = None) -> int:
         memory_dir.mkdir(parents=True, exist_ok=True)
         payload = sys.stdin.read()
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt", prefix="stdin_session_", dir=memory_dir)
+        path = Path(tmp.name)
         try:
-            path = Path(tmp.name)
             path.write_text(payload, encoding="utf-8")
         finally:
             tmp.close()
 
-        md_path, json_path = run_extraction(path, memory_dir, ws)
         try:
-            path.unlink(missing_ok=True)  # type: ignore[arg-type]
-        except OSError:
-            pass
-
-        print(f"Wrote {md_path.as_posix()}")
-        print(f"Wrote {json_path.as_posix()}")
+            skipped, n_new, _ = extract_and_store_patterns(path, learnings, ws, incremental=False)
+            print(f"Patterns: appended {n_new} new record(s) to {_patterns_path(learnings).as_posix()}")
+            if args.memory_digest:
+                md_path, json_path = run_extraction(path, memory_dir, ws)
+                print(f"Wrote {md_path.as_posix()}")
+                print(f"Wrote {json_path.as_posix()}")
+        finally:
+            try:
+                path.unlink(missing_ok=True)  # type: ignore[arg-type]
+            except OSError:
+                pass
         return 0
 
     if not args.session_log:
-        sys.stderr.write("error: session_log path required unless --stdin is set.\n")
+        sys.stderr.write("error: extract requires session_log or --stdin.\n")
         return 2
 
     sp = args.session_log.resolve()
@@ -649,9 +1173,19 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"error: file not found: {sp}\n")
         return 2
 
-    md_path, json_path = run_extraction(sp, memory_dir, ws)
-    print(f"Wrote {md_path.as_posix()}")
-    print(f"Wrote {json_path.as_posix()}")
+    try:
+        skipped, n_new, _ = extract_and_store_patterns(sp, learnings, ws, incremental=incremental)
+    except OSError as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return 1
+
+    status = "skipped (unchanged transcript; incremental)" if skipped else f"appended {n_new} new pattern(s)"
+    print(f"Patterns [{status}]: {_patterns_path(learnings).as_posix()}")
+
+    if args.memory_digest:
+        md_path, json_path = run_extraction(sp, memory_dir, ws)
+        print(f"Wrote {md_path.as_posix()}")
+        print(f"Wrote {json_path.as_posix()}")
     return 0
 
 
