@@ -10,6 +10,18 @@ from src.dreams.dream_tracker import DreamTracker
 
 
 class DreamTrackerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._prev_ws = os.environ.get("OPENCLAW_WORKSPACE")
+        self._ws_home = tempfile.TemporaryDirectory()
+        self.addCleanup(self._ws_home.cleanup)
+        os.environ["OPENCLAW_WORKSPACE"] = str(Path(self._ws_home.name) / "oc_ws")
+
+    def tearDown(self) -> None:
+        if self._prev_ws is None:
+            os.environ.pop("OPENCLAW_WORKSPACE", None)
+        else:
+            os.environ["OPENCLAW_WORKSPACE"] = self._prev_ws
+
     def make_repo(self):
         temp_dir = tempfile.TemporaryDirectory()
         repo_root = Path(temp_dir.name)

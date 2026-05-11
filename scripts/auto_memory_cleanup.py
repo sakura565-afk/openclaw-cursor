@@ -17,6 +17,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+try:
+    from src.coordination.iskra_kara_shared_memory import notify_kara_from_iskra
+except ImportError:  # pragma: no cover - script used outside package layout
+    notify_kara_from_iskra = None  # type: ignore[misc, assignment]
+
 DEFAULT_MEMORY = Path.home() / ".openclaw" / "workspace" / "MEMORY.md"
 DAILY_DIR = Path.home() / ".openclaw" / "workspace" / "memory"
 CUTOFF_DAYS = 90  # Default: consider entries older than 90 days stale
@@ -287,6 +292,16 @@ def main():
         print(f"  Duplicates merged: {results['duplicates_merged']}")
         
         cleaner.save()
+        if args.auto and not args.dry_run and notify_kara_from_iskra is not None:
+            notify_kara_from_iskra(
+                "memory_cleanup",
+                {
+                    "memory_path": str(args.memory),
+                    "old_entries_removed": results["old_entries_removed"],
+                    "duplicates_merged": results["duplicates_merged"],
+                    "lines_changed": results["lines_changed"],
+                },
+            )
     
     print()
 
