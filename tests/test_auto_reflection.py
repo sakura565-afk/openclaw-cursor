@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import sys
+from collections import Counter
 import tempfile
 import unittest
 from pathlib import Path
@@ -76,6 +77,9 @@ class AutoReflectionTests(unittest.TestCase):
             )
             self.assertFalse((root / ".learnings").exists())
             self.assertGreaterEqual(len(run_dry.insights), 1)
+            self.assertTrue(run_dry.session_clusters)
+            self.assertTrue(run_dry.key_insights)
+            self.assertTrue(run_dry.trend_notes)
 
             run_full = auto_reflection.run_reflection(
                 root,
@@ -88,10 +92,79 @@ class AutoReflectionTests(unittest.TestCase):
             self.assertTrue(learnings.exists())
             self.assertTrue((learnings / "insights").exists())
             self.assertTrue((learnings / "summaries").exists())
+            self.assertTrue((learnings / "reports").exists())
             md_files = list((learnings / "insights").glob("run_*.md"))
             self.assertEqual(len(md_files), 1)
             body = md_files[0].read_text(encoding="utf-8")
             self.assertIn("Lesson learned:", body)
+            self.assertIn("## Session analysis", body)
+            self.assertIn("## Key insights", body)
+            self.assertIn("## Trends", body)
+            rep = list((learnings / "reports").glob("reflection_*.json"))
+            self.assertEqual(len(rep), 1)
+            payload = json.loads(rep[0].read_text(encoding="utf-8"))
+            self.assertEqual(payload.get("schema_version"), auto_reflection.SCHEMA_VERSION)
+            self.assertIn("session_clusters", payload["run"])
+            mem = root / "memory" / "auto_reflection_log.md"
+            self.assertTrue(mem.exists())
+            self.assertIn(run_full.run_id, mem.read_text(encoding="utf-8"))
+
+    def test_cluster_key_for_rel_groups_logs_subdirs(self):
+        self.assertEqual(auto_reflection.cluster_key_for_rel("logs/agents/foo.log"), "logs/agents")
+        self.assertEqual(auto_reflection.cluster_key_for_rel("memory/x.md"), "memory")
+
+    def test_detect_trends_recurring_fingerprints(self):
+        fp = auto_reflection.insight_fingerprint("Error: timeout contacting service")
+        prior = [
+            auto_reflection._PriorRunSnap(
+                run_id="a",
+                fingerprints={fp},
+                category_counts=Counter({"integration": 1}),
+                insight_count=1,
+            ),
+            auto_reflection._PriorRunSnap(
+                run_id="b",
+                fingerprints={fp},
+                category_counts=Counter({"integration": 1}),
+                insight_count=1,
+            ),
+        ]
+        cur = [
+            auto_reflection.Insight(
+                text="Error: timeout contacting service",
+                source_paths=["logs/x/a.log"],
+                severity="warning",
+                category="integration",
+            )
+        ]
+        notes = auto_reflection.detect_trends(cur, prior)
+        self.assertTrue(any("recur" in n.lower() for n in notes))
+
+    def test_pick_key_insights_prefers_lessons_and_errors(self):
+        insights = [
+            auto_reflection.Insight(
+                text="minor note about formatting",
+                source_paths=["logs/a.log"],
+                severity="info",
+                category="general",
+            ),
+            auto_reflection.Insight(
+                text="Lesson learned: always run tests",
+                source_paths=["logs/b.log"],
+                severity="info",
+                category="lesson",
+            ),
+            auto_reflection.Insight(
+                text="Error: build failed",
+                source_paths=["logs/c.log"],
+                severity="error",
+                category="general",
+            ),
+        ]
+        picked = auto_reflection.pick_key_insights(insights, limit=2)
+        texts = [p.text for p in picked]
+        self.assertIn("Lesson learned: always run tests", texts)
+        self.assertIn("Error: build failed", texts)
 
     def test_post_webhook_uses_json_post(self):
         captured: dict[str, object] = {}
