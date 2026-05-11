@@ -540,11 +540,33 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         actions = engine.auto_fix()
         for action in actions:
             print(engine.format_action(action))
+        try:
+            from src.coordination.iskra_kara_shared_memory import notify_kara_from_iskra
+
+            notify_kara_from_iskra(
+                "self_improvement",
+                {
+                    "command": "fix",
+                    "actions": [action.as_dict() for action in actions],
+                },
+            )
+        except Exception:
+            pass
         return 0
 
     digest = engine.generate_weekly_digest()
     print(colorize("Weekly digest generated", Colors.CYAN, engine.color))
     print(digest)
+    try:
+        from src.coordination.iskra_kara_shared_memory import notify_kara_from_iskra
+
+        digest_path = str(engine.log_dir / "weekly_auto_improvement_digest.md")
+        notify_kara_from_iskra(
+            "self_improvement",
+            {"command": "digest", "digest_markdown": digest, "digest_path": digest_path},
+        )
+    except Exception:
+        pass
     return 0
 
 

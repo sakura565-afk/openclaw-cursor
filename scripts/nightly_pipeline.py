@@ -148,6 +148,19 @@ def generate_morning_brief() -> str:
         encoding="utf-8",
     )
 
+    try:
+        from src.coordination.iskra_kara_shared_memory import notify_kara_from_iskra
+
+        notify_kara_from_iskra(
+            "nightly_brief",
+            {
+                "brief_path": str(brief_file),
+                "brief_excerpt": (result or "")[:2000],
+            },
+        )
+    except Exception:
+        pass
+
     return (result or "")[:300]
 
 
