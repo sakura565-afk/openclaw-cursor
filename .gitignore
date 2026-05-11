@@ -2,3 +2,4 @@ logs/sync_obsidian_*.json
 .learnings/
 __pycache__/
 *.py[cod]
+tool_discovery_report.md
