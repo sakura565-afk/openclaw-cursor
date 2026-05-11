@@ -2,9 +2,11 @@
 """
 Cron-friendly self-reflection over recent agent-style logs and session artifacts.
 
-Scans configurable paths for logs and JSON, extracts recurring failure patterns and
-actionable notes, writes structured outputs under `.learnings/`, builds a periodic
-summary, and optionally posts the summary (Telegram or generic webhook).
+Scans configurable paths for logs and JSON, clusters them into session-style groups,
+extracts key insights, compares this run to prior runs for simple trends, writes
+structured JSON reports under `.learnings/reports/`, refreshes `.learnings/insights/`,
+appends a short digest to the memory log (for long-lived agent context), and
+optionally posts the summary (Telegram or generic webhook).
 
 Example crontab (daily at 09:00 UTC):
 
@@ -14,6 +16,8 @@ Environment (all optional unless posting):
 
 - AUTO_REFLECTION_ROOT — workspace root (default: current working directory)
 - AUTO_REFLECTION_SESSION_GLOBS — extra comma-separated glob patterns relative to root
+- AUTO_REFLECTION_MEMORY_LOG — path relative to root for appended reflection digests
+  (default: memory/auto_reflection_log.md); set empty to skip memory updates
 - TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID — post summary via Telegram sendMessage
 - REFLECTION_WEBHOOK_URL — POST JSON {\"text\": \"...\", \"meta\": {...}} to this URL
 """
@@ -37,8 +41,11 @@ from typing import Any, Iterable, Iterator, Sequence
 
 LEARNINGS_DIR = ".learnings"
 INSIGHTS_SUBDIR = "insights"
+REPORTS_SUBDIR = "reports"
 SUMMARIES_SUBDIR = "summaries"
 STATE_NAME = ".state.json"
+DEFAULT_MEMORY_LOG_REL = Path("memory/auto_reflection_log.md")
+SCHEMA_VERSION = 1
 
 DEFAULT_SINCE_HOURS = 24 * 7
 DEFAULT_SESSION_GLOBS = (
@@ -71,6 +78,19 @@ class Insight:
 
 
 @dataclass
+class SessionCluster:
+    """Files grouped by coarse location (e.g. logs/<agent> vs memory)."""
+
+    cluster_id: str
+    files: list[str]
+    file_count: int
+    insight_count: int
+    categories: dict[str, int]
+    severities: dict[str, int]
+    newest_mtime_utc: str | None
+
+
+@dataclass
 class ReflectionRun:
     """Serializable result of one reflection pass."""
 
@@ -81,6 +101,10 @@ class ReflectionRun:
     session_files: list[str]
     insights: list[Insight]
     summary_markdown: str
+    session_clusters: list[SessionCluster] = field(default_factory=list)
+    key_insights: list[Insight] = field(default_factory=list)
+    trend_notes: list[str] = field(default_factory=list)
+    structured_report_relpath: str | None = None
 
 
 def utc_now() -> datetime:
@@ -159,6 +183,219 @@ def normalize_insight_text(line: str) -> str:
 
 def insight_fingerprint(text: str) -> str:
     return hashlib.sha256(text.lower().encode("utf-8")).hexdigest()[:16]
+
+
+def cluster_key_for_rel(rel: str) -> str:
+    """Group paths into stable session-style clusters for trend-friendly rollups."""
+    parts = rel.split("/")
+    if len(parts) >= 2 and parts[0] == "logs":
+        return f"logs/{parts[1]}"
+    return parts[0] if parts else "_"
+
+
+def build_session_clusters(
+    session_paths: Sequence[Path],
+    insights: Sequence[Insight],
+    root: Path,
+) -> list[SessionCluster]:
+    rels = [p.relative_to(root).as_posix() for p in session_paths]
+    by_cluster: dict[str, list[str]] = {}
+    for rel in rels:
+        by_cluster.setdefault(cluster_key_for_rel(rel), []).append(rel)
+
+    def primary_cluster(ins: Insight) -> str:
+        if not ins.source_paths:
+            return "_"
+        return cluster_key_for_rel(ins.source_paths[0])
+
+    insight_counts: dict[str, int] = {k: 0 for k in by_cluster}
+    cat_by: dict[str, Counter[str]] = {k: Counter() for k in by_cluster}
+    sev_by: dict[str, Counter[str]] = {k: Counter() for k in by_cluster}
+
+    for ins in insights:
+        ck = primary_cluster(ins)
+        if ck not in insight_counts:
+            insight_counts[ck] = 0
+            cat_by.setdefault(ck, Counter())
+            sev_by.setdefault(ck, Counter())
+        insight_counts[ck] += 1
+        cat_by[ck][ins.category] += 1
+        sev_by[ck][ins.severity] += 1
+
+    mtime_by_rel: dict[str, float] = {}
+    for p in session_paths:
+        try:
+            mtime_by_rel[p.relative_to(root).as_posix()] = p.stat().st_mtime
+        except OSError:
+            continue
+
+    clusters: list[SessionCluster] = []
+    for cid in sorted(by_cluster.keys()):
+        files = sorted(by_cluster[cid])
+        newest: str | None = None
+        mtimes = [mtime_by_rel[f] for f in files if f in mtime_by_rel]
+        if mtimes:
+            newest = datetime.fromtimestamp(max(mtimes), tz=timezone.utc).replace(microsecond=0).isoformat()
+        clusters.append(
+            SessionCluster(
+                cluster_id=cid,
+                files=files,
+                file_count=len(files),
+                insight_count=insight_counts.get(cid, 0),
+                categories=dict(cat_by.get(cid, Counter())),
+                severities=dict(sev_by.get(cid, Counter())),
+                newest_mtime_utc=newest,
+            )
+        )
+    clusters.sort(key=lambda c: (-c.file_count, c.cluster_id))
+    return clusters
+
+
+def pick_key_insights(insights: Sequence[Insight], limit: int = 12) -> list[Insight]:
+    """Rank insights for executive-style bullets (severity, spread, lesson hints)."""
+    sev_rank = {"error": 0, "warning": 1, "info": 2}
+
+    def score(ins: Insight) -> tuple[int, int, int, str]:
+        bonus = 2 if ins.category == "lesson" else 0
+        spread = len(ins.source_paths)
+        return (-bonus, sev_rank.get(ins.severity, 9), -spread, ins.text.lower())
+
+    ranked = sorted(insights, key=score)
+    return ranked[:limit]
+
+
+@dataclass
+class _PriorRunSnap:
+    run_id: str
+    fingerprints: set[str]
+    category_counts: Counter[str]
+    insight_count: int
+
+
+def _load_prior_run_snapshots(root: Path, *, max_runs: int) -> list[_PriorRunSnap]:
+    d = root / LEARNINGS_DIR / INSIGHTS_SUBDIR
+    if not d.is_dir():
+        return []
+    snaps: list[_PriorRunSnap] = []
+    for path in sorted(d.glob("run_*.json"), key=lambda p: p.name, reverse=True):
+        try:
+            raw = path.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except (OSError, json.JSONDecodeError):
+            continue
+        rid = str(data.get("run_id") or path.stem.replace("run_", ""))
+        items = data.get("insights") or []
+        fps: set[str] = set()
+        cats: Counter[str] = Counter()
+        for item in items:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                fps.add(insight_fingerprint(item["text"]))
+                cats[str(item.get("category") or "general")] += 1
+        snaps.append(_PriorRunSnap(run_id=rid, fingerprints=fps, category_counts=cats, insight_count=len(items)))
+        if len(snaps) >= max_runs:
+            break
+    return snaps
+
+
+def detect_trends(insights: Sequence[Insight], prior: Sequence[_PriorRunSnap]) -> list[str]:
+    """Lightweight cross-run signals for cron-sized windows (no ML)."""
+    notes: list[str] = []
+    if not prior:
+        notes.append("No prior reflection runs on disk yet; trends will populate after the next scheduled passes.")
+        return notes
+
+    cur_fps = {insight_fingerprint(i.text) for i in insights}
+    cur_cat = Counter(i.category for i in insights)
+
+    union_prior_fp: set[str] = set()
+    for s in prior:
+        union_prior_fp |= s.fingerprints
+    cat_keys = set(cur_cat.keys())
+    for s in prior:
+        cat_keys |= set(s.category_counts.keys())
+
+    avg_cat: dict[str, float] = {}
+    for cat in cat_keys:
+        vals = [s.category_counts.get(cat, 0) for s in prior]
+        avg_cat[cat] = sum(vals) / max(len(vals), 1)
+
+    for cat, n in cur_cat.most_common(5):
+        avg = avg_cat.get(cat, 0.0)
+        if n >= avg + 2 and n >= 3:
+            notes.append(f"Category **{cat}** is above recent average (now {n}, avg {avg:.1f} over prior runs).")
+
+    recurring = [fp for fp in cur_fps if sum(1 for s in prior if fp in s.fingerprints) >= 2]
+    if recurring:
+        notes.append(f"{len(recurring)} insight theme(s) recur across multiple prior runs (stable hotspots).")
+
+    new_only = cur_fps - union_prior_fp
+    if new_only and cur_fps:
+        notes.append(f"{len(new_only)} new distinct signal(s) compared to merged history of prior runs.")
+
+    if not insights and prior:
+        avg_ins = sum(s.insight_count for s in prior) / len(prior)
+        if avg_ins >= 2:
+            notes.append(f"Quiet window: no extracted signals this run; prior average was {avg_ins:.1f} insights.")
+
+    if not notes:
+        notes.append("Activity mix is in line with recent reflection runs; no strong drift detected.")
+    return notes
+
+
+def append_memory_digest(
+    root: Path,
+    *,
+    run: ReflectionRun,
+    memory_relpath: Path | None,
+) -> Path | None:
+    """Append a compact digest so agent memory picks up recurring context."""
+    if memory_relpath is None:
+        return None
+    path = (root / memory_relpath).resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    bullets = [f"- {i.text}" for i in run.key_insights[:8]]
+    if not bullets:
+        bullets = ["- _No ranked key insights this pass._"]
+    trend_lines = [f"- {t}" for t in run.trend_notes[:6]]
+    cluster_lines = [
+        f"- `{c.cluster_id}`: {c.file_count} file(s), {c.insight_count} insight(s)"
+        for c in run.session_clusters[:10]
+    ]
+    if not cluster_lines:
+        cluster_lines = ["- _No clustered session files._"]
+    report = run.structured_report_relpath or "(see .learnings/insights/)"
+    block = (
+        f"\n## Auto-reflection `{run.run_id}` ({run.started_at_utc})\n\n"
+        f"- Structured report: `{report}`\n"
+        f"- Files scanned: {run.files_scanned}, distinct insights: {len(run.insights)}\n\n"
+        "### Key insights\n"
+        + "\n".join(bullets)
+        + "\n\n### Trends\n"
+        + "\n".join(trend_lines)
+        + "\n\n### Session clusters\n"
+        + "\n".join(cluster_lines)
+        + "\n"
+    )
+    prev = ""
+    if path.exists():
+        prev = path.read_text(encoding="utf-8")
+        if run.run_id in prev:
+            return path
+    path.write_text(prev.rstrip() + block, encoding="utf-8")
+    return path
+
+
+def write_structured_report(root: Path, run: ReflectionRun) -> Path:
+    """Machine-readable report for automation and dashboards."""
+    rep_dir = root / LEARNINGS_DIR / REPORTS_SUBDIR
+    rep_dir.mkdir(parents=True, exist_ok=True)
+    path = rep_dir / f"reflection_{run.run_id}.json"
+    body = {
+        "schema_version": SCHEMA_VERSION,
+        "run": asdict(run),
+    }
+    path.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+    return path
 
 
 def extract_insights_from_text(path: Path, root: Path, raw: str) -> Iterator[Insight]:
@@ -247,6 +484,10 @@ def build_summary_markdown(
     files_scanned: int,
     insights: Sequence[Insight],
     top_sessions: Sequence[str],
+    *,
+    session_clusters: Sequence[SessionCluster] | None = None,
+    key_insights: Sequence[Insight] | None = None,
+    trend_notes: Sequence[str] | None = None,
 ) -> str:
     lines = [
         f"# Reflection summary ({run_at.date().isoformat()} UTC)",
@@ -255,6 +496,33 @@ def build_summary_markdown(
         f"- Distinct insights: **{len(insights)}**",
         "",
     ]
+    if session_clusters:
+        lines.append("## Session analysis (clusters)")
+        for c in session_clusters[:20]:
+            sev_bits = ", ".join(f"{k}:{v}" for k, v in sorted(c.severities.items(), key=lambda kv: -kv[1])[:4])
+            cat_bits = ", ".join(f"{k}:{v}" for k, v in sorted(c.categories.items(), key=lambda kv: -kv[1])[:4])
+            tail = f"; severities: {sev_bits}" if sev_bits else ""
+            cat_part = f"; categories: {cat_bits}" if cat_bits else ""
+            mt = f"; newest UTC mtime: `{c.newest_mtime_utc}`" if c.newest_mtime_utc else ""
+            lines.append(
+                f"- **`{c.cluster_id}`** — {c.file_count} file(s), {c.insight_count} insight(s){mt}{cat_part}{tail}"
+            )
+        lines.append("")
+
+    if trend_notes:
+        lines.append("## Trends (vs prior reflection runs)")
+        for note in trend_notes:
+            lines.append(f"- {note}")
+        lines.append("")
+
+    if key_insights:
+        lines.append("## Key insights")
+        rank = {"error": 0, "warning": 1, "info": 2}
+        for ins in sorted(key_insights, key=lambda i: (rank.get(i.severity, 9), i.text.lower())):
+            badge = ins.severity.upper()
+            lines.append(f"- **[{badge}] [{ins.category}]** {ins.text}")
+        lines.append("")
+
     if top_sessions:
         lines.append("## Recently touched logs")
         for p in top_sessions[:15]:
@@ -334,15 +602,22 @@ def write_insight_artifacts(root: Path, run: ReflectionRun) -> tuple[Path, Path]
     return md_path, json_path
 
 
-def write_latest_pointers(root: Path, md_path: Path, weekly_path: Path) -> None:
+def write_latest_pointers(
+    root: Path,
+    md_path: Path,
+    weekly_path: Path,
+    report_path: Path | None = None,
+) -> None:
     """Small files for automation consumers."""
 
     ptr = root / LEARNINGS_DIR / "latest.json"
-    data = {
+    data: dict[str, Any] = {
         "insights_md": md_path.relative_to(root).as_posix(),
         "weekly_summary_md": weekly_path.relative_to(root).as_posix(),
         "generated_at_utc": utc_now().replace(microsecond=0).isoformat(),
     }
+    if report_path is not None:
+        data["structured_report_json"] = report_path.relative_to(root).as_posix()
     ptr.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
@@ -402,6 +677,16 @@ def post_telegram_summary(token: str, chat_id: str, text: str) -> tuple[bool, st
     return True, last_msg or "ok"
 
 
+def resolve_memory_log_rel() -> Path | None:
+    """Relative path under root for digest appends; None disables updates."""
+    if "AUTO_REFLECTION_MEMORY_LOG" in os.environ:
+        v = os.environ["AUTO_REFLECTION_MEMORY_LOG"].strip()
+        if not v:
+            return None
+        return Path(v)
+    return DEFAULT_MEMORY_LOG_REL
+
+
 def collect_globs(extra: Sequence[str]) -> tuple[str, ...]:
     merged = list(DEFAULT_SESSION_GLOBS)
     env_extra = os.environ.get("AUTO_REFLECTION_SESSION_GLOBS", "")
@@ -443,11 +728,25 @@ def run_reflection(
     insights = dedupe_insights(insights)
     insights.sort(key=lambda x: (x.category, x.severity, x.text))
 
+    prior_snaps = _load_prior_run_snapshots(root, max_runs=8)
+    clusters = build_session_clusters(session_files, insights, root)
+    key_ranked = pick_key_insights(insights, limit=12)
+    trend_notes = detect_trends(insights, prior_snaps)
+
     top_sessions = [p.relative_to(root).as_posix() for p in session_files[:20]]
-    summary = build_summary_markdown(started, len(session_files), insights, top_sessions)
+    summary = build_summary_markdown(
+        started,
+        len(session_files),
+        insights,
+        top_sessions,
+        session_clusters=clusters,
+        key_insights=key_ranked,
+        trend_notes=trend_notes,
+    )
 
     finished = utc_now()
     run_id = started.strftime("%Y%m%d_%H%M%S")
+    report_rel = f"{LEARNINGS_DIR}/{REPORTS_SUBDIR}/reflection_{run_id}.json"
 
     run = ReflectionRun(
         run_id=run_id,
@@ -457,14 +756,22 @@ def run_reflection(
         session_files=[p.relative_to(root).as_posix() for p in session_files],
         insights=insights,
         summary_markdown=summary,
+        session_clusters=clusters,
+        key_insights=key_ranked,
+        trend_notes=trend_notes,
+        structured_report_relpath=report_rel,
     )
 
     if dry_run:
         return run
 
     md_path, _ = write_insight_artifacts(root, run)
+    report_path = write_structured_report(root, run)
     weekly_path = update_weekly_summary(root, started, summary)
-    write_latest_pointers(root, md_path, weekly_path)
+    write_latest_pointers(root, md_path, weekly_path, report_path)
+
+    mem_rel = resolve_memory_log_rel()
+    append_memory_digest(root, run=run, memory_relpath=mem_rel)
 
     state["last_run_utc"] = finished.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     state["last_run_id"] = run_id
@@ -488,6 +795,10 @@ def maybe_post_results(run: ReflectionRun, *, dry_run: bool) -> list[str]:
             "started_at": run.started_at_utc,
             "files_scanned": run.files_scanned,
             "insight_count": len(run.insights),
+            "session_clusters": len(run.session_clusters),
+            "key_insight_count": len(run.key_insights),
+            "trend_note_count": len(run.trend_notes),
+            "structured_report": run.structured_report_relpath,
         },
     }
 
