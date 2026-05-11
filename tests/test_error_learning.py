@@ -63,16 +63,63 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertIn("Duplicate entry detected", second_stdout)
 
         store = self.read_store()
-        self.assertEqual(store["schema_version"], 1)
+        self.assertEqual(store["schema_version"], error_learning.SCHEMA_VERSION)
         self.assertEqual(len(store["entries"]), 1)
 
         entry = store["entries"][0]
         self.assertEqual(
             set(entry.keys()),
-            {"id", "timestamp", "category", "error", "lesson", "resolved"},
+            {
+                "id",
+                "timestamp",
+                "category",
+                "error",
+                "lesson",
+                "resolved",
+                "file",
+                "line",
+                "error_type",
+                "user_correction",
+                "task_context",
+            },
         )
         self.assertEqual(entry["category"], "runtime_error")
+        self.assertEqual(entry["error_type"], "runtime_error")
         self.assertTrue(entry["resolved"])
+        self.assertIsNone(entry["file"])
+        self.assertIsNone(entry["line"])
+
+    def test_add_with_context_and_patterns_json(self) -> None:
+        code1, out1, err1 = self.run_cli(
+            "add",
+            "lint",
+            "Missing import for Path",
+            "Run ruff and add missing imports before committing",
+            "--file",
+            "scripts/foo.py",
+            "--line",
+            "12",
+            "--error-type",
+            "import_error",
+            "--user-correction",
+            "Add `from pathlib import Path`",
+            "--task-context",
+            "Refactor file utilities",
+        )
+        self.assertEqual(code1, 0, err1)
+        self.assertIn("Saved", out1)
+
+        code2, out2, err2 = self.run_cli(
+            "patterns",
+            "--by",
+            "file_line",
+            "--top",
+            "5",
+            "--json",
+        )
+        self.assertEqual(code2, 0, err2)
+        data = json.loads(out2)
+        self.assertTrue(any(row["key"] == "scripts/foo.py:12" for row in data))
 
     def test_list_command_outputs_colorized_entries_and_status(self) -> None:
         error_learning.add_entry(
@@ -99,6 +146,7 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertIn("[open]", stdout)
         self.assertIn("Lesson:", stdout)
         self.assertIn("Error:", stdout)
+        self.assertIn("Type:", stdout)
 
     def test_stats_and_search_surface_relevant_entries(self) -> None:
         error_learning.add_entry(
@@ -131,6 +179,105 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertEqual(search_stderr, "")
         self.assertIn("JSON payload was truncated", search_stdout)
         self.assertNotIn("cold restart", search_stdout)
+
+    def test_log_conversation_error_and_retrieve_relevant_errors(self) -> None:
+        error_learning.log_conversation_error(
+            self.log_path,
+            category="agent",
+            error="Used deprecated API for file reads",
+            lesson="Prefer pathlib read_text with explicit encoding",
+            error_type="api_misuse",
+            file="src/tools.py",
+            line=44,
+            user_correction="Use Path.read_text(encoding='utf-8')",
+            task_context="Harden file IO helpers",
+        )
+        found = error_learning.retrieve_relevant_errors(
+            self.log_path,
+            "Refactor file IO and pathlib usage",
+            limit=5,
+        )
+        self.assertTrue(found)
+        self.assertIn("deprecated API", found[0]["error"])
+        self.assertEqual(found[0]["file"], "src/tools.py")
+        self.assertEqual(found[0]["line"], 44)
+
+    def test_append_lessons_to_prompt_injects_block(self) -> None:
+        error_learning.add_entry(
+            self.log_path,
+            "style",
+            "Inconsistent quote style in Python edits",
+            "Match the file's existing quote style (single vs double)",
+            task_context="Python formatting pass",
+        )
+        base = "You are a coding agent.\n"
+        out = error_learning.append_lessons_to_prompt(
+            base,
+            "Format Python sources consistently",
+            self.log_path,
+            limit=3,
+        )
+        self.assertIn("Prior mistakes to avoid", out)
+        self.assertIn("quote style", out.lower())
+
+    def test_append_lessons_to_prompt_no_match_returns_unchanged(self) -> None:
+        error_learning.add_entry(
+            self.log_path,
+            "network",
+            "DNS lookup failed for internal registry",
+            "Retry with the VPN connected",
+        )
+        base = "Short system prompt"
+        out = error_learning.append_lessons_to_prompt(
+            base,
+            "completely unrelated knitting patterns",
+            self.log_path,
+            limit=3,
+            min_score=0.9,
+        )
+        self.assertEqual(out, base)
+
+    def test_v1_store_migrates_on_load(self) -> None:
+        legacy = {
+            "schema_version": 1,
+            "entries": [
+                {
+                    "id": "abc123def456",
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "category": "test_cat",
+                    "error": "Something broke",
+                    "lesson": "Do the fix",
+                    "resolved": True,
+                }
+            ],
+        }
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.log_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+        store = error_learning.load_store(self.log_path)
+        self.assertEqual(store["schema_version"], error_learning.SCHEMA_VERSION)
+        ent = error_learning.validate_entry(store["entries"][0])
+        self.assertEqual(ent["error_type"], "test_cat")
+        self.assertIsNone(ent["file"])
+        self.assertEqual(ent["user_correction"], "")
+
+    def test_prompt_append_cli(self) -> None:
+        error_learning.add_entry(
+            self.log_path,
+            "build",
+            "Linker could not find -lfoo",
+            "Install libfoo-dev or drop the optional feature flag",
+            task_context="Compile native extension",
+        )
+        code, out, err = self.run_cli(
+            "prompt-append",
+            "Build the C extension with optional libfoo",
+            "--task-context",
+            "native extension compile with libfoo",
+        )
+        self.assertEqual(code, 0, err)
+        self.assertIn("Build the C extension", out)
+        self.assertIn("Prior mistakes", out)
 
 
 if __name__ == "__main__":
