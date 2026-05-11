@@ -1,4 +1,4 @@
-"""Tests for scripts.auto_reflection."""
+"""Tests for root ``auto_reflection`` module."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-MODULE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "auto_reflection.py"
+MODULE_PATH = Path(__file__).resolve().parent.parent / "auto_reflection.py"
 SPEC = importlib.util.spec_from_file_location("auto_reflection", MODULE_PATH)
 auto_reflection = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
@@ -23,25 +23,25 @@ class AutoReflectionTests(unittest.TestCase):
     def test_dedupe_insights_collapses_near_duplicates(self):
         a = auto_reflection.Insight(
             text="Error: timeout",
-            source_paths=["logs/a.log"],
+            source_paths=["memory/a.md"],
             severity="warning",
             category="integration",
         )
         b = auto_reflection.Insight(
             text="Error: timeout",
-            source_paths=["logs/b.log"],
+            source_paths=["memory/b.md"],
             severity="error",
             category="general",
         )
         out = auto_reflection.dedupe_insights([a, b])
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0].severity, "error")
-        self.assertEqual(set(out[0].source_paths), {"logs/a.log", "logs/b.log"})
+        self.assertEqual(set(out[0].source_paths), {"memory/a.md", "memory/b.md"})
 
     def test_extract_from_json_walks_nested_errors(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            log_path = root / "logs" / "agent.json"
+            log_path = root / "memory" / "agent.json"
             log_path.parent.mkdir(parents=True)
             log_path.write_text(
                 json.dumps(
@@ -58,11 +58,12 @@ class AutoReflectionTests(unittest.TestCase):
         texts = [i.text.lower() for i in insights]
         self.assertTrue(any("traceback" in t for t in texts))
 
-    def test_run_reflection_writes_learnings_and_skips_writes_on_dry_run(self):
+    def test_run_reflection_writes_memory_reflection_and_skips_writes_on_dry_run(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            (root / "logs").mkdir(parents=True)
-            (root / "logs" / "run.log").write_text(
+            mem = root / "memory"
+            mem.mkdir(parents=True)
+            (mem / "session.md").write_text(
                 "Lesson learned: verify API keys before deploying.\n"
                 "Fatal: database migration failed.\n",
                 encoding="utf-8",
@@ -74,7 +75,7 @@ class AutoReflectionTests(unittest.TestCase):
                 extra_globs=[],
                 dry_run=True,
             )
-            self.assertFalse((root / ".learnings").exists())
+            self.assertFalse((root / "memory" / "reflection").exists())
             self.assertGreaterEqual(len(run_dry.insights), 1)
 
             run_full = auto_reflection.run_reflection(
@@ -84,14 +85,29 @@ class AutoReflectionTests(unittest.TestCase):
                 dry_run=False,
             )
             self.assertGreater(run_full.files_scanned, 0)
-            learnings = root / ".learnings"
-            self.assertTrue(learnings.exists())
-            self.assertTrue((learnings / "insights").exists())
-            self.assertTrue((learnings / "summaries").exists())
-            md_files = list((learnings / "insights").glob("run_*.md"))
-            self.assertEqual(len(md_files), 1)
-            body = md_files[0].read_text(encoding="utf-8")
+            refl = root / "memory" / "reflection"
+            self.assertTrue(refl.exists())
+            latest = refl / "latest.md"
+            self.assertTrue(latest.exists())
+            body = latest.read_text(encoding="utf-8")
             self.assertIn("Lesson learned:", body)
+            self.assertIn("Action items", body)
+            self.assertTrue((refl / auto_reflection.SCHEDULE_NAME).exists())
+
+    def test_self_reflection_cron_analyze_session_classifies(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            p = root / "memory" / "run.md"
+            p.parent.mkdir(parents=True)
+            p.write_text(
+                "OK pipeline finished.\nError: disk full.\nFixed by clearing cache.\n",
+                encoding="utf-8",
+            )
+            cron = auto_reflection.SelfReflectionCron(root, since_hours=24)
+            analysis = cron.analyze_session(p)
+        self.assertTrue(any("disk" in e.lower() for e in analysis.errors))
+        self.assertTrue(analysis.successes)
+        self.assertTrue(analysis.corrections)
 
     def test_post_webhook_uses_json_post(self):
         captured: dict[str, object] = {}
@@ -126,8 +142,9 @@ class AutoReflectionMainTests(unittest.TestCase):
     def test_main_stderr_posts_log_without_network(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            (root / "logs").mkdir(parents=True)
-            (root / "logs" / "x.log").write_text("Error: something failed.\n")
+            mem = root / "memory"
+            mem.mkdir(parents=True)
+            (mem / "x.md").write_text("Error: something failed.\n")
 
             stderr = io.StringIO()
             stdout = io.StringIO()
@@ -145,7 +162,7 @@ class AutoReflectionMainTests(unittest.TestCase):
             self.assertEqual(rc, 0)
             err = stderr.getvalue()
             self.assertIn("No REFLECTION_WEBHOOK_URL", err)
-            self.assertIn("Reflection summary", stdout.getvalue())
+            self.assertIn("Window ending", stdout.getvalue())
 
 
 if __name__ == "__main__":
