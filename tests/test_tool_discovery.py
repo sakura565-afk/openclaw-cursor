@@ -197,6 +197,86 @@ class ToolDiscoveryTests(unittest.TestCase):
         self.assertEqual(payload["goal"], "send notification")
         self.assertEqual(len(payload["suggestions"]), 1)
 
+    def test_build_full_index_includes_python_and_markdown(self) -> None:
+        root = self._build_repo()
+        skills_dir = root / "src" / "skills"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "alert_skill.py").write_text(
+            '"""Watch for alerts."""\nimport json\ndef run():\n    pass\n',
+            encoding="utf-8",
+        )
+        skill_md = root / "nested" / "SKILL.md"
+        skill_md.parent.mkdir(parents=True)
+        skill_md.write_text(
+            "---\nname: Demo Skill\ndescription: Send demo notifications\ncapabilities:\n  - messaging\n---\n\nBody.\n",
+            encoding="utf-8",
+        )
+        data = tool_discovery.build_full_index(root)
+        kinds = {e["kind"] for e in data["entries"]}
+        self.assertIn("skill_module", kinds)
+        self.assertIn("skill_markdown", kinds)
+        self.assertTrue(data["keyword_index"])
+
+    def test_search_index_matches_keywords(self) -> None:
+        data: dict = {
+            "entries": [
+                {
+                    "id": "a",
+                    "kind": "script",
+                    "name": "notify_tool",
+                    "path": "scripts/notify_tool.py",
+                    "description": "send alerts",
+                    "search_text": "notify_tool send alerts telegram network",
+                }
+            ]
+        }
+        hits = tool_discovery.search_index(data, "send telegram", limit=5)
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["id"], "a")
+        self.assertGreater(hits[0]["match_score"], 0)
+
+    def test_main_search_prints_json(self) -> None:
+        root = self._build_repo()
+        (root / "scripts" / "queue_watch.py").write_text(
+            textwrap.dedent(
+                '''
+                """Monitor queues."""
+                import json
+                def watch():
+                    return 1
+                '''
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        buffer = io.StringIO()
+        previous = sys.stdout
+        try:
+            sys.stdout = buffer
+            exit_code = tool_discovery.main(
+                ["--root", str(root), "search", "monitor queue", "--limit", "5"]
+            )
+        finally:
+            sys.stdout = previous
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(buffer.getvalue())
+        self.assertIn("matches", payload)
+        self.assertTrue(payload["matches"])
+
+    def test_main_index_writes_json_file(self) -> None:
+        root = self._build_repo()
+        (root / "scripts" / "tiny_tool.py").write_text(
+            "'''One-liner.'''\n",
+            encoding="utf-8",
+        )
+        out = root / "idx.json"
+        code = tool_discovery.main(["--root", str(root), "index", "-o", str(out)])
+        self.assertEqual(code, 0)
+        self.assertTrue(out.exists())
+        payload = json.loads(out.read_text(encoding="utf-8"))
+        self.assertEqual(payload["version"], tool_discovery.INDEX_VERSION)
+        self.assertTrue(any(e["name"] == "tiny_tool" for e in payload["entries"]))
+
 
 if __name__ == "__main__":
     unittest.main()
