@@ -49,7 +49,7 @@ class ErrorLearningTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(first_stderr, "")
-        self.assertIn("Saved error learning entry.", first_stdout)
+        self.assertIn("Saved agent error entry.", first_stdout)
 
         exit_code, second_stdout, second_stderr = self.run_cli(
             "add",
@@ -63,31 +63,45 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertIn("Duplicate entry detected", second_stdout)
 
         store = self.read_store()
-        self.assertEqual(store["schema_version"], 1)
+        self.assertEqual(store["schema_version"], 2)
         self.assertEqual(len(store["entries"]), 1)
 
         entry = store["entries"][0]
         self.assertEqual(
             set(entry.keys()),
-            {"id", "timestamp", "category", "error", "lesson", "resolved"},
+            {"id", "timestamp", "error_type", "message", "context", "suggested_fix"},
         )
-        self.assertEqual(entry["category"], "runtime_error")
-        self.assertTrue(entry["resolved"])
+        self.assertEqual(entry["error_type"], "runtime_error")
+        self.assertEqual(entry["context"], {})
 
-    def test_list_command_outputs_colorized_entries_and_status(self) -> None:
+    def test_add_with_context_json(self) -> None:
+        exit_code, stdout, stderr = self.run_cli(
+            "add",
+            "tool_error",
+            "Tool raised an exception",
+            "Validate inputs before invocation",
+            "--context",
+            '{"tool":"grep","exit_code":1}',
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn("Saved agent error entry.", stdout)
+        entry = self.read_store()["entries"][0]
+        self.assertEqual(entry["context"], {"tool": "grep", "exit_code": 1})
+
+    def test_list_command_outputs_colorized_entries(self) -> None:
         error_learning.add_entry(
             self.log_path,
             "warning",
             "Disk space dropped below the safe threshold",
             "Purge stale artifacts before retrying long sessions",
-            resolved=False,
+            context={"volume": "/data"},
         )
         error_learning.add_entry(
             self.log_path,
             "parser_error",
             "Structured output parser rejected an unterminated block",
             "Validate fenced blocks before handing them to the parser",
-            resolved=True,
         )
 
         exit_code, stdout, stderr = self.run_cli("list")
@@ -96,9 +110,9 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertEqual(stderr, "")
         self.assertIn("\033[", stdout)
         self.assertIn("warning", stdout)
-        self.assertIn("[open]", stdout)
-        self.assertIn("Lesson:", stdout)
-        self.assertIn("Error:", stdout)
+        self.assertIn("Suggested fix:", stdout)
+        self.assertIn("Message:", stdout)
+        self.assertIn("Context:", stdout)
 
     def test_stats_and_search_surface_relevant_entries(self) -> None:
         error_learning.add_entry(
@@ -131,6 +145,33 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertEqual(search_stderr, "")
         self.assertIn("JSON payload was truncated", search_stdout)
         self.assertNotIn("cold restart", search_stdout)
+
+    def test_journal_record(self) -> None:
+        journal = error_learning.AgentErrorJournal(self.log_path)
+        entry, created = journal.record(
+            error_type="x",
+            message="m",
+            suggested_fix="f",
+            context={"a": 1},
+        )
+        self.assertTrue(created)
+        self.assertEqual(entry["error_type"], "x")
+        self.assertEqual(journal.entries()[0]["id"], entry["id"])
+
+    def test_demo_runs_cleanly(self) -> None:
+        buf_out = io.StringIO()
+        buf_err = io.StringIO()
+        env = dict(os.environ)
+        env.pop("NO_COLOR", None)
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch("sys.stdout", buf_out), mock.patch(
+            "sys.stderr", buf_err
+        ):
+            code = error_learning.main(["demo"])
+        self.assertEqual(code, 0)
+        self.assertEqual(buf_err.getvalue(), "")
+        out = buf_out.getvalue()
+        self.assertIn("Demo complete", out)
+        self.assertIn("validation_error", out)
 
 
 if __name__ == "__main__":
