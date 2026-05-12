@@ -3,8 +3,9 @@
 Cron-friendly self-reflection over recent agent-style logs and session artifacts.
 
 Scans configurable paths for logs and JSON, extracts recurring failure patterns and
-actionable notes, writes structured outputs under `.learnings/`, builds a periodic
-summary, and optionally posts the summary (Telegram or generic webhook).
+actionable notes, writes structured outputs under `.learnings/` (including date-named
+`YYYY-MM-DD.md` / `YYYY-MM-DD.json`, per-run files under `insights/`, and weekly
+summaries), and optionally posts the summary (Telegram or generic webhook).
 
 Example crontab (daily at 09:00 UTC):
 
@@ -334,13 +335,73 @@ def write_insight_artifacts(root: Path, run: ReflectionRun) -> tuple[Path, Path]
     return md_path, json_path
 
 
-def write_latest_pointers(root: Path, md_path: Path, weekly_path: Path) -> None:
+def write_dated_daily_learnings(root: Path, run: ReflectionRun, run_at: datetime) -> tuple[Path, Path]:
+    """Append or create `.learnings/YYYY-MM-DD.{md,json}` for cron-friendly date-stamped artifacts."""
+
+    learnings = root / LEARNINGS_DIR
+    learnings.mkdir(parents=True, exist_ok=True)
+    day = run_at.date().isoformat()
+    md_path = learnings / f"{day}.md"
+    json_path = learnings / f"{day}.json"
+
+    section_lines = [
+        f"## Reflection run {run.started_at_utc}",
+        "",
+        f"- Run ID: `{run.run_id}`",
+        f"- Files scanned: **{run.files_scanned}**",
+        f"- Distinct insights: **{len(run.insights)}**",
+        "",
+        run.summary_markdown,
+    ]
+    section = "\n".join(section_lines).rstrip() + "\n"
+
+    if md_path.exists():
+        existing = md_path.read_text(encoding="utf-8")
+        if run.started_at_utc in existing:
+            pass
+        else:
+            md_path.write_text(existing.rstrip() + "\n\n---\n\n" + section, encoding="utf-8")
+    else:
+        md_path.write_text(f"# Daily reflections — {day} (UTC)\n\n" + section, encoding="utf-8")
+
+    runs: list[dict[str, Any]] = []
+    if json_path.exists():
+        try:
+            prior = json.loads(json_path.read_text(encoding="utf-8"))
+            if isinstance(prior, dict) and isinstance(prior.get("runs"), list):
+                runs = [r for r in prior["runs"] if isinstance(r, dict)]
+        except (json.JSONDecodeError, OSError):
+            runs = []
+
+    new_entry = asdict(run)
+    if not any(isinstance(r, dict) and r.get("run_id") == run.run_id for r in runs):
+        runs.append(new_entry)
+
+    doc = {
+        "date_utc": day,
+        "updated_at_utc": utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "runs": runs,
+    }
+    json_path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    return md_path, json_path
+
+
+def write_latest_pointers(
+    root: Path,
+    md_path: Path,
+    weekly_path: Path,
+    *,
+    daily_md: Path,
+    daily_json: Path,
+) -> None:
     """Small files for automation consumers."""
 
     ptr = root / LEARNINGS_DIR / "latest.json"
     data = {
         "insights_md": md_path.relative_to(root).as_posix(),
         "weekly_summary_md": weekly_path.relative_to(root).as_posix(),
+        "daily_md": daily_md.relative_to(root).as_posix(),
+        "daily_json": daily_json.relative_to(root).as_posix(),
         "generated_at_utc": utc_now().replace(microsecond=0).isoformat(),
     }
     ptr.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -463,8 +524,9 @@ def run_reflection(
         return run
 
     md_path, _ = write_insight_artifacts(root, run)
+    daily_md, daily_json = write_dated_daily_learnings(root, run, started)
     weekly_path = update_weekly_summary(root, started, summary)
-    write_latest_pointers(root, md_path, weekly_path)
+    write_latest_pointers(root, md_path, weekly_path, daily_md=daily_md, daily_json=daily_json)
 
     state["last_run_utc"] = finished.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     state["last_run_id"] = run_id

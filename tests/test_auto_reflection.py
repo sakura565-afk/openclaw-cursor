@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import sys
+from datetime import datetime
 import tempfile
 import unittest
 from pathlib import Path
@@ -92,6 +93,12 @@ class AutoReflectionTests(unittest.TestCase):
             self.assertEqual(len(md_files), 1)
             body = md_files[0].read_text(encoding="utf-8")
             self.assertIn("Lesson learned:", body)
+            day = datetime.fromisoformat(run_full.started_at_utc.replace("Z", "+00:00")).date().isoformat()
+            self.assertTrue((learnings / f"{day}.md").exists())
+            self.assertTrue((learnings / f"{day}.json").exists())
+            daily = json.loads((learnings / f"{day}.json").read_text(encoding="utf-8"))
+            self.assertEqual(daily.get("date_utc"), day)
+            self.assertTrue(any(r.get("run_id") == run_full.run_id for r in daily.get("runs", [])))
 
     def test_post_webhook_uses_json_post(self):
         captured: dict[str, object] = {}
