@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import io
 import json
+import shutil
 import sys
 import tempfile
 import textwrap
@@ -20,182 +20,100 @@ class ToolDiscoveryTests(unittest.TestCase):
         tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
         root = Path(tempdir.name)
-        scripts_dir = root / "scripts"
-        scripts_dir.mkdir(parents=True, exist_ok=True)
-        (scripts_dir / "__init__.py").write_text('"""scripts"""', encoding="utf-8")
+        (root / "logs").mkdir(parents=True, exist_ok=True)
+        (root / ".learnings").mkdir(parents=True, exist_ok=True)
         return root
 
-    def test_analyze_scripts_infers_capabilities_and_dependencies(self) -> None:
+    def test_normalize_tool_name_strips_noise(self) -> None:
+        self.assertEqual(tool_discovery.normalize_tool_name("functions.read_file"), "read_file")
+        self.assertEqual(tool_discovery.normalize_tool_name("  Bash(x) "), "Bash")
+
+    def test_main_writes_tool_discovery_markdown(self) -> None:
         root = self._build_repo()
-        (root / "scripts" / "queue_monitor.py").write_text(
-            textwrap.dedent(
-                """
-                import argparse
-                import json
-                import requests
-                import subprocess
-
-                def monitor_queue():
-                    return 1
-
-                def parse_args():
-                    parser = argparse.ArgumentParser()
-                    subs = parser.add_subparsers(dest="cmd")
-                    subs.add_parser("watch")
-                    subs.add_parser("report")
-                    return parser.parse_args()
-                """
-            ).strip()
-            + "\n",
-            encoding="utf-8",
-        )
-        (root / "scripts" / "queue_analytics.py").write_text(
-            textwrap.dedent(
-                """
-                import argparse
-                import json
-                import pathlib
-
-                def build_report():
-                    return {}
-
-                def parse_args():
-                    parser = argparse.ArgumentParser()
-                    subs = parser.add_subparsers(dest="cmd")
-                    subs.add_parser("report")
-                    return parser.parse_args()
-                """
-            ).strip()
-            + "\n",
-            encoding="utf-8",
+        session = {
+            "messages": [
+                {"role": "user", "content": "open a file"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"function": {"name": "read_file"}}],
+                },
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"function": {"name": "read_file"}}],
+                },
+            ]
+        }
+        (root / "logs" / "sample.json").write_text(json.dumps(session), encoding="utf-8")
+        (root / ".learnings" / "notes.md").write_text(
+            "We should try invoking tool `grep` next.\n", encoding="utf-8"
         )
 
-        profiles = tool_discovery.analyze_scripts(root)
-        by_name = {profile.name: profile for profile in profiles}
-        self.assertIn("queue_monitor", by_name)
-        self.assertIn("queue_analytics", by_name)
-        self.assertEqual(by_name["queue_monitor"].risk_level, "high")
-        self.assertIn("Queue orchestration", by_name["queue_monitor"].capabilities)
-        self.assertIn("queue_analytics", by_name["queue_monitor"].dependencies)
+        out = root / ".learnings" / "tool_discovery.md"
+        code = tool_discovery.main(["--root", str(root), "--output", str(out)])
+        self.assertEqual(code, 0)
+        text = out.read_text(encoding="utf-8")
+        self.assertIn("read_file", text)
+        self.assertIn("grep", text)
+        self.assertIn("Tool-chain opportunities", text)
 
-    def test_generate_markdown_includes_examples_and_dependencies(self) -> None:
-        profile = tool_discovery.ToolProfile(
-            name="sync_obsidian",
-            path=Path("scripts/sync_obsidian.py"),
-            description="Sync Obsidian notes",
-            commands=["sync"],
-            capabilities=["Data synchronization"],
-            io_profile=["filesystem", "network"],
-            dependencies=["telegram_sender"],
-            examples=["python -m scripts.sync_obsidian sync"],
-        )
-
-        markdown = tool_discovery.generate_markdown([profile])
-        self.assertIn("### Example usage", markdown)
-        self.assertIn("telegram_sender", markdown)
-        self.assertIn("python -m scripts.sync_obsidian sync", markdown)
-
-    def test_suggest_tools_returns_contextual_reasoning(self) -> None:
-        profiles = [
-            tool_discovery.ToolProfile(
-                name="queue_manager",
-                path=Path("scripts/queue_manager.py"),
-                description="Manage queue workload",
-                commands=["list", "watch"],
-                capabilities=["Queue orchestration", "Monitoring and observability"],
-                io_profile=["filesystem"],
-                dependencies=["memory_analytics"],
-            ),
-            tool_discovery.ToolProfile(
-                name="telegram_sender",
-                path=Path("scripts/telegram_sender.py"),
-                description="Send notifications",
-                commands=["send"],
-                capabilities=["Messaging and notifications"],
-                io_profile=["network"],
-            ),
-        ]
-
-        suggestions = tool_discovery.suggest_tools(
-            profiles,
-            goal="monitor queue latency and generate report",
-            context="need safe local file logs",
-            top_n=2,
-        )
-        self.assertEqual(len(suggestions), 2)
-        self.assertEqual(suggestions[0]["tool"], "queue_manager")
-        reasons = " ".join(suggestions[0]["reasoning"])
-        self.assertIn("Capability match", reasons)
-        self.assertIn("I/O fit", reasons)
-
-    def test_main_docs_command_writes_file(self) -> None:
+    def test_unused_skill_surfaces_when_catalog_present(self) -> None:
         root = self._build_repo()
-        (root / "scripts" / "tiny_tool.py").write_text(
+        shutil.copy2(ROOT / "tool_discovery.py", root / "tool_discovery.py")
+        skill_dir = root / "skills" / "phantom_skill"
+        skill_dir.mkdir(parents=True)
+        skill_dir.joinpath("SKILL.md").write_text(
             textwrap.dedent(
                 """
-                import argparse
-
-                def parse_args():
-                    parser = argparse.ArgumentParser()
-                    subs = parser.add_subparsers(dest="cmd")
-                    subs.add_parser("run")
-                    return parser.parse_args()
+                ---
+                name: phantom-skill-xyz
+                id: phantom-skill-xyz
+                description: Never referenced in transcripts.
+                ---
+                Body.
                 """
             ).strip()
             + "\n",
             encoding="utf-8",
         )
-        output_path = root / "docs" / "tools.md"
-        exit_code = tool_discovery.main(
-            ["--root", str(root), "docs", "--output", str(output_path)]
+        (root / "logs" / "tiny.json").write_text(
+            json.dumps({"messages": [{"role": "user", "content": "hello"}]}),
+            encoding="utf-8",
         )
+        out = root / ".learnings" / "out.md"
+        tool_discovery.main(["--root", str(root), "--output", str(out)])
+        body = out.read_text(encoding="utf-8")
+        self.assertIn("phantom-skill-xyz", body)
+        self.assertIn("Possibly unused", body)
 
-        self.assertEqual(exit_code, 0)
-        self.assertTrue(output_path.exists())
-        self.assertIn("tiny_tool", output_path.read_text(encoding="utf-8"))
-
-    def test_main_suggest_prints_json(self) -> None:
+    def test_bigram_read_file_pair_triggers_chain_section(self) -> None:
         root = self._build_repo()
-        (root / "scripts" / "notify_tool.py").write_text(
-            textwrap.dedent(
-                """
-                import argparse
-                import requests
-
-                def parse_args():
-                    parser = argparse.ArgumentParser()
-                    subs = parser.add_subparsers(dest="cmd")
-                    subs.add_parser("send")
-                    return parser.parse_args()
-                """
-            ).strip()
-            + "\n",
-            encoding="utf-8",
-        )
-
-        buffer = io.StringIO()
-        previous = sys.stdout
-        try:
-            sys.stdout = buffer
-            exit_code = tool_discovery.main(
-                [
-                    "--root",
-                    str(root),
-                    "suggest",
-                    "send notification",
-                    "--context",
-                    "api webhook",
-                    "--top",
-                    "1",
-                ]
-            )
-        finally:
-            sys.stdout = previous
-
-        self.assertEqual(exit_code, 0)
-        payload = json.loads(buffer.getvalue())
-        self.assertEqual(payload["goal"], "send notification")
-        self.assertEqual(len(payload["suggestions"]), 1)
+        session = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"function": {"name": "read_file"}}],
+                },
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"function": {"name": "read_file"}}],
+                },
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"function": {"name": "read_file"}}],
+                },
+            ]
+        }
+        (root / "logs" / "chain.json").write_text(json.dumps(session), encoding="utf-8")
+        out = root / ".learnings" / "out.md"
+        tool_discovery.main(["--root", str(root), "--output", str(out)])
+        body = out.read_text(encoding="utf-8")
+        self.assertIn("read_file", body)
+        self.assertIn("→", body)
 
 
 if __name__ == "__main__":
