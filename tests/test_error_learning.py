@@ -20,7 +20,7 @@ class ErrorLearningTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.root = Path(self.tempdir.name)
-        self.log_path = self.root / ".learnings" / "error_log.json"
+        self.log_path = self.root / ".learnings" / "agent_errors.json"
 
     def tearDown(self) -> None:
         self.tempdir.cleanup()
@@ -49,7 +49,7 @@ class ErrorLearningTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(first_stderr, "")
-        self.assertIn("Saved error learning entry.", first_stdout)
+        self.assertIn("Saved agent error entry.", first_stdout)
 
         exit_code, second_stdout, second_stderr = self.run_cli(
             "add",
@@ -63,16 +63,33 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertIn("Duplicate entry detected", second_stdout)
 
         store = self.read_store()
-        self.assertEqual(store["schema_version"], 1)
+        self.assertEqual(store["schema_version"], error_learning.SCHEMA_VERSION)
         self.assertEqual(len(store["entries"]), 1)
 
         entry = store["entries"][0]
         self.assertEqual(
             set(entry.keys()),
-            {"id", "timestamp", "category", "error", "lesson", "resolved"},
+            {"id", "timestamp", "error_type", "message", "context", "suggested_fix", "resolved"},
         )
-        self.assertEqual(entry["category"], "runtime_error")
+        self.assertEqual(entry["error_type"], "runtime_error")
+        self.assertEqual(entry["context"], {})
         self.assertTrue(entry["resolved"])
+
+    def test_add_with_context_json(self) -> None:
+        exit_code, stdout, stderr = self.run_cli(
+            "add",
+            "api_error",
+            "Rate limit exceeded",
+            "Backoff exponentially and reduce concurrency.",
+            "--context",
+            '{"endpoint":"/v1/chat","status":429}',
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        entry = self.read_store()["entries"][0]
+        self.assertEqual(entry["context"], {"endpoint": "/v1/chat", "status": 429})
+        self.assertIn("Context:", stdout)
+        self.assertIn("/v1/chat", stdout)
 
     def test_list_command_outputs_colorized_entries_and_status(self) -> None:
         error_learning.add_entry(
@@ -97,8 +114,8 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertIn("\033[", stdout)
         self.assertIn("warning", stdout)
         self.assertIn("[open]", stdout)
-        self.assertIn("Lesson:", stdout)
-        self.assertIn("Error:", stdout)
+        self.assertIn("Suggested fix:", stdout)
+        self.assertIn("Message:", stdout)
 
     def test_stats_and_search_surface_relevant_entries(self) -> None:
         error_learning.add_entry(
@@ -131,6 +148,34 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertEqual(search_stderr, "")
         self.assertIn("JSON payload was truncated", search_stdout)
         self.assertNotIn("cold restart", search_stdout)
+
+    def test_legacy_v1_entries_load_and_validate(self) -> None:
+        legacy = {
+            "schema_version": 1,
+            "entries": [
+                {
+                    "id": "abc",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "category": "old_cat",
+                    "error": "old message",
+                    "lesson": "old lesson",
+                    "resolved": True,
+                }
+            ],
+        }
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.log_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+        store = error_learning.load_store(self.log_path)
+        entry = error_learning.validate_entry(store["entries"][0])
+        self.assertEqual(entry["error_type"], "old_cat")
+        self.assertEqual(entry["message"], "old message")
+        self.assertEqual(entry["suggested_fix"], "old lesson")
+        self.assertEqual(entry["context"], {})
+
+    def test_demo_exits_zero(self) -> None:
+        code = error_learning.run_demo()
+        self.assertEqual(code, 0)
 
 
 if __name__ == "__main__":

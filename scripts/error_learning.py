@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture and learn from recurring OpenClaw session errors."""
+"""Track agent errors for learning: timestamp, type, message, context, suggested fix (JSON store)."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 from collections import Counter
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
@@ -15,8 +16,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_LOG_PATH = ROOT / ".learnings" / "error_log.json"
-SCHEMA_VERSION = 1
+DEFAULT_LOG_PATH = ROOT / ".learnings" / "agent_errors.json"
+SCHEMA_VERSION = 2
 ANSI = {
     "reset": "\033[0m",
     "bold": "\033[1m",
@@ -29,7 +30,7 @@ FALLBACK_CATEGORY_COLORS = ("red", "yellow", "green")
 
 
 class ErrorLearningError(RuntimeError):
-    """Raised when the error learning log cannot be read or written."""
+    """Raised when the error log cannot be read or written."""
 
 
 def colorize(text: str, color: str) -> str:
@@ -49,10 +50,10 @@ def normalize_text(text: str) -> str:
     return " ".join(text.strip().lower().split())
 
 
-def category_color(category: str) -> str:
-    """Choose a stable display color for a category name."""
+def category_color(label: str) -> str:
+    """Choose a stable display color for an error type label."""
 
-    normalized = normalize_text(category)
+    normalized = normalize_text(label)
     if any(token in normalized for token in ("lesson", "resolved", "fix", "success")):
         return "green"
     if any(token in normalized for token in ("warn", "warning", "caution")):
@@ -63,28 +64,49 @@ def category_color(category: str) -> str:
     return FALLBACK_CATEGORY_COLORS[digest % len(FALLBACK_CATEGORY_COLORS)]
 
 
-def canonical_payload(category: str, error: str, lesson: str, resolved: bool) -> dict[str, object]:
+def _migrate_legacy_entry_fields(entry: dict[str, object]) -> None:
+    """Normalize v1 field names (category/error/lesson) into v2 in place."""
+
+    if "error_type" not in entry and isinstance(entry.get("category"), str):
+        entry["error_type"] = entry.pop("category")
+    if "message" not in entry and isinstance(entry.get("error"), str):
+        entry["message"] = entry.pop("error")
+    if "suggested_fix" not in entry and isinstance(entry.get("lesson"), str):
+        entry["suggested_fix"] = entry.pop("lesson")
+
+
+def canonical_payload(
+    error_type: str,
+    message: str,
+    suggested_fix: str,
+    context: dict[str, object],
+    resolved: bool,
+) -> dict[str, object]:
     """Return a normalized payload used for IDs and deduplication."""
 
+    ctx_norm = json.dumps(context, sort_keys=True, separators=(",", ":"))
     return {
-        "category": normalize_text(category),
-        "error": normalize_text(error),
-        "lesson": normalize_text(lesson),
+        "error_type": normalize_text(error_type),
+        "message": normalize_text(message),
+        "suggested_fix": normalize_text(suggested_fix),
+        "context": ctx_norm,
         "resolved": bool(resolved),
     }
 
 
 def build_entry(
-    category: str,
-    error: str,
-    lesson: str,
+    error_type: str,
+    message: str,
+    suggested_fix: str,
     *,
+    context: dict[str, object] | None = None,
     resolved: bool = True,
     timestamp: str | None = None,
 ) -> dict[str, object]:
     """Create a log entry that matches the JSON schema."""
 
-    payload = canonical_payload(category, error, lesson, resolved)
+    ctx: dict[str, object] = dict(context) if context else {}
+    payload = canonical_payload(error_type, message, suggested_fix, ctx, resolved)
     digest = hashlib.sha1(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:12]
@@ -92,9 +114,10 @@ def build_entry(
     return {
         "id": digest,
         "timestamp": created_at,
-        "category": category.strip(),
-        "error": error.strip(),
-        "lesson": lesson.strip(),
+        "error_type": error_type.strip(),
+        "message": message.strip(),
+        "context": ctx,
+        "suggested_fix": suggested_fix.strip(),
         "resolved": bool(resolved),
     }
 
@@ -105,30 +128,53 @@ def default_store() -> dict[str, object]:
     return {"schema_version": SCHEMA_VERSION, "entries": []}
 
 
+def _parse_context_arg(raw: str | None) -> dict[str, object]:
+    if raw is None or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ErrorLearningError(f"Invalid JSON for --context: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ErrorLearningError("--context must be a JSON object.")
+    return parsed
+
+
 def validate_entry(raw_entry: object) -> dict[str, object]:
-    """Validate a single persisted entry and normalize minor omissions."""
+    """Validate a single persisted entry and normalize legacy rows."""
 
     if not isinstance(raw_entry, dict):
         raise ErrorLearningError("Each entry in the error log must be a JSON object.")
 
-    entry = dict(raw_entry)
-    required_text_fields = ("timestamp", "category", "error", "lesson")
-    for field in required_text_fields:
+    entry: dict[str, object] = dict(raw_entry)
+    _migrate_legacy_entry_fields(entry)
+
+    required_text = ("timestamp", "error_type", "message", "suggested_fix")
+    for field in required_text:
         value = entry.get(field)
         if not isinstance(value, str) or not value.strip():
             raise ErrorLearningError(f"Entry field '{field}' must be a non-empty string.")
+
+    ctx = entry.get("context", {})
+    if ctx is None:
+        entry["context"] = {}
+    elif isinstance(ctx, dict):
+        entry["context"] = dict(ctx)
+    else:
+        raise ErrorLearningError("Entry field 'context' must be a JSON object.")
 
     resolved = entry.get("resolved", False)
     if not isinstance(resolved, bool):
         raise ErrorLearningError("Entry field 'resolved' must be a boolean.")
 
-    if not isinstance(entry.get("id"), str) or not entry["id"].strip():
+    if not isinstance(entry.get("id"), str) or not str(entry["id"]).strip():
         entry["id"] = build_entry(
-            entry["category"],
-            entry["error"],
-            entry["lesson"],
+            str(entry["error_type"]),
+            str(entry["message"]),
+            str(entry["suggested_fix"]),
+            context=entry["context"] if isinstance(entry["context"], dict) else {},
             resolved=resolved,
-            timestamp=entry["timestamp"],
+            timestamp=str(entry["timestamp"]),
         )["id"]
     entry["resolved"] = resolved
     return entry
@@ -140,8 +186,12 @@ def load_store(log_path: Path) -> dict[str, object]:
     if not log_path.exists():
         return default_store()
 
+    text = log_path.read_text(encoding="utf-8").strip()
+    if not text:
+        return default_store()
+
     try:
-        raw = json.loads(log_path.read_text(encoding="utf-8"))
+        raw = json.loads(text)
     except json.JSONDecodeError as exc:
         raise ErrorLearningError(f"Unable to parse JSON from {log_path}: {exc}") from exc
 
@@ -156,8 +206,9 @@ def load_store(log_path: Path) -> dict[str, object]:
     if not isinstance(raw_entries, list):
         raise ErrorLearningError("Error log field 'entries' must be a JSON array.")
 
+    schema_v = int(raw.get("schema_version", SCHEMA_VERSION))
     return {
-        "schema_version": int(raw.get("schema_version", SCHEMA_VERSION)),
+        "schema_version": max(schema_v, SCHEMA_VERSION),
         "entries": [validate_entry(item) for item in raw_entries],
     }
 
@@ -166,39 +217,46 @@ def save_store(log_path: Path, store: dict[str, object]) -> None:
     """Persist the error log to disk."""
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_path.write_text(json.dumps(store, indent=2) + "\n", encoding="utf-8")
+    out = dict(store)
+    out["schema_version"] = SCHEMA_VERSION
+    log_path.write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
 
 
 def entries_match(left: dict[str, object], right: dict[str, object]) -> bool:
-    """Return True when two entries are the same learning."""
+    """Return True when two entries represent the same learning."""
 
     if left.get("id") == right.get("id"):
         return True
+    lctx = left["context"] if isinstance(left.get("context"), dict) else {}
+    rctx = right["context"] if isinstance(right.get("context"), dict) else {}
     return canonical_payload(
-        str(left["category"]),
-        str(left["error"]),
-        str(left["lesson"]),
+        str(left["error_type"]),
+        str(left["message"]),
+        str(left["suggested_fix"]),
+        lctx,
         bool(left["resolved"]),
     ) == canonical_payload(
-        str(right["category"]),
-        str(right["error"]),
-        str(right["lesson"]),
+        str(right["error_type"]),
+        str(right["message"]),
+        str(right["suggested_fix"]),
+        rctx,
         bool(right["resolved"]),
     )
 
 
 def add_entry(
     log_path: Path,
-    category: str,
-    error: str,
-    lesson: str,
+    error_type: str,
+    message: str,
+    suggested_fix: str,
     *,
+    context: dict[str, object] | None = None,
     resolved: bool = True,
 ) -> tuple[dict[str, object], bool]:
-    """Add an error learning entry unless it already exists."""
+    """Append an error entry unless an equivalent one already exists."""
 
     store = load_store(log_path)
-    new_entry = build_entry(category, error, lesson, resolved=resolved)
+    new_entry = build_entry(error_type, message, suggested_fix, context=context, resolved=resolved)
     entries = store["entries"]
     assert isinstance(entries, list)
     for entry in entries:
@@ -215,19 +273,22 @@ def add_entry(
 def format_entry(entry: dict[str, object]) -> str:
     """Render a single entry for console output."""
 
-    category = str(entry["category"])
+    error_type = str(entry["error_type"])
     resolved = bool(entry["resolved"])
     status_text = "resolved" if resolved else "open"
     status_color = "green" if resolved else "yellow"
+    ctx = entry.get("context", {})
+    ctx_preview = json.dumps(ctx, ensure_ascii=False) if isinstance(ctx, dict) and ctx else "{}"
     lines = [
         (
-            f"{colorize(category, category_color(category))} "
+            f"{colorize(error_type, category_color(error_type))} "
             f"{colorize(f'[{status_text}]', status_color)} "
             f"{colorize(str(entry['timestamp']), 'cyan')}"
         ),
         f"  {colorize('ID:', 'yellow')} {entry['id']}",
-        f"  {colorize('Error:', 'red')} {entry['error']}",
-        f"  {colorize('Lesson:', 'green')} {entry['lesson']}",
+        f"  {colorize('Message:', 'red')} {entry['message']}",
+        f"  {colorize('Context:', 'cyan')} {ctx_preview}",
+        f"  {colorize('Suggested fix:', 'green')} {entry['suggested_fix']}",
     ]
     return "\n".join(lines)
 
@@ -248,20 +309,20 @@ def print_entries(entries: list[dict[str, object]], *, heading: str) -> None:
 
 
 def print_stats(entries: list[dict[str, object]]) -> None:
-    """Print category-level frequency stats."""
+    """Print error-type frequency stats."""
 
-    print(colorize("Error Learning Stats", "bold"))
-    print(colorize("====================", "cyan"))
+    print(colorize("Agent error stats", "bold"))
+    print(colorize("=================", "cyan"))
     if not entries:
         print(colorize("No entries found.", "yellow"))
         return
 
-    counts = Counter(str(entry["category"]) for entry in entries)
+    counts = Counter(str(entry["error_type"]) for entry in entries)
     total = len(entries)
-    for category, count in sorted(counts.items(), key=lambda item: (-item[1], item[0].lower())):
+    for err_type, count in sorted(counts.items(), key=lambda item: (-item[1], item[0].lower())):
         share = (count / total) * 100
         print(
-            f"- {colorize(category, category_color(category))}: "
+            f"- {colorize(err_type, category_color(err_type))}: "
             f"{colorize(str(count), 'red')} "
             f"({share:.1f}%)"
         )
@@ -271,8 +332,17 @@ def search_score(query: str, entry: dict[str, object]) -> float:
     """Score how relevant an entry is to a search query."""
 
     normalized_query = normalize_text(query)
+    ctx = entry.get("context", {})
+    ctx_str = json.dumps(ctx, sort_keys=True) if isinstance(ctx, dict) else ""
     haystack = normalize_text(
-        " ".join((str(entry["category"]), str(entry["error"]), str(entry["lesson"])))
+        " ".join(
+            (
+                str(entry["error_type"]),
+                str(entry["message"]),
+                str(entry["suggested_fix"]),
+                ctx_str,
+            )
+        )
     )
     if not normalized_query:
         return 0.0
@@ -297,48 +367,105 @@ def search_entries(entries: list[dict[str, object]], query: str, limit: int = 10
     return [entry for _, entry in ranked[:limit]]
 
 
+def run_demo(*, log_path: Path | None = None) -> int:
+    """
+    Demo: record sample agent errors to a temp JSON file, then list them.
+
+    Usage as a library: ``error_learning.run_demo()``; CLI: ``python scripts/error_learning.py demo``.
+    """
+    path = log_path
+    own_temp = False
+    if path is None:
+        fd, name = tempfile.mkstemp(prefix="agent_errors_demo_", suffix=".json")
+        os.close(fd)
+        path = Path(name)
+        own_temp = True
+
+    try:
+        add_entry(
+            path,
+            "ToolTimeout",
+            "Shell command exceeded block_until_ms and was moved to background.",
+            "Increase block_until_ms for long-running commands or split the work.",
+            context={"tool": "shell", "hint": "ollama pull"},
+        )
+        add_entry(
+            path,
+            "ParseError",
+            "Model returned markdown instead of strict JSON.",
+            "Ask for fenced JSON only and validate with json.loads before use.",
+            context={"task": "structured_extract", "model": "local"},
+            resolved=False,
+        )
+        store = load_store(path)
+        entries = store["entries"]
+        assert isinstance(entries, list)
+        validated = [validate_entry(e) for e in entries]
+        print(colorize("Demo: agent error log (JSON)", "bold"))
+        print(colorize(f"File: {path}", "cyan"))
+        print()
+        print_entries(validated, heading="Recorded entries")
+        print()
+        print(colorize("Raw JSON excerpt (first entry):", "bold"))
+        if validated:
+            excerpt = {k: validated[0][k] for k in ("timestamp", "error_type", "message", "context", "suggested_fix")}
+            print(json.dumps(excerpt, indent=2, ensure_ascii=False))
+        return 0
+    finally:
+        if own_temp and path is not None and path.exists():
+            path.unlink(missing_ok=True)
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments."""
 
-    parser = argparse.ArgumentParser(description="Capture and learn from OpenClaw errors.")
+    parser = argparse.ArgumentParser(
+        description="Track agent errors (timestamp, type, message, context, suggested fix) in JSON."
+    )
     parser.add_argument(
         "--log-path",
         type=Path,
         default=DEFAULT_LOG_PATH,
-        help="Path to the error learning JSON log.",
+        help="Path to the agent errors JSON log.",
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    add_parser = subparsers.add_parser("add", help="Add a new error learning entry.")
-    add_parser.add_argument("error_category", help="High-level category for the error.")
-    add_parser.add_argument("error_message", help="Error message or failure summary.")
-    add_parser.add_argument("lesson_learned", help="Lesson learned from the failure.")
+    add_parser = subparsers.add_parser("add", help="Add a new error entry.")
+    add_parser.add_argument("error_type", help="Error classification (e.g. ToolTimeout, ParseError).")
+    add_parser.add_argument("message", help="Error message or short description.")
+    add_parser.add_argument("suggested_fix", help="Suggested remediation for future runs.")
+    add_parser.add_argument(
+        "--context",
+        default=None,
+        help='Optional JSON object string, e.g. \'{"tool":"shell","cwd":"/tmp"}\'',
+    )
     resolved_group = add_parser.add_mutually_exclusive_group()
     resolved_group.add_argument(
         "--resolved",
         dest="resolved",
         action="store_true",
         default=True,
-        help="Mark the entry as resolved (default).",
+        help="Mark resolved (default).",
     )
     resolved_group.add_argument(
         "--unresolved",
         dest="resolved",
         action="store_false",
-        help="Mark the entry as still open.",
+        help="Mark still open.",
     )
 
-    subparsers.add_parser("list", help="List all learned errors.")
-    subparsers.add_parser("stats", help="Show error frequency by category.")
+    subparsers.add_parser("list", help="List all entries.")
+    subparsers.add_parser("stats", help="Show counts by error_type.")
+    subparsers.add_parser("demo", help="Run an in-memory/temp-file demo (no confirmation).")
 
-    search_parser = subparsers.add_parser("search", help="Search for relevant past errors.")
+    search_parser = subparsers.add_parser("search", help="Search past errors.")
     search_parser.add_argument("query", help="Search query.")
     search_parser.add_argument(
         "--limit",
         type=int,
         default=10,
-        help="Maximum number of matching entries to print.",
+        help="Maximum number of matches to print.",
     )
     return parser.parse_args(argv)
 
@@ -348,6 +475,9 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parse_args(argv)
     try:
+        if args.command == "demo":
+            return run_demo()
+
         store = load_store(args.log_path)
     except ErrorLearningError as exc:
         print(colorize(str(exc), "red"), file=sys.stderr)
@@ -358,11 +488,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "add":
         try:
+            ctx = _parse_context_arg(getattr(args, "context", None))
             entry, created = add_entry(
                 args.log_path,
-                args.error_category,
-                args.error_message,
-                args.lesson_learned,
+                args.error_type,
+                args.message,
+                args.suggested_fix,
+                context=ctx,
                 resolved=args.resolved,
             )
         except ErrorLearningError as exc:
@@ -370,16 +502,16 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
         if created:
-            print(colorize("Saved error learning entry.", "green"))
+            print(colorize("Saved agent error entry.", "green"))
         else:
-            print(colorize("Duplicate entry detected; existing learning kept.", "yellow"))
+            print(colorize("Duplicate entry detected; keeping existing row.", "yellow"))
         print(format_entry(entry))
         return 0
 
     validated_entries = [validate_entry(entry) for entry in entries]
 
     if args.command == "list":
-        print_entries(validated_entries, heading="OpenClaw Error Learnings")
+        print_entries(validated_entries, heading="Agent error log")
         return 0
 
     if args.command == "stats":
@@ -388,7 +520,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "search":
         matches = search_entries(validated_entries, args.query, limit=max(args.limit, 1))
-        print_entries(matches, heading=f"Search Results: {args.query}")
+        print_entries(matches, heading=f"Search: {args.query}")
         return 0
 
     print(colorize(f"Unsupported command: {args.command}", "red"), file=sys.stderr)
