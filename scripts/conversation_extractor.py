@@ -1,9 +1,20 @@
 #!/usr/bin/env python3
-"""Extract decisions, learnings, and tool-usage highlights from OpenClaw session transcripts."""
+"""Extract high-value signals from OpenClaw session transcripts into `.learnings/conversation_extracts.md`.
+
+Scans the workspace for JSON/text logs that look like chat sessions, classifies lines into
+decisions, tools, errors, corrections, and insights, and merges everything into one Markdown
+file. Re-runs are idempotent: unchanged transcripts keep their existing section (matched by
+content hash in HTML comment markers).
+
+Run from the repository root::
+
+    python3 scripts/conversation_extractor.py
+"""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -13,10 +24,34 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from scripts.optimize_context import TURN_PATTERN, read_text, repo_root
+# -----------------------------------------------------------------------------
+# Repo / IO helpers (stdlib-only; safe for `python3 scripts/conversation_extractor.py`)
+# -----------------------------------------------------------------------------
+
+TURN_PATTERN = re.compile(r"(?i)\b(?:turn|step|message)\s*[:#-]?\s*(\d+)\b")
+
+MARKER_PREFIX = "conversation_extractor:"
+
+SKIP_DIR_PARTS = frozenset(
+    {
+        ".git",
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "dist",
+        "build",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".tox",
+    }
+)
+
+MAX_TRANSCRIPT_BYTES = 4 * 1024 * 1024
+SNIFF_BYTES = 96 * 1024
 
 # -----------------------------------------------------------------------------
-# Patterns: decisions / commitments / takeaways (English + common mixed usage)
+# Patterns: decisions / learnings / errors / corrections
 # -----------------------------------------------------------------------------
 
 DECISION_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
@@ -27,7 +62,7 @@ DECISION_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"(?:we(?:'ve)?\s+(?:decided|agreed|chose)|let'?s\s+go\s+with|final(?:ly)?\s*:\s*)(.+)",
         r"(?:\bapproved\b|\bfinalize[ds]?\b|\bchosen\b\s+(?:approach|option|path))\s*[:\-]?\s*(.+)",
         r"^\s*(?:TL;DR|TDLR|takeaway)s?\s*[:\-—]\s*(.+)",
-        r"\b(?:concluded|conclusion)\s+(?:that\s+)?(.{10,})",  # allow inline
+        r"\b(?:concluded|conclusion)\s+(?:that\s+)?(.{10,})",
         r"\bdecision\s*[:\-—]\s*(.+)",
     )
 )
@@ -41,10 +76,41 @@ LEARNING_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     )
 )
 
-# Inline tool/function references in transcripts
+ERROR_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"(?:^|\s)(?:traceback|exception|error)\s*(?:\(|:|,|\s)",
+        r"\b(?:fatal|critical)\s+error\b",
+        r"\b(?:command\s+)?failed\b",
+        r"\bexit\s+code\s*[:\s]+\d+",
+        r"\b(?:errno|status\s+code)\s*[:\s]+\d+",
+        r"`[^`]*(?:error|exception|traceback)[^`]*`",
+        r"(?:stderr|stdout)\s*:\s*(.{8,})",
+        r"\bModuleNotFoundError\b",
+        r"\bAttributeError\b",
+        r"\bTypeError\b",
+        r"\bValueError\b",
+        r"\bKeyError\b",
+        r"\bJSONDecodeError\b",
+        r"\bConnection(?:Error|RefusedError)\b",
+        r"\b404\b|\b500\b",
+    )
+)
+
+CORRECTION_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"\b(?:correction|correcting)\s*[:\-—]?\s*(.+)",
+        r"\b(?:actually|I\s+meant|to\s+clarify)\b[,:]?\s*(.{8,})",
+        r"\b(?:that\s+was\s+wrong|I\s+was\s+wrong|my\s+mistake)\b[.:]?\s*(.{0,200})",
+        r"\b(?:fixed|updated)\s+(?:by|to|the)\b[:\s]+(.{8,})",
+        r"\b(?:retract|retracting|override)\b[:\s]+(.{8,})",
+    )
+)
+
 TOOL_REGEXES: tuple[re.Pattern[str], ...] = (
     re.compile(r'\b(?:invoke|calling|called)\s+(?:tool\s+)?[`"]?([\w\-./:]+)[`"]?', re.I),
-    re.compile(r'`(?:functions?\.)?([\w\-]+)', re.I),
+    re.compile(r"`(?:functions?\.)?([\w\-]+)", re.I),
     re.compile(r'"(?:tool|toolName|name|function)"\s*:\s*"([^"]+)"'),
     re.compile(r"\[tool\s*:\s*([\w\-./:]+)\]", re.I),
     re.compile(r"\b(?:mcp|MCP)[_\s:]+([\w\-]+)", re.I),
@@ -63,9 +129,74 @@ STRUCT_TOOL_KEYS = frozenset(
     }
 )
 
+DISCOVERY_GLOBS: tuple[str, ...] = (
+    "memory/**/*.json",
+    "logs/**/*.json",
+    ".openclaw/**/sessions/**/*.json",
+    ".openclaw/**/workspace/**/sessions/**/*.json",
+)
 
-def utc_stamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
+SESSION_FILENAMES = frozenset(
+    {
+        "session.json",
+        "transcript.json",
+        "conversation.json",
+        "messages.json",
+    }
+)
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def read_text(path: Path, limit: int | None = None) -> str:
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return ""
+    if limit is not None and len(raw) > limit:
+        raw = raw[:limit]
+    return raw.decode("utf-8", errors="replace")
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    try:
+        with path.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                h.update(chunk)
+    except OSError:
+        return ""
+    return h.hexdigest()
+
+
+def make_marker(rel_posix: str, sha256_hex: str) -> str:
+    payload = json.dumps({"v": 1, "rel": rel_posix, "sha": sha256_hex}, separators=(",", ":"))
+    return f"<!-- {MARKER_PREFIX}{payload} -->"
+
+
+def parse_marker_line(line: str) -> tuple[str, str] | None:
+    s = line.strip()
+    token = f"<!-- {MARKER_PREFIX}"
+    if not s.startswith(token) or not s.endswith("-->"):
+        return None
+    inner = s[len(token) : -len("-->")].strip()
+    try:
+        obj = json.loads(inner)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    rel = obj.get("rel")
+    sha = obj.get("sha")
+    if isinstance(rel, str) and isinstance(sha, str) and len(sha) == 64:
+        return rel, sha
+    return None
 
 
 def _infer_turn(blob: dict[str, Any], index: int) -> int:
@@ -79,8 +210,6 @@ def _infer_turn(blob: dict[str, Any], index: int) -> int:
 
 
 def _stringify_toolish_dict(d: dict[str, Any]) -> str | None:
-    """Best-effort name for a structured tool/function block."""
-
     fn = d.get("function")
     if isinstance(fn, dict) and isinstance(fn.get("name"), str):
         return fn["name"]
@@ -92,8 +221,6 @@ def _stringify_toolish_dict(d: dict[str, Any]) -> str | None:
 
 
 def _flatten_content_piece(piece: Any) -> tuple[str, list[str]]:
-    """Turn a message content blob into (assistant text fragment, tool names)."""
-
     tools: list[str] = []
 
     if piece is None:
@@ -104,14 +231,13 @@ def _flatten_content_piece(piece: Any) -> tuple[str, list[str]]:
     if isinstance(piece, dict):
         typ = str(piece.get("type") or "").lower()
 
-        # Anthropic/OpenClaw-style tool_use blocks
         if typ in ("tool_use", "tool-use", "toolcall", "function", "tool_invocation"):
             name = _stringify_toolish_dict(piece)
             if name:
                 tools.append(name)
                 return "", tools
 
-        if typ == "tool_result" or typ == "tool-result":
+        if typ in ("tool_result", "tool-result"):
             return "", tools
 
         if isinstance(piece.get("text"), str):
@@ -125,7 +251,6 @@ def _flatten_content_piece(piece: Any) -> tuple[str, list[str]]:
 
         inner = piece.get("input") or piece.get("arguments")
         if isinstance(inner, dict) and txt == "":
-            # sometimes model echoes tool inputs as learning context
             try:
                 snippet = json.dumps(inner, ensure_ascii=False)[:500]
                 if snippet:
@@ -160,7 +285,6 @@ def _tool_names_from_calls(value: Any) -> list[str]:
                 n = fn.get("name")
                 if isinstance(n, str) and n.strip():
                     names.append(n.strip())
-            # OpenAI-ish id + name siblings
             n2 = item.get("name") or item.get("tool_name")
             if isinstance(n2, str) and n2.strip() and n2 not in names:
                 names.append(n2.strip())
@@ -201,14 +325,14 @@ def _segments_from_messages(messages: list[Any]) -> list[tuple[int, str | None, 
         if isinstance(extra, str) and extra.strip():
             text = (text + "\n" + extra).strip()
 
-        seen = set()
+        seen: set[str] = set()
         for tn in blob_tools:
             tn = tn.strip()
             if not tn or tn in seen:
                 continue
             seen.add(tn)
-            segments.append((turn, "tool", f"{tn}"))
-        # fall back name field on structured tool-only rows
+            segments.append((turn, "tool", tn))
+
         if not text.strip() and not blob_tools:
             maybe = raw.get("name") or raw.get("tool")
             if isinstance(maybe, str) and rl in {"tool", "assistant", "", "assistant_tool"}:
@@ -219,7 +343,6 @@ def _segments_from_messages(messages: list[Any]) -> list[tuple[int, str | None, 
             text = (text + "\n" + rest).strip() if text else rest
 
         if text.strip():
-            # Distinguish tool *invocation* rows (handled above) from provider "tool" role *outputs*.
             eff_role = "tool_output" if rl == "tool" else (rl if rl else None)
             segments.append((turn, eff_role, text.strip()))
 
@@ -227,8 +350,6 @@ def _segments_from_messages(messages: list[Any]) -> list[tuple[int, str | None, 
 
 
 def _unpack_session_json(data: Any) -> list[tuple[int, str | None, str]]:
-    """Interpret common OpenClaw / chat export envelopes."""
-
     candidates: Any = None
 
     if isinstance(data, dict):
@@ -272,8 +393,6 @@ def _unpack_session_json(data: Any) -> list[tuple[int, str | None, str]]:
 
 
 def _fallback_json_segments(data: Any) -> list[tuple[int, str | None, str]]:
-    """When structure is unknown, emit long string leaves and nested tool call names."""
-
     out: list[tuple[int, str | None, str]] = []
 
     def walk(node: Any, turn: int) -> None:
@@ -318,8 +437,7 @@ def _fallback_json_segments(data: Any) -> list[tuple[int, str | None, str]]:
     return uniq
 
 
-def parse_json_session(path: Path) -> list[tuple[int, str | None, str]]:
-    raw = read_text(path)
+def parse_json_session(raw: str) -> list[tuple[int, str | None, str]]:
     if not raw.strip():
         return []
     try:
@@ -334,17 +452,15 @@ def parse_json_session(path: Path) -> list[tuple[int, str | None, str]]:
     return _fallback_json_segments(data)
 
 
-def parse_text_session(path: Path) -> list[tuple[int, str | None, str]]:
-    """Line-oriented logs with optional turn hints (compatible with optimize_context)."""
-
+def parse_text_session(text: str) -> list[tuple[int, str | None, str]]:
     segments: list[tuple[int, str | None, str]] = []
     current_turn = 1
-    ROLE_PREFIX = re.compile(
+    role_prefix = re.compile(
         r"^\s*(?P<role>user|human|assistant|agent|tool|system)\s*[:|\\-]+\s*(?P<body>.+)$",
         re.IGNORECASE,
     )
 
-    for line_number, line in enumerate(read_text(path).splitlines(), start=1):
+    for line_number, line in enumerate(text.splitlines(), start=1):
         stripped = line.rstrip("\n\r")
         m_turn = TURN_PATTERN.search(line)
         if m_turn:
@@ -352,7 +468,7 @@ def parse_text_session(path: Path) -> list[tuple[int, str | None, str]]:
         else:
             current_turn = max(current_turn, line_number)
 
-        m_role = ROLE_PREFIX.match(line)
+        m_role = role_prefix.match(line)
         if m_role:
             rl = m_role.group("role").lower()
             mapping = {"human": "user"}
@@ -364,18 +480,94 @@ def parse_text_session(path: Path) -> list[tuple[int, str | None, str]]:
     return segments
 
 
-def parse_session_log(path: Path) -> list[tuple[int, str | None, str]]:
-    if not path.exists():
-        return []
+def parse_session_file(path: Path) -> list[tuple[int, str | None, str]]:
+    suf = path.suffix.lower()
+    if suf == ".json":
+        raw = read_text(path, MAX_TRANSCRIPT_BYTES)
+        segs = parse_json_session(raw)
+        if segs:
+            return segs
+        return parse_text_session(raw)
+    return parse_text_session(read_text(path, MAX_TRANSCRIPT_BYTES))
+
+
+def json_looks_like_transcript(raw: str) -> bool:
+    if not raw.strip():
+        return False
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return False
+    if isinstance(data, dict):
+        for key in ("messages", "conversation", "transcript", "history"):
+            inner = data.get(key)
+            if isinstance(inner, list) and inner and isinstance(inner[0], dict):
+                if any(k in inner[0] for k in ("role", "content", "speaker", "tool_calls", "toolCalls")):
+                    return True
+        sessions = data.get("sessions")
+        if isinstance(sessions, list) and sessions and isinstance(sessions[0], dict):
+            if "messages" in sessions[0]:
+                return True
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        if any(k in data[0] for k in ("role", "content", "speaker", "turn")):
+            return True
+    return False
+
+
+def text_sniff_looks_like_transcript(sample: str) -> bool:
+    if TURN_PATTERN.search(sample):
+        return True
+    role_hit = re.search(
+        r"(?mi)^\s*(?:user|human|assistant|agent|tool|system)\s*[:|\\-]+\s*\S+",
+        sample,
+    )
+    if role_hit:
+        return True
+    return False
+
+
+def looks_like_transcript(path: Path) -> bool:
+    try:
+        st = path.stat()
+    except OSError:
+        return False
+    if not path.is_file() or st.st_size == 0 or st.st_size > MAX_TRANSCRIPT_BYTES:
+        return False
 
     suf = path.suffix.lower()
     if suf == ".json":
-        segs = parse_json_session(path)
-        if segs:
-            return segs
-        return parse_text_session(path)
+        return json_looks_like_transcript(read_text(path, min(SNIFF_BYTES, st.st_size)))
 
-    return parse_text_session(path)
+    if suf in {".log", ".txt", ".md"}:
+        return text_sniff_looks_like_transcript(read_text(path, min(SNIFF_BYTES, st.st_size)))
+
+    return False
+
+
+def _skip_path(path: Path) -> bool:
+    return any(p in SKIP_DIR_PARTS for p in path.parts)
+
+
+def discover_transcripts(root: Path) -> list[Path]:
+    found: set[Path] = set()
+
+    for pattern in DISCOVERY_GLOBS:
+        for p in root.glob(pattern):
+            if p.is_file() and not _skip_path(p.relative_to(root)) and looks_like_transcript(p):
+                found.add(p.resolve())
+
+    for name in SESSION_FILENAMES:
+        for p in root.rglob(name):
+            try:
+                rp = p.resolve()
+            except OSError:
+                continue
+            if not p.is_file() or _skip_path(p):
+                continue
+            if looks_like_transcript(p):
+                found.add(rp)
+
+    return sorted(found)
 
 
 def match_patterns(text: str, patterns: tuple[re.Pattern[str], ...]) -> list[str]:
@@ -388,8 +580,8 @@ def match_patterns(text: str, patterns: tuple[re.Pattern[str], ...]) -> list[str
             m = pat.search(line)
             if m:
                 cap = (m.group(1) if m.lastindex else m.group(0)).strip()
-                if len(cap) > 80:
-                    cap = cap[:77] + "..."
+                if len(cap) > 200:
+                    cap = cap[:197] + "..."
                 hits.append(cap)
                 break
 
@@ -400,7 +592,7 @@ def match_patterns(text: str, patterns: tuple[re.Pattern[str], ...]) -> list[str
         m = pat.search(compact)
         if m:
             cap = (m.group(1) if m.lastindex else m.group(0)).strip()
-            short = cap if len(cap) <= 240 else cap[:237] + "..."
+            short = cap if len(cap) <= 280 else cap[:277] + "..."
             hits.append(short)
     return hits
 
@@ -423,15 +615,20 @@ def extract_tool_signals(text: str) -> Counter[str]:
     return counts
 
 
+def uniq(xs: list[str], cap: int = 80) -> list[str]:
+    return list(dict.fromkeys([x for x in xs if x]))[:cap]
+
+
 @dataclass
 class ConversationDigest:
-    """Structured output for markdown + JSON."""
-
     source: str
     generated_at_utc: str
+    content_sha256: str
     segments: list[tuple[int, str | None, str]]
     decisions: list[str]
     learnings: list[str]
+    errors: list[str]
+    corrections: list[str]
     tool_structured: Counter[str] = field(default_factory=Counter)
     tool_textual: Counter[str] = field(default_factory=Counter)
 
@@ -441,11 +638,17 @@ class ConversationDigest:
         return merged
 
 
-def analyze_segments(segments: list[tuple[int, str | None, str]], source_display: str) -> ConversationDigest:
+def analyze_segments(
+    segments: list[tuple[int, str | None, str]],
+    source_display: str,
+    content_sha256: str,
+) -> ConversationDigest:
     decisions_acc: list[str] = []
     learnings_acc: list[str] = []
+    errors_acc: list[str] = []
+    corrections_acc: list[str] = []
     structured_tools: Counter[str] = Counter()
-    blobs_for_text_tools: list[str] = []
+    blobs_for_text: list[str] = []
 
     for turn, role, text in segments:
         rl = (role or "").lower()
@@ -456,202 +659,211 @@ def analyze_segments(segments: list[tuple[int, str | None, str]], source_display
             continue
 
         if rl == "tool_output":
-            blobs_for_text_tools.append(text)
+            blobs_for_text.append(text)
+            errors_acc.extend(match_patterns(text, ERROR_LINE_PATTERNS))
             continue
 
-        if rl in {"", "assistant", "agent"} or rl is None:
+        blobs_for_text.append(text)
+        errors_acc.extend(match_patterns(text, ERROR_LINE_PATTERNS))
+        corrections_acc.extend(match_patterns(text, CORRECTION_LINE_PATTERNS))
+
+        if rl in {"", "assistant", "agent"} or role is None:
             decisions_acc.extend(match_patterns(text, DECISION_LINE_PATTERNS))
             learnings_acc.extend(match_patterns(text, LEARNING_LINE_PATTERNS))
         elif rl == "user":
-            # users sometimes phrase decisions explicitly
             decisions_acc.extend(match_patterns(text, DECISION_LINE_PATTERNS))
+            learnings_acc.extend(match_patterns(text, LEARNING_LINE_PATTERNS))
+        elif rl == "system":
+            learnings_acc.extend(match_patterns(text, LEARNING_LINE_PATTERNS))
 
-        blobs_for_text_tools.append(text)
-
-    combined = "\n\n".join(blobs_for_text_tools)
+    combined = "\n\n".join(blobs_for_text)
     textual_tools = extract_tool_signals(combined)
-
-    uniq = lambda xs: list(dict.fromkeys([x for x in xs if x]))  # noqa: E731
 
     return ConversationDigest(
         source=source_display,
         generated_at_utc=datetime.now(timezone.utc).isoformat(),
+        content_sha256=content_sha256,
         segments=segments,
-        decisions=uniq(decisions_acc)[:120],
-        learnings=uniq(learnings_acc)[:120],
+        decisions=uniq(decisions_acc),
+        learnings=uniq(learnings_acc),
+        errors=uniq(errors_acc),
+        corrections=uniq(corrections_acc),
         tool_structured=structured_tools,
         tool_textual=textual_tools,
     )
 
 
-def render_markdown(d: ConversationDigest) -> str:
+def _md_list(title: str, items: list[str], empty: str) -> list[str]:
+    lines = [f"### {title}", ""]
+    if items:
+        for item in items:
+            lines.append(f"- {item}")
+    else:
+        lines.append(empty)
+    lines.append("")
+    return lines
+
+
+def render_section_block(rel_posix: str, digest: ConversationDigest) -> str:
+    marker = make_marker(rel_posix, digest.content_sha256)
     lines = [
-        f"# Conversation 精华 extract",
+        marker,
         "",
-        f"- **Source**: `{d.source}`",
-        f"- **Generated (UTC)**: {d.generated_at_utc}",
-        f"- **Segments indexed**: {len(d.segments)}",
+        f"## `{rel_posix}`",
         "",
-        "## Decisions",
+        f"- **Content SHA-256**: `{digest.content_sha256[:16]}…`",
+        f"- **Segment rows**: {len(digest.segments)}",
+        f"- **Analyzed (UTC)**: {digest.generated_at_utc}",
+        "",
     ]
-
-    if d.decisions:
-        for item in d.decisions:
-            lines.append(f"- {item}")
-    else:
-        lines.append("- *(no explicit decision lines detected)*")
-
-    lines.extend(["", "## Learnings & takeaways"])
-    if d.learnings:
-        for item in d.learnings:
-            lines.append(f"- {item}")
-    else:
-        lines.append("- *(no explicit learning cues detected)*")
-
-    lines.extend(["", "## Tool usage"])
-
-    merged = d.all_tools()
-    if merged:
-        for name, ct in merged.most_common(40):
-            lines.append(f"- `{name}` — {ct} mentions")
-        if d.tool_structured and d.tool_textual:
-            lines.extend(
-                [
-                    "",
-                    "Structured tool rows count toward assistant tool blocks;"
-                    " additional matches capture names embedded in prose or JSON echoes.",
-                ]
-            )
-    else:
-        lines.append("- *(no tool mentions parsed)*")
-
-    lines.extend(["", "---", "*OpenClaw conversation_extractor.py — distill session value into `memory/`.*"])
-    return "\n".join(lines) + "\n"
+    lines.extend(_md_list("Decisions", digest.decisions, "- *(none detected)*"))
+    lines.extend(_md_list("Insights & learnings", digest.learnings, "- *(none detected)*"))
+    merged_tools = digest.all_tools()
+    tool_lines = [f"`{name}` — {ct}×" for name, ct in merged_tools.most_common(35)]
+    lines.extend(_md_list("Tools used", tool_lines, "- *(none detected)*"))
+    lines.extend(_md_list("Errors & failures", digest.errors, "- *(none detected)*"))
+    lines.extend(_md_list("Corrections", digest.corrections, "- *(none detected)*"))
+    lines.append("---")
+    lines.append("")
+    return "\n".join(lines)
 
 
-def digest_to_dict(d: ConversationDigest) -> dict[str, Any]:
-    return {
-        "source": d.source,
-        "generated_at_utc": d.generated_at_utc,
-        "counts": {
-            "segments": len(d.segments),
-            "decisions": len(d.decisions),
-            "learnings": len(d.learnings),
-            "tool_names_distinct": len(d.all_tools()),
-        },
-        "decisions": d.decisions,
-        "learnings": d.learnings,
-        "tools_ranked": d.all_tools().most_common(),
-        "tools_structured": dict(d.tool_structured),
-        "tools_from_text_heuristic": dict(d.tool_textual),
-    }
+def parse_existing_blocks(md: str) -> dict[str, tuple[str, str]]:
+    """Map relative path -> (sha256, full block text including marker)."""
+
+    out: dict[str, tuple[str, str]] = {}
+    lines = md.splitlines(keepends=True)
+    i = 0
+    while i < len(lines):
+        parsed = parse_marker_line(lines[i])
+        if not parsed:
+            i += 1
+            continue
+        rel, sha = parsed
+        start = i
+        i += 1
+        while i < len(lines) and parse_marker_line(lines[i]) is None:
+            i += 1
+        block = "".join(lines[start:i])
+        out[rel] = (sha, block)
+    return out
 
 
-def write_digest(
-    digest: ConversationDigest,
-    memory_dir: Path,
-    stem: str,
-) -> tuple[Path, Path]:
-    memory_dir.mkdir(parents=True, exist_ok=True)
-    safe = re.sub(r"[^\w\-_.]+", "_", stem).strip("_") or "session"
-    tag = utc_stamp()
+def build_output_document(
+    root: Path,
+    paths: list[Path],
+    existing: dict[str, tuple[str, str]],
+) -> tuple[str, int, int]:
+    reused = 0
+    fresh = 0
+    blocks: list[str] = []
 
-    md_path = memory_dir / f"conversation_extract_{safe}_{tag}.md"
-    js_path = memory_dir / f"conversation_extract_{safe}_{tag}.json"
+    for path in paths:
+        try:
+            rel = path.resolve().relative_to(root.resolve()).as_posix()
+        except ValueError:
+            rel = path.as_posix()
 
-    md_path.write_text(render_markdown(digest), encoding="utf-8")
-    js_path.write_text(json.dumps(digest_to_dict(digest), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        sha = file_sha256(path)
+        if not sha:
+            continue
 
-    return md_path, js_path
+        prev = existing.get(rel)
+        if prev and prev[0] == sha:
+            blocks.append(prev[1].rstrip() + "\n\n")
+            reused += 1
+            continue
+
+        segments = parse_session_file(path)
+        digest = analyze_segments(segments, rel, sha)
+        blocks.append(render_section_block(rel, digest))
+        fresh += 1
+
+    header = "\n".join(
+        [
+            "# Conversation extracts",
+            "",
+            "Structured highlights from OpenClaw-style session transcripts found under this workspace "
+            "(JSON chat exports and line-oriented logs). Regenerate with `python3 scripts/conversation_extractor.py`.",
+            "",
+            f"- **Last run (UTC)**: {utc_now_iso()}",
+            f"- **Transcripts scanned**: {len(paths)}",
+            f"- **Sections reused (unchanged)**: {reused}",
+            f"- **Sections rebuilt**: {fresh}",
+            "",
+            "---",
+            "",
+        ]
+    )
+    body = "".join(blocks)
+    return header + body, reused, fresh
 
 
-def run_extraction(session_path: Path, memory_dir: Path, workspace_root: Path) -> tuple[Path, Path]:
-    segments = parse_session_log(session_path.resolve())
-
-    digest = analyze_segments(segments, session_path.resolve().as_posix())
-
-    stem = session_path.stem
-    # prefer session id from parent folder if standard layout .../sessions/foo/session.json
-    parent = session_path.parent.name
-    if parent and parent not in {".", ""}:
-        stem = f"{parent}__{session_path.stem}"
-
-    relative = session_path.resolve().as_posix()
-    workspace_posix = workspace_root.resolve().as_posix()
-    if relative.startswith(workspace_posix):
-        short = Path(relative[len(workspace_posix) :].lstrip("/")).as_posix()
-        digest.source = short
-
-    return write_digest(digest, memory_dir, stem)
+def write_output(path: Path, text: str, dry_run: bool) -> None:
+    if dry_run:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Extract OpenClaw conversation 精华 into memory/")
-    p.add_argument(
-        "session_log",
-        type=Path,
-        nargs="?",
-        help="Path to session transcript (.json, .log, or text). Omit with --stdin.",
+    p = argparse.ArgumentParser(
+        description="Extract decisions, tools, errors, corrections, and insights from OpenClaw transcripts.",
     )
     p.add_argument(
-        "--stdin",
+        "--root",
+        type=Path,
+        default=None,
+        help="Workspace root to scan (default: repository root containing scripts/).",
+    )
+    p.add_argument(
+        "paths",
+        nargs="*",
+        type=Path,
+        help="Optional explicit transcript files; when set, only these are processed.",
+    )
+    p.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Output markdown path (default: <root>/.learnings/conversation_extracts.md).",
+    )
+    p.add_argument(
+        "--dry-run",
         action="store_true",
-        help="Read transcript JSON/text from stdin (written to a temp file under memory/).",
-    )
-    p.add_argument(
-        "--memory-dir",
-        type=Path,
-        default=None,
-        help="Destination directory (default: <repo>/memory).",
-    )
-    p.add_argument(
-        "--workspace-root",
-        type=Path,
-        default=None,
-        help="Workspace root for relative paths in output (defaults to repo root).",
+        help="Print counts only; do not write the markdown file.",
     )
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
-    ws = (args.workspace_root or repo_root()).resolve()
-    memory_dir = (args.memory_dir or ws / "memory").resolve()
+    root = (args.root or repo_root()).resolve()
+    out_path = (args.output or (root / ".learnings" / "conversation_extracts.md")).resolve()
 
-    if args.stdin:
-        import tempfile
+    if args.paths:
+        explicit = [p.resolve() for p in args.paths if p.exists()]
+        paths = [p for p in explicit if looks_like_transcript(p)]
+    else:
+        paths = discover_transcripts(root)
 
-        memory_dir.mkdir(parents=True, exist_ok=True)
-        payload = sys.stdin.read()
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt", prefix="stdin_session_", dir=memory_dir)
-        try:
-            path = Path(tmp.name)
-            path.write_text(payload, encoding="utf-8")
-        finally:
-            tmp.close()
+    existing_md = ""
+    if out_path.exists() and not args.dry_run:
+        existing_md = read_text(out_path)
+    elif out_path.exists():
+        existing_md = read_text(out_path)
 
-        md_path, json_path = run_extraction(path, memory_dir, ws)
-        try:
-            path.unlink(missing_ok=True)  # type: ignore[arg-type]
-        except OSError:
-            pass
+    existing_blocks = parse_existing_blocks(existing_md)
+    doc, reused, fresh = build_output_document(root, paths, existing_blocks)
 
-        print(f"Wrote {md_path.as_posix()}")
-        print(f"Wrote {json_path.as_posix()}")
+    if args.dry_run:
+        print(f"Would write: {out_path.as_posix()}")
+        print(f"Transcripts: {len(paths)}  reused_sections={reused}  rebuilt_sections={fresh}")
         return 0
 
-    if not args.session_log:
-        sys.stderr.write("error: session_log path required unless --stdin is set.\n")
-        return 2
-
-    sp = args.session_log.resolve()
-    if not sp.exists():
-        sys.stderr.write(f"error: file not found: {sp}\n")
-        return 2
-
-    md_path, json_path = run_extraction(sp, memory_dir, ws)
-    print(f"Wrote {md_path.as_posix()}")
-    print(f"Wrote {json_path.as_posix()}")
+    write_output(out_path, doc, dry_run=False)
+    print(f"Wrote {out_path.as_posix()}")
+    print(f"transcripts={len(paths)} reused={reused} rebuilt={fresh}")
     return 0
 
 
