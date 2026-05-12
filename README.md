@@ -56,3 +56,61 @@ python -m scripts.tool_discovery suggest "monitor queue latency" --context "safe
 - **Risk and I/O profiles** to distinguish low/medium/high operational risk and filesystem/network/process behavior.
 - **Contextual tool suggestion** scoring with explicit reasoning about capability fit, I/O fit, safety constraints, and possible tool chains.
 
+## NOUZ integration (Obsidian typing + search)
+
+NOUZ adds typed YAML frontmatter to markdown notes, indexes them into SQLite, stores embeddings as NumPy `.npy` files, and exposes **library-style** Python helpers that mirror MCP tools (no separate MCP server process).
+
+### Architecture
+
+| Layer | Role |
+| ----- | ---- |
+| **Vault** | Markdown notes under `OBSIDIAN_VAULT_PATH` (default `E:\Obsidianstore` on Windows). |
+| **SQLite** | `openclaw-cursor/data/nouz.db` — notes table plus `wiki_links` for `[[wiki]]` edges (bidirectional navigation for bundles). |
+| **Embeddings** | `openclaw-cursor/data/embeddings/<uid>.npy` — one normalized float32 vector per note after sync. |
+| **Embedding backend** | MiniMax (`MINIMAX_API_KEY`, `MINIMAX_GROUP_ID`, optional `MINIMAX_EMBED_MODEL`) when configured; otherwise Ollama `OLLAMA_EMBED_URL` (default `http://127.0.0.1:11434`) and `OLLAMA_EMBED_MODEL` (default `nomic-embed-text`). |
+
+Override data directory with `NOUZ_DATA_DIR` if you keep the vault elsewhere.
+
+### YAML tagger
+
+Adds only **missing** keys (existing YAML is preserved):
+
+- `level` — default `quant` (`quant`, `module`, `pattern`, `artifact`, `log`, `hypothesis`, `task`)
+- `role` — default `description` (`description`, `experiment`, `hypothesis`, `task`, `spec`, `brief`)
+- `status` — default `draft` (`draft`, `processing`, `ready`, `archived`)
+- `domain` — inferred from folder names and tags (`ai`, `infra`, `photo`, `business`, else `general`)
+- `core_id` — `null` until you assign a cluster id manually
+
+```bash
+python -m scripts.nouz_yaml_tagger --vault /path/to/vault
+python -m scripts.nouz_yaml_tagger --vault /path/to/vault --dry-run
+```
+
+### MCP-style API (`scripts.nouz_search`)
+
+Import from automation or agents:
+
+- `find_notes(level=..., domain=..., status=...)` → `{uid, path, title, level, status}`
+- `semantic_search(query, top_k)` → `{uid, path, title, similarity}`
+- `get_context_bundle(note_id, depth)` → `{note, parents, children, bridges}` — parents/children follow wiki links; **bridges** are notes sharing the same `core_id`
+- `get_core_profile(core_id)` → `{core_id, title, description, note_count}`
+- `notes_near_core(core_id, limit)` → list of notes ordered by path
+
+CLI examples:
+
+```bash
+python -m scripts.nouz_search sync --vault /path/to/vault
+python -m scripts.nouz_search sync --no-embed
+python -m scripts.nouz_search find --domain photo --status draft
+python -m scripts.nouz_search semantic "deployment checklist" --top-k 5
+python -m scripts.nouz_search bundle <uid> --depth 2
+python -m scripts.nouz_search core-profile my-core
+python -m scripts.nouz_search near-core my-core --limit 10
+```
+
+### Tests
+
+```bash
+python -m unittest tests.test_nouz
+```
+
