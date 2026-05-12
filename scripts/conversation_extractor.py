@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Extract decisions, learnings, and tool-usage highlights from OpenClaw session transcripts."""
+"""Extract decisions, errors, tools, follow-ups, and learnings from OpenClaw session transcripts.
+
+CLI: ``python -m scripts.conversation_extractor extract …`` and ``… summarize …``.
+"""
 
 from __future__ import annotations
 
@@ -39,6 +42,34 @@ LEARNING_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"^\s*\*{0,2}(?:important|remember|note)\*{0,2}\s*[:\-—]\s*(.+)",
         r"(?:核心价值|关键点|经验教训|结论是|需要注意的是)\s*[：:]\s*(.+)",
     )
+)
+
+ERROR_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"^\s*(?:error|exception|traceback|failure|failed|fatal)\s*[:\-—]\s*(.+)",
+        r"\b(?:AttributeError|TypeError|ValueError|KeyError|RuntimeError|OSError|"
+        r"ImportError|ModuleNotFoundError|SyntaxError|AssertionError)\b\s*[:\-]?\s*(.+)",
+        r"(\b(?:HTTP\s*\d{3}|ECONNREFUSED|ENOENT|EACCES|timeout|timed\s+out)\b[^\n]{0,120})",
+        r"(\b(?:could\s+not|unable\s+to|failed\s+to|does\s+not\s+exist|not\s+found)\b[^\n]{10,200})",
+    )
+)
+
+FOLLOWUP_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"^\s*(?:follow[-\s]?up|next\s+steps?|action\s+items?|pending|todo|to\s*[-\s]?do)\s*[:\-—]\s*(.+)",
+        r"(\b(?:we\s+should|need\s+to|still\s+need|remains\s+to)\b[^\n]{8,200})",
+        r"(\b(?:let\s+me\s+know|circle\s+back|revisit|after\s+you)\b[^\n]{8,200})",
+        r"(?:后续|待办|下一步)\s*[：:]\s*(.+)",
+    )
+)
+
+# Lines that warrant a human flag (inline markers, blockers)
+FLAG_INLINE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("todo_marker", re.compile(r"\b(?:TODO|FIXME|HACK|XXX)\b\s*[:\-]?\s*([^\n]{0,160})", re.I)),
+    ("blocked_signal", re.compile(r"\b(?:blocked|stuck|cannot\s+proceed|unable\s+to\s+proceed)\b[^\n]{0,200}", re.I)),
+    ("ambiguous_signal", re.compile(r"\b(?:not\s+sure|unclear|ambiguous|TBD|to\s+be\s+determined)\b[^\n]{0,200}", re.I)),
 )
 
 # Inline tool/function references in transcripts
@@ -405,8 +436,90 @@ def match_patterns(text: str, patterns: tuple[re.Pattern[str], ...]) -> list[str
     return hits
 
 
+def collect_inline_flags(turn: int, text: str) -> list[dict[str, Any]]:
+    """Surface TODO/blocker/ambiguity markers as structured flags."""
+
+    out: list[dict[str, Any]] = []
+    if len(text.strip()) < 8:
+        return out
+    for code, pat in FLAG_INLINE_PATTERNS:
+        for m in pat.finditer(text):
+            cap = (m.group(1) if m.lastindex else m.group(0)).strip()
+            if len(cap) > 220:
+                cap = cap[:217] + "..."
+            if cap:
+                out.append({"turn": turn, "code": code, "detail": cap})
+    return out
+
+
+def _dedupe_flags(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[Any, ...]] = set()
+    uniq: list[dict[str, Any]] = []
+    for r in rows:
+        key = (r.get("turn"), r.get("code"), r.get("detail"))
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(r)
+    return uniq
+
+
 def normalize_ws(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
+
+
+def _finalize_flags(
+    segments: list[tuple[int, str | None, str]],
+    decisions: list[str],
+    errors: list[str],
+    followups: list[str],
+    inline_flags: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    flags = list(inline_flags)
+    if not segments:
+        flags.append(
+            {
+                "turn": None,
+                "code": "empty_transcript",
+                "detail": "No segments parsed from input; check file format.",
+            }
+        )
+    if errors and not decisions:
+        flags.append(
+            {
+                "turn": None,
+                "code": "errors_without_decision",
+                "detail": "Error-like lines detected but no explicit decision markers; review session outcome.",
+            }
+        )
+    if followups and not decisions:
+        flags.append(
+            {
+                "turn": None,
+                "code": "followups_without_decision",
+                "detail": "Follow-up cues present without a captured decision; confirm ownership and deadlines.",
+            }
+        )
+
+    first_word_keys: list[str] = []
+    for d in decisions:
+        if not d:
+            continue
+        w = normalize_ws(d).lower().split()[:5]
+        if w:
+            first_word_keys.append(" ".join(w))
+    dup_counts = Counter(first_word_keys)
+    for key, n in dup_counts.items():
+        if n >= 2 and key:
+            flags.append(
+                {
+                    "turn": None,
+                    "code": "possible_duplicate_decisions",
+                    "detail": f"Similar decision phrasing appears {n} times: {key[:120]}",
+                }
+            )
+
+    return _dedupe_flags(flags)
 
 
 def extract_tool_signals(text: str) -> Counter[str]:
@@ -432,6 +545,9 @@ class ConversationDigest:
     segments: list[tuple[int, str | None, str]]
     decisions: list[str]
     learnings: list[str]
+    errors: list[str]
+    followups: list[str]
+    flags: list[dict[str, Any]]
     tool_structured: Counter[str] = field(default_factory=Counter)
     tool_textual: Counter[str] = field(default_factory=Counter)
 
@@ -444,8 +560,11 @@ class ConversationDigest:
 def analyze_segments(segments: list[tuple[int, str | None, str]], source_display: str) -> ConversationDigest:
     decisions_acc: list[str] = []
     learnings_acc: list[str] = []
+    errors_acc: list[str] = []
+    followups_acc: list[str] = []
     structured_tools: Counter[str] = Counter()
     blobs_for_text_tools: list[str] = []
+    inline_flags: list[dict[str, Any]] = []
 
     for turn, role, text in segments:
         rl = (role or "").lower()
@@ -457,28 +576,44 @@ def analyze_segments(segments: list[tuple[int, str | None, str]], source_display
 
         if rl == "tool_output":
             blobs_for_text_tools.append(text)
+            errors_acc.extend(match_patterns(text, ERROR_LINE_PATTERNS))
+            followups_acc.extend(match_patterns(text, FOLLOWUP_LINE_PATTERNS))
+            inline_flags.extend(collect_inline_flags(turn, text))
             continue
 
         if rl in {"", "assistant", "agent"} or rl is None:
             decisions_acc.extend(match_patterns(text, DECISION_LINE_PATTERNS))
             learnings_acc.extend(match_patterns(text, LEARNING_LINE_PATTERNS))
+            errors_acc.extend(match_patterns(text, ERROR_LINE_PATTERNS))
+            followups_acc.extend(match_patterns(text, FOLLOWUP_LINE_PATTERNS))
         elif rl == "user":
-            # users sometimes phrase decisions explicitly
             decisions_acc.extend(match_patterns(text, DECISION_LINE_PATTERNS))
+            errors_acc.extend(match_patterns(text, ERROR_LINE_PATTERNS))
+            followups_acc.extend(match_patterns(text, FOLLOWUP_LINE_PATTERNS))
 
         blobs_for_text_tools.append(text)
+        inline_flags.extend(collect_inline_flags(turn, text))
 
     combined = "\n\n".join(blobs_for_text_tools)
     textual_tools = extract_tool_signals(combined)
 
     uniq = lambda xs: list(dict.fromkeys([x for x in xs if x]))  # noqa: E731
 
+    decisions_u = uniq(decisions_acc)[:120]
+    learnings_u = uniq(learnings_acc)[:120]
+    errors_u = uniq(errors_acc)[:120]
+    followups_u = uniq(followups_acc)[:120]
+    flags = _finalize_flags(segments, decisions_u, errors_u, followups_u, _dedupe_flags(inline_flags))
+
     return ConversationDigest(
         source=source_display,
         generated_at_utc=datetime.now(timezone.utc).isoformat(),
         segments=segments,
-        decisions=uniq(decisions_acc)[:120],
-        learnings=uniq(learnings_acc)[:120],
+        decisions=decisions_u,
+        learnings=learnings_u,
+        errors=errors_u,
+        followups=followups_u,
+        flags=flags,
         tool_structured=structured_tools,
         tool_textual=textual_tools,
     )
@@ -507,6 +642,31 @@ def render_markdown(d: ConversationDigest) -> str:
             lines.append(f"- {item}")
     else:
         lines.append("- *(no explicit learning cues detected)*")
+
+    lines.extend(["", "## Errors & failures"])
+    if d.errors:
+        for item in d.errors:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- *(no error-shaped lines detected)*")
+
+    lines.extend(["", "## Follow-ups"])
+    if d.followups:
+        for item in d.followups:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- *(no follow-up phrasing detected)*")
+
+    lines.extend(["", "## Flags"])
+    if d.flags:
+        for fl in d.flags:
+            turn = fl.get("turn")
+            code = fl.get("code", "?")
+            detail = fl.get("detail", "")
+            turn_s = f"turn {turn}" if turn is not None else "session"
+            lines.append(f"- **{code}** ({turn_s}): {detail}")
+    else:
+        lines.append("- *(no heuristic flags)*")
 
     lines.extend(["", "## Tool usage"])
 
@@ -537,14 +697,212 @@ def digest_to_dict(d: ConversationDigest) -> dict[str, Any]:
             "segments": len(d.segments),
             "decisions": len(d.decisions),
             "learnings": len(d.learnings),
+            "errors": len(d.errors),
+            "followups": len(d.followups),
+            "flags": len(d.flags),
             "tool_names_distinct": len(d.all_tools()),
         },
         "decisions": d.decisions,
         "learnings": d.learnings,
+        "errors": d.errors,
+        "followups": d.followups,
+        "flags": d.flags,
         "tools_ranked": d.all_tools().most_common(),
         "tools_structured": dict(d.tool_structured),
         "tools_from_text_heuristic": dict(d.tool_textual),
     }
+
+
+def _as_str_list(val: Any) -> list[str]:
+    if not isinstance(val, list):
+        return []
+    out: list[str] = []
+    for x in val:
+        if isinstance(x, str) and x.strip():
+            out.append(x.strip())
+    return out
+
+
+def _summary_headline_from_lists(
+    segments_n: int,
+    decisions: list[str],
+    errors: list[str],
+    followups: list[str],
+    tools_distinct: int,
+    flags: list[dict[str, Any]],
+) -> str:
+    return (
+        f"{len(decisions)} decisions, {len(errors)} error cues, {len(followups)} follow-ups, "
+        f"{tools_distinct} tools (distinct), {len(flags)} flags — {segments_n} segments"
+    )
+
+
+def summary_dict(d: ConversationDigest) -> dict[str, Any]:
+    """Compact payload for ``summarize --format json``."""
+
+    merged = d.all_tools()
+    counts = digest_to_dict(d)["counts"]
+    return {
+        "source": d.source,
+        "counts": counts,
+        "headline": _summary_headline_from_lists(
+            len(d.segments),
+            d.decisions,
+            d.errors,
+            d.followups,
+            len(merged),
+            d.flags,
+        ),
+        "decisions_top": d.decisions[:5],
+        "learnings_top": d.learnings[:5],
+        "errors_top": d.errors[:5],
+        "followups_top": d.followups[:5],
+        "tools_top": [{"name": k, "count": v} for k, v in merged.most_common(8)],
+        "flags": d.flags[:25],
+    }
+
+
+def format_summary(d: ConversationDigest, fmt: str) -> str:
+    """Short stdout-oriented summary (markdown or JSON)."""
+
+    kind = fmt.lower().strip()
+    if kind == "json":
+        return json.dumps(summary_dict(d), indent=2, ensure_ascii=False) + "\n"
+
+    hl = _summary_headline_from_lists(
+        len(d.segments),
+        d.decisions,
+        d.errors,
+        d.followups,
+        len(d.all_tools()),
+        d.flags,
+    )
+    lines = [
+        "# Transcript summary",
+        "",
+        f"- **Source**: `{d.source}`",
+        f"- **{hl}**",
+        "",
+        "## Flags",
+    ]
+    if d.flags:
+        for fl in d.flags[:25]:
+            turn = fl.get("turn")
+            code = fl.get("code", "?")
+            detail = fl.get("detail", "")
+            turn_s = f"turn {turn}" if turn is not None else "session"
+            lines.append(f"- **{code}** ({turn_s}): {detail}")
+    else:
+        lines.append("- *(none)*")
+
+    def block(title: str, items: list[str]) -> None:
+        lines.extend(["", f"## {title}"])
+        if items:
+            for it in items[:8]:
+                lines.append(f"- {it}")
+        else:
+            lines.append("- *(none)*")
+
+    block("Decisions", d.decisions)
+    block("Errors", d.errors)
+    block("Follow-ups", d.followups)
+    block("Learnings", d.learnings)
+
+    lines.extend(["", "## Tools (top)"])
+    merged = d.all_tools()
+    if merged:
+        for name, ct in merged.most_common(8):
+            lines.append(f"- `{name}` — {ct}")
+    else:
+        lines.append("- *(none)*")
+
+    return "\n".join(lines) + "\n"
+
+
+def format_summary_from_export(data: dict[str, Any], fmt: str) -> str:
+    """Summarize a prior ``conversation_extract_*.json`` (including legacy shapes)."""
+
+    counts = data.get("counts") if isinstance(data.get("counts"), dict) else {}
+    decisions = _as_str_list(data.get("decisions"))
+    learnings = _as_str_list(data.get("learnings"))
+    errors = _as_str_list(data.get("errors"))
+    followups = _as_str_list(data.get("followups"))
+    flags_raw = data.get("flags")
+    flags: list[dict[str, Any]] = flags_raw if isinstance(flags_raw, list) else []
+    source = str(data.get("source", ""))
+
+    ranked = data.get("tools_ranked")
+    tools_distinct = int(counts.get("tool_names_distinct", 0))
+    if isinstance(ranked, list) and ranked:
+        tools_distinct = max(tools_distinct, len(ranked))
+    elif isinstance(ranked, list):
+        tools_distinct = max(tools_distinct, 0)
+
+    segments_n = int(counts.get("segments", 0))
+    headline = _summary_headline_from_lists(segments_n, decisions, errors, followups, tools_distinct, flags)
+
+    kind = fmt.lower().strip()
+    if kind == "json":
+        tools_top: list[dict[str, Any]] = []
+        if isinstance(ranked, list):
+            for pair in ranked[:8]:
+                if isinstance(pair, (list, tuple)) and len(pair) == 2:
+                    tools_top.append({"name": str(pair[0]), "count": int(pair[1])})
+        payload = {
+            "source": source,
+            "counts": counts,
+            "headline": headline,
+            "decisions_top": decisions[:5],
+            "learnings_top": learnings[:5],
+            "errors_top": errors[:5],
+            "followups_top": followups[:5],
+            "tools_top": tools_top,
+            "flags": flags[:25],
+        }
+        return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+
+    lines = [
+        "# Transcript summary (from export JSON)",
+        "",
+        f"- **Source**: `{source}`",
+        f"- **{headline}**",
+        "",
+        "## Flags",
+    ]
+    if flags:
+        for fl in flags[:25]:
+            if not isinstance(fl, dict):
+                continue
+            turn = fl.get("turn")
+            code = fl.get("code", "?")
+            detail = fl.get("detail", "")
+            turn_s = f"turn {turn}" if turn is not None else "session"
+            lines.append(f"- **{code}** ({turn_s}): {detail}")
+    else:
+        lines.append("- *(none)*")
+
+    def block(title: str, items: list[str]) -> None:
+        lines.extend(["", f"## {title}"])
+        if items:
+            for it in items[:8]:
+                lines.append(f"- {it}")
+        else:
+            lines.append("- *(none)*")
+
+    block("Decisions", decisions)
+    block("Errors", errors)
+    block("Follow-ups", followups)
+    block("Learnings", learnings)
+
+    lines.extend(["", "## Tools (from export)"])
+    if isinstance(ranked, list) and ranked:
+        for pair in ranked[:8]:
+            if isinstance(pair, (list, tuple)) and len(pair) == 2:
+                lines.append(f"- `{pair[0]}` — {pair[1]}")
+    else:
+        lines.append("- *(none listed)*")
+
+    return "\n".join(lines) + "\n"
 
 
 def write_digest(
@@ -585,39 +943,76 @@ def run_extraction(session_path: Path, memory_dir: Path, workspace_root: Path) -
     return write_digest(digest, memory_dir, stem)
 
 
+def _apply_workspace_relative_source(digest: ConversationDigest, session_path: Path, workspace_root: Path) -> None:
+    relative = session_path.resolve().as_posix()
+    workspace_posix = workspace_root.resolve().as_posix()
+    if relative.startswith(workspace_posix):
+        short = Path(relative[len(workspace_posix) :].lstrip("/")).as_posix()
+        digest.source = short
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Extract OpenClaw conversation 精华 into memory/")
-    p.add_argument(
+    p = argparse.ArgumentParser(
+        prog="conversation_extractor",
+        description="Extract decisions, errors, tools, and follow-ups from OpenClaw transcripts.",
+    )
+    sub = p.add_subparsers(dest="command", required=True)
+
+    ex = sub.add_parser("extract", help="Write markdown + JSON digest into memory/.")
+    ex.add_argument(
         "session_log",
         type=Path,
         nargs="?",
         help="Path to session transcript (.json, .log, or text). Omit with --stdin.",
     )
-    p.add_argument(
+    ex.add_argument(
         "--stdin",
         action="store_true",
         help="Read transcript JSON/text from stdin (written to a temp file under memory/).",
     )
-    p.add_argument(
+    ex.add_argument(
         "--memory-dir",
         type=Path,
         default=None,
         help="Destination directory (default: <repo>/memory).",
     )
-    p.add_argument(
+    ex.add_argument(
         "--workspace-root",
         type=Path,
         default=None,
         help="Workspace root for relative paths in output (defaults to repo root).",
     )
+
+    sm = sub.add_parser("summarize", help="Print a short summary to stdout (no files written).")
+    sm.add_argument(
+        "--from-json",
+        type=Path,
+        default=None,
+        dest="digest_json",
+        help="Use a prior conversation_extract_*.json from extract instead of a raw transcript.",
+    )
+    sm.add_argument(
+        "session_log",
+        type=Path,
+        nargs="?",
+        help="Transcript path when --from-json is not set.",
+    )
+    sm.add_argument(
+        "--format",
+        choices=("md", "json"),
+        default="md",
+        help="Output format (default: md).",
+    )
+    sm.add_argument(
+        "--workspace-root",
+        type=Path,
+        default=None,
+        help="Workspace root for relative source label when summarizing a transcript file.",
+    )
     return p
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_arg_parser().parse_args(argv)
-    ws = (args.workspace_root or repo_root()).resolve()
-    memory_dir = (args.memory_dir or ws / "memory").resolve()
-
+def _cmd_extract(args: argparse.Namespace, ws: Path, memory_dir: Path) -> int:
     if args.stdin:
         import tempfile
 
@@ -641,7 +1036,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if not args.session_log:
-        sys.stderr.write("error: session_log path required unless --stdin is set.\n")
+        sys.stderr.write("error: extract requires session_log path unless --stdin is set.\n")
         return 2
 
     sp = args.session_log.resolve()
@@ -653,6 +1048,67 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Wrote {md_path.as_posix()}")
     print(f"Wrote {json_path.as_posix()}")
     return 0
+
+
+def _cmd_summarize(args: argparse.Namespace, ws: Path) -> int:
+    fmt = args.format
+    if args.digest_json:
+        jp = args.digest_json.resolve()
+        if not jp.exists():
+            sys.stderr.write(f"error: JSON file not found: {jp}\n")
+            return 2
+        raw = read_text(jp)
+        if not raw.strip():
+            sys.stderr.write("error: empty JSON file.\n")
+            return 2
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            sys.stderr.write(f"error: invalid JSON: {e}\n")
+            return 2
+        if not isinstance(data, dict):
+            sys.stderr.write("error: JSON root must be an object.\n")
+            return 2
+        sys.stdout.write(format_summary_from_export(data, fmt))
+        return 0
+
+    if args.session_log:
+        sp = args.session_log.resolve()
+        if not sp.exists():
+            sys.stderr.write(f"error: file not found: {sp}\n")
+            return 2
+        segments = parse_session_log(sp)
+        digest = analyze_segments(segments, sp.as_posix())
+        _apply_workspace_relative_source(digest, sp, ws)
+        sys.stdout.write(format_summary(digest, fmt))
+        return 0
+
+    sys.stderr.write("error: summarize requires --from-json or a session transcript path.\n")
+    return 2
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv_list = list(sys.argv[1:] if argv is None else argv)
+    if (
+        argv_list
+        and argv_list[0] not in ("extract", "summarize", "-h", "--help")
+        and not argv_list[0].startswith("-")
+    ):
+        p0 = Path(argv_list[0])
+        if p0.is_file():
+            argv_list = ["extract", *argv_list]
+
+    args = build_arg_parser().parse_args(argv_list)
+    ws = (args.workspace_root or repo_root()).resolve()
+
+    if args.command == "extract":
+        memory_dir = (args.memory_dir or ws / "memory").resolve()
+        return _cmd_extract(args, ws, memory_dir)
+    if args.command == "summarize":
+        return _cmd_summarize(args, ws)
+
+    sys.stderr.write("error: unknown command.\n")
+    return 2
 
 
 if __name__ == "__main__":
