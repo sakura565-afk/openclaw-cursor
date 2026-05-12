@@ -23,7 +23,6 @@ from typing import Any, Iterator, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LOG_PATH = ROOT / ".learnings" / "error_log.json"
-DEFAULT_MD_PATH = ROOT / ".learnings" / "error_log.md"
 SCAN_STATE_NAME = ".error_learning_scan_state.json"
 MAX_LOG_FILE_BYTES = 2 * 1024 * 1024
 SCAN_OVERLAP_MINUTES = 90
