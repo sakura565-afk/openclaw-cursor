@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -54,7 +55,7 @@ class AutoReflectionTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            insights = list(auto_reflection.read_and_extract(log_path, root))
+            insights = list(auto_reflection.read_and_extract(log_path, "logs/agent.json"))
         texts = [i.text.lower() for i in insights]
         self.assertTrue(any("traceback" in t for t in texts))
 
@@ -88,10 +89,15 @@ class AutoReflectionTests(unittest.TestCase):
             self.assertTrue(learnings.exists())
             self.assertTrue((learnings / "insights").exists())
             self.assertTrue((learnings / "summaries").exists())
+            self.assertTrue((learnings / "CURATED_SUMMARY.md").exists())
             md_files = list((learnings / "insights").glob("run_*.md"))
             self.assertEqual(len(md_files), 1)
             body = md_files[0].read_text(encoding="utf-8")
             self.assertIn("Lesson learned:", body)
+            self.assertIn("Recurring failure patterns", body)
+            latest = json.loads((learnings / "latest.json").read_text(encoding="utf-8"))
+            self.assertIn("curated_summary_md", latest)
+            self.assertIn("daily_summary_md", latest)
 
     def test_post_webhook_uses_json_post(self):
         captured: dict[str, object] = {}
@@ -120,6 +126,30 @@ class AutoReflectionTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(captured["data"]["text"], "hi")
         self.assertEqual(captured["data"]["meta"]["k"], 1)
+
+    def test_openclaw_home_logs_included_when_configured(self):
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            root = base / "repo"
+            root.mkdir()
+            oc = base / "oc"
+            (oc / "logs").mkdir(parents=True)
+            (oc / "logs" / "agent.log").write_text("Error: simulated OpenClaw tool failure.\n")
+            (root / "logs").mkdir(parents=True)
+            (root / "logs" / "local.log").write_text("Error: local failure.\n")
+            env = os.environ.copy()
+            env["OPENCLAW_HOME"] = str(oc)
+            with mock.patch.dict(os.environ, env, clear=False):
+                run = auto_reflection.run_reflection(
+                    root,
+                    since_hours=24,
+                    extra_globs=[],
+                    dry_run=True,
+                    include_openclaw=True,
+                )
+            joined = " ".join(run.session_files)
+            self.assertIn("openclaw/logs/agent.log", joined)
+            self.assertIn("logs/local.log", joined)
 
 
 class AutoReflectionMainTests(unittest.TestCase):
