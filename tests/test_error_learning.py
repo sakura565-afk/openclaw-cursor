@@ -67,10 +67,9 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertEqual(len(store["entries"]), 1)
 
         entry = store["entries"][0]
-        self.assertEqual(
-            set(entry.keys()),
-            {"id", "timestamp", "category", "error", "lesson", "resolved"},
-        )
+        required = {"id", "timestamp", "category", "error", "lesson", "resolved"}
+        self.assertTrue(set(entry.keys()) >= required)
+        self.assertTrue(set(entry.keys()) <= required | {"source"})
         self.assertEqual(entry["category"], "runtime_error")
         self.assertTrue(entry["resolved"])
 
@@ -131,6 +130,44 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertEqual(search_stderr, "")
         self.assertIn("JSON payload was truncated", search_stdout)
         self.assertNotIn("cold restart", search_stdout)
+
+    def test_classify_error_type_buckets(self) -> None:
+        self.assertEqual(error_learning.classify_error_type("HTTP 429 Too Many Requests"), "rate_limit")
+        self.assertEqual(error_learning.classify_error_type("401 Unauthorized"), "auth")
+        self.assertEqual(error_learning.classify_error_type("MCP tool execution failed"), "tool")
+
+    def test_scan_writes_markdown_and_dedupes(self) -> None:
+        log_dir = self.root / "logs"
+        log_dir.mkdir(parents=True)
+        (log_dir / "session.log").write_text(
+            "2026-01-01T00:00:00Z agent: HTTP 429 Too Many Requests for upstream API\n",
+            encoding="utf-8",
+        )
+        md_path = self.root / ".learnings" / "error_log.md"
+        n_files, added_first, total_first, _ = error_learning.run_scan(
+            self.root,
+            since_hours=24 * 365,
+            extra_globs=[],
+            md_path=md_path,
+            json_path=None,
+        )
+        self.assertGreaterEqual(n_files, 1)
+        self.assertGreaterEqual(added_first, 1)
+        self.assertGreaterEqual(total_first, 1)
+        self.assertTrue(md_path.is_file())
+        parsed = error_learning.parse_error_log_md(md_path)
+        self.assertGreaterEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["category"], "rate_limit")
+
+        _, added_second, total_second, _ = error_learning.run_scan(
+            self.root,
+            since_hours=24 * 365,
+            extra_globs=[],
+            md_path=md_path,
+            json_path=None,
+        )
+        self.assertEqual(added_second, 0)
+        self.assertEqual(total_first, total_second)
 
 
 if __name__ == "__main__":
