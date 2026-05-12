@@ -197,6 +197,68 @@ class ToolDiscoveryTests(unittest.TestCase):
         self.assertEqual(payload["goal"], "send notification")
         self.assertEqual(len(payload["suggestions"]), 1)
 
+    def test_build_searchable_index_includes_skills_and_scripts(self) -> None:
+        root = self._build_repo()
+        skill_dir = root / "skills" / "demo_skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            textwrap.dedent(
+                """
+                ---
+                name: Demo Skill
+                description: Watches queues for demo purposes
+                tags: [demo, queue]
+                ---
+                ## Actions
+
+                - Watch the queue
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        (root / "scripts" / "queue_helper.py").write_text(
+            textwrap.dedent(
+                """
+                '''Queue helper for tests.'''
+                import argparse
+
+                def parse_args():
+                    parser = argparse.ArgumentParser()
+                    subs = parser.add_subparsers(dest="cmd")
+                    subs.add_parser("watch")
+                    return parser.parse_args()
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+
+        index = tool_discovery.build_searchable_index(root)
+        types = {e["entry_type"] for e in index["entries"]}
+        self.assertIn("script", types)
+        self.assertIn("skill_markdown", types)
+        by_id = {e["id"]: e for e in index["entries"]}
+        self.assertIn("script:queue_helper", by_id)
+        self.assertTrue(any(e["entry_type"] == "skill_markdown" for e in index["entries"]))
+
+    def test_search_index_entries_matches_keywords(self) -> None:
+        entries = [
+            {
+                "entry_type": "script",
+                "id": "script:alpha",
+                "name": "alpha",
+                "description": "filesystem sync",
+                "path": "scripts/alpha.py",
+                "keywords": ["sync", "file"],
+                "capabilities": [],
+            }
+        ]
+        hits = tool_discovery.search_index_entries(entries, ["sync"], limit=5)
+        self.assertEqual(len(hits), 1)
+        self.assertGreater(hits[0]["match_score"], 0)
+        self.assertIn("sync", hits[0]["matched_tokens"])
+
 
 if __name__ == "__main__":
     unittest.main()
