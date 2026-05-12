@@ -1,6 +1,14 @@
 logs/sync_obsidian_*.json
 logs/nightly_pipeline.log
-.learnings/
+# Ephemeral reflection artifacts (curated index at .learnings/tools/tool_discovery.md is tracked)
+.learnings/.state.json
+.learnings/insights/
+.learnings/summaries/
+.learnings/latest.json
+.learnings/tools/tool_registry.json
+.learnings/tools/usage_patterns.json
+.learnings/tools/tool_discovery_state.json
+.learnings/tools/tool_evolution.log
 __pycache__/
 *.py[cod]
 tool_discovery_report.md
