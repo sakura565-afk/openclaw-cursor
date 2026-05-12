@@ -1,6 +1,9 @@
 logs/sync_obsidian_*.json
 logs/nightly_pipeline.log
-.learnings/
+# Ignore local learnings except the committed prompt-template archive.
+.learnings/**
+!.learnings/prompts/
+!.learnings/prompts/**
 __pycache__/
 *.py[cod]
 tool_discovery_report.md
