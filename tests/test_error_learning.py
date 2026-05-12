@@ -13,7 +13,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from scripts import error_learning  # noqa: E402
+from scripts import error_learning  # noqa: E402  # re-exports root ``error_learning``
 
 
 class ErrorLearningTests(unittest.TestCase):
@@ -63,15 +63,16 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertIn("Duplicate entry detected", second_stdout)
 
         store = self.read_store()
-        self.assertEqual(store["schema_version"], 1)
+        self.assertEqual(store["schema_version"], error_learning.SCHEMA_VERSION)
         self.assertEqual(len(store["entries"]), 1)
 
         entry = store["entries"][0]
         self.assertEqual(
             set(entry.keys()),
-            {"id", "timestamp", "category", "error", "lesson", "resolved"},
+            {"id", "timestamp", "category", "error_type", "error", "lesson", "resolved"},
         )
         self.assertEqual(entry["category"], "runtime_error")
+        self.assertEqual(entry["error_type"], "network")
         self.assertTrue(entry["resolved"])
 
     def test_list_command_outputs_colorized_entries_and_status(self) -> None:
@@ -97,6 +98,7 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertIn("\033[", stdout)
         self.assertIn("warning", stdout)
         self.assertIn("[open]", stdout)
+        self.assertIn("Type:", stdout)
         self.assertIn("Lesson:", stdout)
         self.assertIn("Error:", stdout)
 
@@ -131,6 +133,59 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertEqual(search_stderr, "")
         self.assertIn("JSON payload was truncated", search_stdout)
         self.assertNotIn("cold restart", search_stdout)
+
+    def test_infer_error_type_heuristics(self) -> None:
+        self.assertEqual(
+            error_learning.infer_error_type("Connection refused to host:5432"), "network"
+        )
+        self.assertEqual(
+            error_learning.infer_error_type("JSONDecodeError: unexpected token"), "parse"
+        )
+        self.assertEqual(error_learning.infer_error_type("Something vague happened"), "general")
+
+    def test_sqlite_persistence_and_deduplication(self) -> None:
+        db_path = self.root / "learn.sqlite"
+        first, created_a = error_learning.add_entry(
+            db_path, "net", "econnreset from peer", "retry with exponential backoff"
+        )
+        self.assertTrue(created_a)
+        second, created_b = error_learning.add_entry(
+            db_path, "net", "econnreset from peer", "retry with exponential backoff"
+        )
+        self.assertFalse(created_b)
+        self.assertEqual(first["id"], second["id"])
+        store = error_learning.load_store(db_path)
+        entries = store["entries"]
+        self.assertIsInstance(entries, list)
+        self.assertEqual(len(entries), 1)
+
+    def test_suggest_command_surfaces_lessons(self) -> None:
+        error_learning.add_entry(
+            self.log_path,
+            "ops",
+            "redis connection timed out during queue drain",
+            "Increase client timeout and add circuit breaker",
+        )
+        exit_code, stdout, stderr = self.run_cli("suggest", "timeout connecting to redis")
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn("circuit breaker", stdout)
+
+    def test_export_sqlite_to_json_roundtrip(self) -> None:
+        db_path = self.root / "roundtrip.db"
+        json_out = self.root / "exported.json"
+        error_learning.add_entry(
+            db_path,
+            "x",
+            "ModuleNotFoundError: No module named 'missing_pkg_abc'",
+            "pip install pyyaml",
+        )
+        count = error_learning.export_sqlite_to_json(db_path, json_out)
+        self.assertEqual(count, 1)
+        doc = json.loads(json_out.read_text(encoding="utf-8"))
+        self.assertEqual(doc["schema_version"], error_learning.SCHEMA_VERSION)
+        self.assertEqual(len(doc["entries"]), 1)
+        self.assertEqual(doc["entries"][0]["error_type"], "dependency")
 
 
 if __name__ == "__main__":
