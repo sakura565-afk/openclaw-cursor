@@ -147,7 +147,7 @@ class ToolDiscoveryTests(unittest.TestCase):
         )
         output_path = root / "docs" / "tools.md"
         exit_code = tool_discovery.main(
-            ["--root", str(root), "docs", "--output", str(output_path)]
+            ["docs", "--root", str(root), "--output", str(output_path)]
         )
 
         self.assertEqual(exit_code, 0)
@@ -179,9 +179,9 @@ class ToolDiscoveryTests(unittest.TestCase):
             sys.stdout = buffer
             exit_code = tool_discovery.main(
                 [
+                    "suggest",
                     "--root",
                     str(root),
-                    "suggest",
                     "send notification",
                     "--context",
                     "api webhook",
@@ -196,6 +196,91 @@ class ToolDiscoveryTests(unittest.TestCase):
         payload = json.loads(buffer.getvalue())
         self.assertEqual(payload["goal"], "send notification")
         self.assertEqual(len(payload["suggestions"]), 1)
+
+    def test_run_discovery_scan_includes_usage_and_registry(self) -> None:
+        root = self._build_repo()
+        (root / "scripts" / "queue_watch.py").write_text(
+            textwrap.dedent(
+                """
+                '''Watch queues.'''
+                import argparse
+
+                def parse_args():
+                    parser = argparse.ArgumentParser()
+                    subs = parser.add_subparsers(dest="cmd")
+                    subs.add_parser("watch")
+                    return parser.parse_args()
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        logs = root / "logs"
+        logs.mkdir(parents=True)
+        (logs / "agent.log").write_text(
+            'Calling tool: Grep\npattern="queue"\n'
+            "Error: command failed with exit code 1\n"
+            'tool: queue_watch\n'
+            "--verbose\n"
+            "completed ok\n",
+            encoding="utf-8",
+        )
+
+        payload = tool_discovery.run_discovery_scan(root, session_globs=["logs/**/*.log"])
+        registered = payload["registered"]
+        names = {r.name for r in registered}
+        self.assertIn("queue_watch", names)
+        self.assertIn("Grep", payload["usage"].tools)
+        self.assertGreaterEqual(payload["usage"].tools["Grep"].call_count, 1)
+
+        written = tool_discovery.write_scan_artifacts(root, payload)
+        self.assertTrue((root / written["registry"]).exists())
+        self.assertTrue((root / written["patterns"]).exists())
+        idx = root / written["index"]
+        self.assertTrue(idx.exists())
+        self.assertIn("queue_watch", idx.read_text(encoding="utf-8"))
+
+    def test_search_natural_language_prefers_matching_name(self) -> None:
+        root = self._build_repo()
+        (root / "scripts" / "obsidian_sync.py").write_text(
+            textwrap.dedent(
+                """
+                '''Sync Obsidian vaults.'''
+                import argparse
+
+                def parse_args():
+                    parser = argparse.ArgumentParser()
+                    subs = parser.add_subparsers(dest="cmd")
+                    subs.add_parser("sync")
+                    return parser.parse_args()
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        (root / "scripts" / "ollama_batch.py").write_text(
+            textwrap.dedent(
+                """
+                '''Download Ollama models.'''
+                import argparse
+
+                def parse_args():
+                    parser = argparse.ArgumentParser()
+                    subs = parser.add_subparsers(dest="cmd")
+                    subs.add_parser("pull")
+                    return parser.parse_args()
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+
+        payload = tool_discovery.run_discovery_scan(root, session_globs=["nope/*.log"])
+        hits = tool_discovery.search_tools_natural_language(
+            payload["registered"], "sync obsidian markdown vault", top_n=3
+        )
+        self.assertTrue(hits)
+        self.assertEqual(hits[0]["name"], "obsidian_sync")
 
 
 if __name__ == "__main__":
