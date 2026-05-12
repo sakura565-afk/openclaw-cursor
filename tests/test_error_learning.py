@@ -132,6 +132,33 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertIn("JSON payload was truncated", search_stdout)
         self.assertNotIn("cold restart", search_stdout)
 
+    def test_sqlite_store_dedupes_and_suggest(self) -> None:
+        db_path = self.root / "learn.db"
+        entry1, created1 = error_learning.add_entry(
+            db_path,
+            "imports",
+            "No module named 'yaml'",
+            "Install PyYAML in the active venv",
+        )
+        self.assertTrue(created1)
+        entry2, created2 = error_learning.add_entry(
+            db_path,
+            "imports",
+            "No module named 'yaml'",
+            "Install PyYAML in the active venv",
+        )
+        self.assertFalse(created2)
+        self.assertEqual(entry1["id"], entry2["id"])
+
+        store = error_learning.get_store(db_path)
+        pairs = store.suggest("ModuleNotFoundError: No module named yaml", limit=3)
+        self.assertTrue(pairs)
+        self.assertIn("PyYAML", pairs[0][1]["lesson"])
+
+    def test_infer_error_type_keyword(self) -> None:
+        self.assertEqual(error_learning.infer_error_type("HTTP 401 Unauthorized"), "authentication")
+        self.assertEqual(error_learning.infer_error_type("JSON decode error at line 1"), "parser")
+
 
 if __name__ == "__main__":
     unittest.main()
