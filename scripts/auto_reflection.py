@@ -3,8 +3,9 @@
 Cron-friendly self-reflection over recent agent-style logs and session artifacts.
 
 Scans configurable paths for logs and JSON, extracts recurring failure patterns and
-actionable notes, writes structured outputs under `.learnings/`, builds a periodic
-summary, and optionally posts the summary (Telegram or generic webhook).
+actionable notes, writes structured outputs under `.learnings/` (including UTC
+date-named `YYYY-MM-DD.md` / `YYYY-MM-DD.json` plus `insights/run_*.` artifacts),
+builds a periodic summary, and optionally posts the summary (Telegram or generic webhook).
 
 Example crontab (daily at 09:00 UTC):
 
@@ -296,6 +297,57 @@ def weekly_report_path(root: Path, dt: datetime) -> Path:
     return root / LEARNINGS_DIR / SUMMARIES_SUBDIR / f"weekly_{week}.md"
 
 
+def daily_learning_path(root: Path, dt: datetime) -> Path:
+    """Primary cron artifact: one Markdown file per UTC calendar day."""
+
+    return root / LEARNINGS_DIR / f"{dt.date().isoformat()}.md"
+
+
+def daily_learning_json_path(root: Path, dt: datetime) -> Path:
+    return root / LEARNINGS_DIR / f"{dt.date().isoformat()}.json"
+
+
+def update_daily_learnings(root: Path, run_at: datetime, run: ReflectionRun) -> tuple[Path, Path]:
+    """Append this run to `.learnings/YYYY-MM-DD.md` and merge JSON by run_id (idempotent)."""
+
+    md_path = daily_learning_path(root, run_at)
+    json_path = daily_learning_json_path(root, run_at)
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+
+    section = (
+        f"\n## Run {run.run_id}\n\n"
+        f"_Started {run.started_at_utc} — {run.files_scanned} files — "
+        f"{len(run.insights)} insights_\n\n"
+        f"{run.summary_markdown}\n"
+    )
+    if md_path.exists():
+        existing = md_path.read_text(encoding="utf-8")
+        if f"## Run {run.run_id}" in existing:
+            pass
+        else:
+            md_path.write_text(existing.rstrip() + section, encoding="utf-8")
+    else:
+        md_path.write_text(
+            f"# Daily learnings — {run_at.date().isoformat()} (UTC)\n" + section.lstrip("\n"),
+            encoding="utf-8",
+        )
+
+    runs_payload: list[dict[str, Any]] = []
+    if json_path.exists():
+        try:
+            prev = json.loads(json_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            prev = []
+        if isinstance(prev, list):
+            runs_payload = [r for r in prev if isinstance(r, dict) and r.get("run_id") != run.run_id]
+        elif isinstance(prev, dict) and prev.get("run_id") != run.run_id:
+            runs_payload = [prev]
+    runs_payload.append(asdict(run))
+    json_path.write_text(json.dumps(runs_payload, indent=2) + "\n", encoding="utf-8")
+
+    return md_path, json_path
+
+
 def update_weekly_summary(root: Path, run_at: datetime, body: str) -> Path:
     """Append this run into the ISO-week summary file (idempotent headings per day)."""
 
@@ -334,13 +386,22 @@ def write_insight_artifacts(root: Path, run: ReflectionRun) -> tuple[Path, Path]
     return md_path, json_path
 
 
-def write_latest_pointers(root: Path, md_path: Path, weekly_path: Path) -> None:
+def write_latest_pointers(
+    root: Path,
+    md_path: Path,
+    weekly_path: Path,
+    *,
+    daily_md: Path,
+    daily_json: Path,
+) -> None:
     """Small files for automation consumers."""
 
     ptr = root / LEARNINGS_DIR / "latest.json"
     data = {
         "insights_md": md_path.relative_to(root).as_posix(),
         "weekly_summary_md": weekly_path.relative_to(root).as_posix(),
+        "daily_md": daily_md.relative_to(root).as_posix(),
+        "daily_json": daily_json.relative_to(root).as_posix(),
         "generated_at_utc": utc_now().replace(microsecond=0).isoformat(),
     }
     ptr.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -463,8 +524,9 @@ def run_reflection(
         return run
 
     md_path, _ = write_insight_artifacts(root, run)
+    daily_md, daily_json = update_daily_learnings(root, started, run)
     weekly_path = update_weekly_summary(root, started, summary)
-    write_latest_pointers(root, md_path, weekly_path)
+    write_latest_pointers(root, md_path, weekly_path, daily_md=daily_md, daily_json=daily_json)
 
     state["last_run_utc"] = finished.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     state["last_run_id"] = run_id

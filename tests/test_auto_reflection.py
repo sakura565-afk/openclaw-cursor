@@ -92,6 +92,15 @@ class AutoReflectionTests(unittest.TestCase):
             self.assertEqual(len(md_files), 1)
             body = md_files[0].read_text(encoding="utf-8")
             self.assertIn("Lesson learned:", body)
+            daily_md = list(learnings.glob("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md"))
+            self.assertEqual(len(daily_md), 1, msg="expected one UTC date-named .md in .learnings/")
+            self.assertIn("Lesson learned:", daily_md[0].read_text(encoding="utf-8"))
+            daily_json = list(learnings.glob("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].json"))
+            self.assertEqual(len(daily_json), 1)
+            payload = json.loads(daily_json[0].read_text(encoding="utf-8"))
+            self.assertIsInstance(payload, list)
+            self.assertEqual(len(payload), 1)
+            self.assertEqual(payload[0]["run_id"], run_full.run_id)
 
     def test_post_webhook_uses_json_post(self):
         captured: dict[str, object] = {}
