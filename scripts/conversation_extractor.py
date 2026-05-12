@@ -41,6 +41,20 @@ LEARNING_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     )
 )
 
+ERROR_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"(?:^|\b)(?:error|exception|traceback|fatal|critical failure)\s*[:\-—]\s*(.+)",
+        r"\b(?:command failed|exit code|non-zero exit|ECONNREFUSED|ENOENT|EACCES|EPERM)\b\s*[:\-]?\s*(.{0,200})",
+        r"\b(?:failed to|failure to|unable to|could not|cannot)\s+(.{10,200})",
+        r"(?:AssertionError|RuntimeError|TypeError|ValueError|KeyError|OSError|IOError|JSONDecodeError)\s*[:\s]+(.+)",
+        r"`(?:stderr|stdout)`\s*[:\-]\s*(.+)",
+        r"(?:HTTP\s*\d{3}|status\s*code\s*\d{3})\s*[:\-]?\s*(.{0,120})",
+    )
+)
+
+SELF_IMPROVEMENT_SCHEMA_VERSION = 1
+
 # Inline tool/function references in transcripts
 TOOL_REGEXES: tuple[re.Pattern[str], ...] = (
     re.compile(r'\b(?:invoke|calling|called)\s+(?:tool\s+)?[`"]?([\w\-./:]+)[`"]?', re.I),
@@ -431,7 +445,9 @@ class ConversationDigest:
     generated_at_utc: str
     segments: list[tuple[int, str | None, str]]
     decisions: list[str]
+    errors: list[str]
     learnings: list[str]
+    content_highlights: list[dict[str, Any]]
     tool_structured: Counter[str] = field(default_factory=Counter)
     tool_textual: Counter[str] = field(default_factory=Counter)
 
@@ -443,9 +459,11 @@ class ConversationDigest:
 
 def analyze_segments(segments: list[tuple[int, str | None, str]], source_display: str) -> ConversationDigest:
     decisions_acc: list[str] = []
+    errors_acc: list[str] = []
     learnings_acc: list[str] = []
     structured_tools: Counter[str] = Counter()
     blobs_for_text_tools: list[str] = []
+    highlight_candidates: list[tuple[int, str | None, str]] = []
 
     for turn, role, text in segments:
         rl = (role or "").lower()
@@ -457,28 +475,59 @@ def analyze_segments(segments: list[tuple[int, str | None, str]], source_display
 
         if rl == "tool_output":
             blobs_for_text_tools.append(text)
+            errors_acc.extend(match_patterns(text, ERROR_LINE_PATTERNS))
+            learnings_acc.extend(match_patterns(text, LEARNING_LINE_PATTERNS))
             continue
 
         if rl in {"", "assistant", "agent"} or rl is None:
             decisions_acc.extend(match_patterns(text, DECISION_LINE_PATTERNS))
             learnings_acc.extend(match_patterns(text, LEARNING_LINE_PATTERNS))
+            errors_acc.extend(match_patterns(text, ERROR_LINE_PATTERNS))
         elif rl == "user":
             # users sometimes phrase decisions explicitly
             decisions_acc.extend(match_patterns(text, DECISION_LINE_PATTERNS))
+            learnings_acc.extend(match_patterns(text, LEARNING_LINE_PATTERNS))
+            errors_acc.extend(match_patterns(text, ERROR_LINE_PATTERNS))
+        elif rl == "system":
+            errors_acc.extend(match_patterns(text, ERROR_LINE_PATTERNS))
 
         blobs_for_text_tools.append(text)
+        if rl not in {"tool"} and len(text.strip()) >= 120:
+            highlight_candidates.append((turn, role, text.strip()))
 
     combined = "\n\n".join(blobs_for_text_tools)
     textual_tools = extract_tool_signals(combined)
 
     uniq = lambda xs: list(dict.fromkeys([x for x in xs if x]))  # noqa: E731
 
+    # Longest substantive segments first (meaningful content for downstream review)
+    highlight_candidates.sort(key=lambda t: len(t[2]), reverse=True)
+    content_highlights: list[dict[str, Any]] = []
+    seen_snip: set[str] = set()
+    for turn, role, body in highlight_candidates:
+        snip = body if len(body) <= 400 else body[:397] + "..."
+        key = normalize_ws(snip[:200])
+        if key in seen_snip:
+            continue
+        seen_snip.add(key)
+        content_highlights.append(
+            {
+                "turn": turn,
+                "role": role or "unknown",
+                "snippet": snip,
+            }
+        )
+        if len(content_highlights) >= 18:
+            break
+
     return ConversationDigest(
         source=source_display,
         generated_at_utc=datetime.now(timezone.utc).isoformat(),
         segments=segments,
         decisions=uniq(decisions_acc)[:120],
+        errors=uniq(errors_acc)[:120],
         learnings=uniq(learnings_acc)[:120],
+        content_highlights=content_highlights,
         tool_structured=structured_tools,
         tool_textual=textual_tools,
     )
@@ -501,12 +550,27 @@ def render_markdown(d: ConversationDigest) -> str:
     else:
         lines.append("- *(no explicit decision lines detected)*")
 
+    lines.extend(["", "## Errors & failures"])
+    if d.errors:
+        for item in d.errors:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- *(no explicit error cues detected)*")
+
     lines.extend(["", "## Learnings & takeaways"])
     if d.learnings:
         for item in d.learnings:
             lines.append(f"- {item}")
     else:
         lines.append("- *(no explicit learning cues detected)*")
+
+    lines.extend(["", "## Meaningful content (longest excerpts)"])
+    if d.content_highlights:
+        for h in d.content_highlights[:12]:
+            rl = h.get("role") or "?"
+            lines.append(f"- **turn {h.get('turn')}** ({rl}): {h.get('snippet', '')}")
+    else:
+        lines.append("- *(no long excerpts)*")
 
     lines.extend(["", "## Tool usage"])
 
@@ -530,18 +594,33 @@ def render_markdown(d: ConversationDigest) -> str:
 
 
 def digest_to_dict(d: ConversationDigest) -> dict[str, Any]:
+    """JSON suitable for memory archives and the self-improvement pipeline."""
+
+    tools_merged = d.all_tools()
     return {
+        "schema_version": SELF_IMPROVEMENT_SCHEMA_VERSION,
+        "artifact_type": "openclaw_conversation_extraction",
         "source": d.source,
         "generated_at_utc": d.generated_at_utc,
         "counts": {
             "segments": len(d.segments),
             "decisions": len(d.decisions),
+            "errors": len(d.errors),
             "learnings": len(d.learnings),
-            "tool_names_distinct": len(d.all_tools()),
+            "content_highlights": len(d.content_highlights),
+            "tool_names_distinct": len(tools_merged),
         },
         "decisions": d.decisions,
+        "errors": d.errors,
         "learnings": d.learnings,
-        "tools_ranked": d.all_tools().most_common(),
+        "key_learnings": d.learnings,
+        "meaningful_content": d.content_highlights,
+        "tools_used": {
+            "ranked": tools_merged.most_common(),
+            "structured_counts": dict(d.tool_structured),
+            "text_heuristic_counts": dict(d.tool_textual),
+        },
+        "tools_ranked": tools_merged.most_common(),
         "tools_structured": dict(d.tool_structured),
         "tools_from_text_heuristic": dict(d.tool_textual),
     }
@@ -565,7 +644,7 @@ def write_digest(
     return md_path, js_path
 
 
-def run_extraction(session_path: Path, memory_dir: Path, workspace_root: Path) -> tuple[Path, Path]:
+def run_extraction(session_path: Path, memory_dir: Path, workspace_root: Path) -> tuple[ConversationDigest, Path, Path]:
     segments = parse_session_log(session_path.resolve())
 
     digest = analyze_segments(segments, session_path.resolve().as_posix())
@@ -582,7 +661,8 @@ def run_extraction(session_path: Path, memory_dir: Path, workspace_root: Path) -
         short = Path(relative[len(workspace_posix) :].lstrip("/")).as_posix()
         digest.source = short
 
-    return write_digest(digest, memory_dir, stem)
+    md_path, js_path = write_digest(digest, memory_dir, stem)
+    return digest, md_path, js_path
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -610,6 +690,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Workspace root for relative paths in output (defaults to repo root).",
     )
+    p.add_argument(
+        "--print-json",
+        action="store_true",
+        help="Print extraction JSON to stdout (for self-improvement pipelines).",
+    )
     return p
 
 
@@ -630,7 +715,7 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             tmp.close()
 
-        md_path, json_path = run_extraction(path, memory_dir, ws)
+        digest, md_path, json_path = run_extraction(path, memory_dir, ws)
         try:
             path.unlink(missing_ok=True)  # type: ignore[arg-type]
         except OSError:
@@ -638,6 +723,8 @@ def main(argv: list[str] | None = None) -> int:
 
         print(f"Wrote {md_path.as_posix()}")
         print(f"Wrote {json_path.as_posix()}")
+        if args.print_json:
+            print(json.dumps(digest_to_dict(digest), indent=2, ensure_ascii=False))
         return 0
 
     if not args.session_log:
@@ -649,9 +736,11 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"error: file not found: {sp}\n")
         return 2
 
-    md_path, json_path = run_extraction(sp, memory_dir, ws)
+    digest, md_path, json_path = run_extraction(sp, memory_dir, ws)
     print(f"Wrote {md_path.as_posix()}")
     print(f"Wrote {json_path.as_posix()}")
+    if args.print_json:
+        print(json.dumps(digest_to_dict(digest), indent=2, ensure_ascii=False))
     return 0
 
 
