@@ -1,0 +1,62 @@
+{
+  "id": "documentation",
+  "name": "Documentation writing",
+  "description": "User-facing or developer documentation from code, APIs, or product intent.",
+  "tags": ["docs", "technical-writing"],
+  "placeholders": [
+    {
+      "name": "audience",
+      "description": "Who reads this (end users, operators, library consumers, new hires).",
+      "required": true
+    },
+    {
+      "name": "doc_type",
+      "description": "README, tutorial, reference, ADR, runbook, changelog entry, etc.",
+      "required": true
+    },
+    {
+      "name": "source_material",
+      "description": "Code snippets, API schema, meeting notes, or existing rough notes.",
+      "required": true
+    },
+    {
+      "name": "tone",
+      "description": "Voice: formal, friendly, concise; level of assumed expertise.",
+      "required": true
+    }
+  ],
+  "body": "You are a technical writer producing clear documentation.\n\n**Audience:**\n{{audience}}\n\n**Document type:**\n{{doc_type}}\n\n**Source material:**\n{{source_material}}\n\n**Tone and depth:**\n{{tone}}\n\nWrite the documentation. Prefer concrete examples over abstract prose. Call out prerequisites and failure modes.\n",
+  "expected_output_format": {
+    "description": "Deliver final markdown (or plain text if the doc type is not markdown) ready to commit.",
+    "sections": [
+      "Title and one-line summary",
+      "Prerequisites (if any)",
+      "Main content with headings appropriate to the doc type",
+      "Examples",
+      "Troubleshooting or FAQ (if applicable)",
+      "See also / related links (placeholders allowed)"
+    ]
+  },
+  "examples": [
+    {
+      "title": "CLI tool README section",
+      "placeholder_values": {
+        "audience": "Backend engineers who will run migrations locally.",
+        "doc_type": "README section: Installation and usage for `schema-sync` CLI.",
+        "source_material": "Command: `schema-sync apply --env dev --dry-run`. Requires `DATABASE_URL`. Exits 2 on drift.",
+        "tone": "Concise, neutral, assumes familiarity with Postgres and env files."
+      },
+      "sample_response": "## schema-sync\n\n**Summary:** Compare applied migrations to the live database and optionally apply pending ones.\n\n### Prerequisites\n- `DATABASE_URL` set in the environment or `.env` loaded by the tool.\n- Network access to the target Postgres instance.\n\n### Install\n```bash\npip install schema-sync\n```\n\n### Usage\nDry-run against dev:\n```bash\nschema-sync apply --env dev --dry-run\n```\n\n### Exit codes\n- `0` — database matches expected schema.\n- `1` — unexpected error (see stderr).\n- `2` — schema drift detected.\n\n### Troubleshooting\nIf you see `connection refused`, verify VPN and that `DATABASE_URL` points at the bastion-forwarded port.\n\n### See also\nInternal runbook: *Database migrations on-call* (link TBD)."
+    },
+    {
+      "title": "Public API reference blurb",
+      "placeholder_values": {
+        "audience": "Third-party integrators using the REST API.",
+        "doc_type": "Endpoint reference for `POST /v1/events`.",
+        "source_material": "Body: `{ \"type\": string, \"payload\": object, \"occurred_at\": RFC3339 }`. Rate limit 100 rpm per API key. 401 if key missing, 422 on schema errors.",
+        "tone": "Friendly but precise; define required fields explicitly."
+      },
+      "sample_response": "## Create event\n\nSubmit a single analytics-style event for asynchronous processing.\n\n### Request\n`POST /v1/events`\n\n**Headers**\n- `Authorization: Bearer <api_key>` — required.\n- `Content-Type: application/json`\n\n**Body (JSON)**\n| Field | Type | Required | Description |\n| --- | --- | --- | --- |\n| `type` | string | yes | Event name (e.g. `checkout.completed`). |\n| `payload` | object | yes | Arbitrary JSON payload; must be an object at the top level. |\n| `occurred_at` | string | yes | Timestamp in RFC3339 format. |\n\n### Responses\n- `202 Accepted` — event accepted.\n- `401 Unauthorized` — missing or invalid API key.\n- `422 Unprocessable Entity` — body failed schema validation (see `errors` array in body).\n\n### Rate limits\nUp to **100 requests per minute** per API key. Throttled requests return `429` with a `Retry-After` header.\n\n### Example\n```json\n{\n  \"type\": \"checkout.completed\",\n  \"payload\": { \"order_id\": \"ord_123\" },\n  \"occurred_at\": \"2026-05-13T12:00:00Z\"\n}\n```"
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "id": "test_generation",
+  "name": "Test generation",
+  "description": "Generate unit, integration, or property-based tests from specifications or code.",
+  "tags": ["testing", "qa"],
+  "placeholders": [
+    {
+      "name": "test_framework",
+      "description": "Framework and runner (e.g. pytest, Jest, go test, JUnit 5).",
+      "required": true
+    },
+    {
+      "name": "code_under_test",
+      "description": "Implementation to cover, including signatures and important branches.",
+      "required": true
+    },
+    {
+      "name": "requirements",
+      "description": "Behaviors, edge cases, invariants, or acceptance criteria to assert.",
+      "required": true
+    },
+    {
+      "name": "style_notes",
+      "description": "Naming conventions, fixture patterns, mocking libraries, or files to mirror.",
+      "required": false
+    }
+  ],
+  "body": "You are generating automated tests.\n\n**Framework / runner:**\n{{test_framework}}\n\n**Code under test:**\n```\n{{code_under_test}}\n```\n\n**Requirements and cases to cover:**\n{{requirements}}\n\n**Style and conventions:**\n{{style_notes}}\n\nProduce tests that are deterministic, isolated, and readable. Use parametrized or table-driven tests when comparing many inputs. Prefer explicit assertions with helpful messages.\n",
+  "expected_output_format": {
+    "description": "Emit complete, runnable test code in the requested language; include imports and minimal fixtures only where needed.",
+    "sections": [
+      "Brief plan (bullet list) of scenarios covered",
+      "Full test file(s) in fenced code blocks",
+      "Notes on any required test doubles or environment setup"
+    ]
+  },
+  "examples": [
+    {
+      "title": "Pure function edge cases",
+      "placeholder_values": {
+        "test_framework": "pytest for Python 3.11",
+        "code_under_test": "def clamp(value: int, low: int, high: int) -> int:\n    if low > high:\n        raise ValueError('low must be <= high')\n    return max(low, min(high, value))\n",
+        "requirements": "Happy path; value below low; value above high; equal to bounds; error when low > high; error message text.",
+        "style_notes": "Use `@pytest.mark.parametrize`; no external mocks; one test module `test_clamp.py` style."
+      },
+      "sample_response": "## Plan\n- Parametrize interior and boundary values.\n- Separate test for invalid range raising `ValueError` with message check.\n\n```python\nimport pytest\nfrom mymodule import clamp\n\n\n@pytest.mark.parametrize(\n    \"value,low,high,expected\",\n    [\n        (5, 0, 10, 5),\n        (-1, 0, 10, 0),\n        (99, 0, 10, 10),\n        (0, 0, 10, 0),\n        (10, 0, 10, 10),\n    ],\n)\ndef test_clamp_happy_and_boundaries(value, low, high, expected):\n    assert clamp(value, low, high) == expected\n\n\ndef test_clamp_rejects_inverted_range():\n    with pytest.raises(ValueError, match=\"low must be\"):\n        clamp(3, high=1, low=5)\n```\n\n## Notes\nNo extra setup; import path assumes `mymodule` is on `PYTHONPATH`."
+    },
+    {
+      "title": "HTTP client with mocked transport",
+      "placeholder_values": {
+        "test_framework": "Jest 29, TypeScript, Node 20",
+        "code_under_test": "export async function fetchStatus(baseUrl: string): Promise<number> {\n  const res = await fetch(`${baseUrl}/health`);\n  return res.status;\n}\n",
+        "requirements": "200 returns 200; network error propagates; non-OK status still returns numeric code.",
+        "style_notes": "Use `global.fetch` mock; colocate test as `fetchStatus.test.ts`."
+      },
+      "sample_response": "## Plan\n- Mock `fetch` to return controlled `Response` objects.\n- Assert status passthrough for 503.\n- Simulate `fetch` rejection for network errors.\n\n```typescript\nimport { fetchStatus } from \"./fetchStatus\";\n\ndescribe(\"fetchStatus\", () => {\n  const original = global.fetch;\n\n  afterEach(() => {\n    global.fetch = original;\n  });\n\n  it(\"returns HTTP status code\", async () => {\n    global.fetch = jest.fn().mockResolvedValue({ status: 503 } as Response);\n    await expect(fetchStatus(\"https://api.example\")).resolves.toBe(503);\n    expect(global.fetch).toHaveBeenCalledWith(\"https://api.example/health\");\n  });\n\n  it(\"propagates network failures\", async () => {\n    global.fetch = jest.fn().mockRejectedValue(new Error(\"boom\"));\n    await expect(fetchStatus(\"https://api.example\")).rejects.toThrow(\"boom\");\n  });\n});\n```\n\n## Notes\nRequires Jest environment with `fetch` on `global`; adjust import path to match the project layout."
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "id": "debug_session",
+  "name": "Debug session",
+  "description": "Guided troubleshooting from symptoms to root cause and verification steps.",
+  "tags": ["debug", "incident"],
+  "placeholders": [
+    {
+      "name": "environment",
+      "description": "OS, runtime versions, deployment target, or IDE.",
+      "required": true
+    },
+    {
+      "name": "symptoms",
+      "description": "What fails, error messages, stack traces, or flaky behavior.",
+      "required": true
+    },
+    {
+      "name": "recent_changes",
+      "description": "What changed recently (commits, config, dependencies).",
+      "required": true
+    },
+    {
+      "name": "reproduction",
+      "description": "Steps or commands to reproduce, or 'not reliably reproducible'.",
+      "required": true
+    }
+  ],
+  "body": "You are helping debug a software issue.\n\n**Environment:**\n{{environment}}\n\n**Symptoms:**\n{{symptoms}}\n\n**Recent changes:**\n{{recent_changes}}\n\n**Reproduction:**\n{{reproduction}}\n\nWork methodically: narrow the problem space, propose checks ordered from cheapest to most expensive, and explain why each step matters.\n",
+  "expected_output_format": {
+    "description": "Answer as a debug playbook the engineer can execute; use markdown checklists where useful.",
+    "sections": [
+      "Problem restatement",
+      "Hypotheses (ranked)",
+      "Isolation steps",
+      "Most likely root cause",
+      "Fix or workaround",
+      "How to verify the fix",
+      "Prevention (tests, monitoring, docs)"
+    ]
+  },
+  "examples": [
+    {
+      "title": "Flaky test in CI",
+      "placeholder_values": {
+        "environment": "GitHub Actions, ubuntu-latest, Python 3.11, pytest 8.x",
+        "symptoms": "Integration test `test_upload_queue` fails ~1 in 20 runs with `Connection reset by peer` when talking to local MinIO.",
+        "recent_changes": "Bumped `urllib3` from 2.0 to 2.2; added parallel test execution (`pytest -n auto`).",
+        "reproduction": "`pytest tests/integration/test_storage.py::test_upload_queue -n 8 --count=50` eventually fails."
+      },
+      "sample_response": "## Problem restatement\nParallel tests race against a shared MinIO bucket or exhaust connection pools, causing intermittent resets.\n\n## Hypotheses (ranked)\n1. Shared bucket/prefix collisions under `pytest-xdist`.\n2. `urllib3` connection pooling + server `keep-alive` limits.\n3. MinIO container resource limits in CI.\n\n## Isolation steps\n- [ ] Run the single test serially 100 times; if stable, concurrency is implicated.\n- [ ] Give each worker a unique bucket via `worker_id` fixture.\n- [ ] Capture tcpdump or MinIO logs on failure.\n\n## Most likely root cause\nPrefix collisions when multiple workers write the same object keys.\n\n## Fix or workaround\nNamespace keys with `worker_id` or use temporary buckets per session.\n\n## How to verify the fix\nStress run with `-n 8 --count=200` green; add a guard assert on key prefix uniqueness.\n\n## Prevention\nDocument storage test isolation; add a CI job that runs integration tests in parallel only after bucket isolation is enforced."
+    },
+    {
+      "title": "Local dev server 500",
+      "placeholder_values": {
+        "environment": "macOS 14, Node 20, Next.js 14 dev server",
+        "symptoms": "Every `/api/health` returns 500; terminal shows `TypeError: fetch failed` in middleware only on cold start.",
+        "recent_changes": "Added edge middleware that calls an internal HTTP URL using `localhost` instead of `127.0.0.1`.",
+        "reproduction": "Stop server, `rm -rf .next`, `npm run dev`, first request to `/api/health` fails; second succeeds."
+      },
+      "sample_response": "## Problem restatement\nCold-start middleware cannot reach internal API over `localhost` in the edge runtime.\n\n## Hypotheses (ranked)\n1. Edge runtime DNS/IPv6 resolution differs for `localhost`.\n2. Server not listening until after first request.\n\n## Isolation steps\n- [ ] Replace `localhost` with `127.0.0.1` or use relative `fetch('/api/...')`.\n- [ ] Add timing logs around middleware execution.\n\n## Most likely root cause\nEdge middleware resolves `localhost` differently on first invocation.\n\n## Fix or workaround\nUse same-origin relative URLs or explicit IPv4 loopback.\n\n## How to verify the fix\nCold start test script hits health ten times in a row.\n\n## Prevention\nLint rule or doc note: no `localhost` in edge middleware."
+    }
+  ]
+}
