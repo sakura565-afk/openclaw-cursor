@@ -47,7 +47,10 @@ python -m unittest tests.test_ollama_model_manager
 python -m scripts.tool_discovery analyze --format json
 python -m scripts.tool_discovery docs --output docs/tool_discovery.md
 python -m scripts.tool_discovery suggest "monitor queue latency" --context "safe local logs" --top 3
+python -m scripts.tool_discovery workflow --report-output docs/workflow_tool_gaps.md
 ```
+
+Repository root `tool_discovery.py` runs the same workflow scan: `python3 tool_discovery.py --root . --format markdown`.
 
 ### What it analyzes
 
@@ -55,6 +58,7 @@ python -m scripts.tool_discovery suggest "monitor queue latency" --context "safe
 - **Dependency analysis** using direct module imports and inferred relationships from shared capabilities/import sets.
 - **Risk and I/O profiles** to distinguish low/medium/high operational risk and filesystem/network/process behavior.
 - **Contextual tool suggestion** scoring with explicit reasoning about capability fit, I/O fit, safety constraints, and possible tool chains.
+- **Workflow gap report** (`workflow` / root `tool_discovery.py`): compares runnable modules under `src/` and `scripts/` against operator-facing files (README, `docs/`, `examples/`, `scripts/nightly_pipeline.py`, `scripts/auto_reflection.py`) and lists entrypoints that are not mentioned there.
 
 ## NOUZ integration (Obsidian typing + search)
 
