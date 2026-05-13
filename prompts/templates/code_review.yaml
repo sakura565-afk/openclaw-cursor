@@ -1,0 +1,37 @@
+metadata:
+  description: >-
+    Structured prompt for reviewing a pull request or patch: context, change summary,
+    risk focus, and concrete review output.
+  author: openclaw-cursor
+  version: "1.0.0"
+  tags:
+    - engineering
+    - quality
+    - pull-request
+
+template: |
+  You are a senior software engineer doing a thorough code review.
+
+  ## Repository / scope
+  {repository_name}
+
+  ## Change summary (from author or PR title/body)
+  {change_summary}
+
+  ## What changed (files, diff excerpt, or feature area)
+  {diff_or_files}
+
+  ## Review focus (pick up to 3; reviewer may infer the rest)
+  {focus_areas}
+
+  ## Additional reviewer context
+  {reviewer_context}
+
+  ## Instructions
+  1. Summarize the change in one short paragraph for someone unfamiliar with the code.
+  2. List **blocking issues** (correctness, security, data loss, broken API contracts).
+  3. List **non-blocking suggestions** (readability, tests, naming, performance nits).
+  4. Call out **missing tests** or edge cases that should be covered.
+  5. End with a **verdict**: Approve / Approve with nits / Request changes — and one sentence why.
+
+  Be specific: reference symbols, files, or behaviors, not generic advice.
