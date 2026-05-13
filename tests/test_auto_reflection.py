@@ -38,6 +38,23 @@ class AutoReflectionTests(unittest.TestCase):
         self.assertEqual(out[0].severity, "error")
         self.assertEqual(set(out[0].source_paths), {"logs/a.log", "logs/b.log"})
 
+    def test_dedupe_insights_prefers_richer_category(self):
+        a = auto_reflection.Insight(
+            text="Error: timeout connecting to API",
+            source_paths=["logs/a.log"],
+            severity="warning",
+            category="general",
+        )
+        b = auto_reflection.Insight(
+            text="Error: timeout connecting to API",
+            source_paths=["logs/b.log"],
+            severity="warning",
+            category="lesson",
+        )
+        out = auto_reflection.dedupe_insights([a, b])
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].category, "lesson")
+
     def test_extract_from_json_walks_nested_errors(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -57,6 +74,46 @@ class AutoReflectionTests(unittest.TestCase):
             insights = list(auto_reflection.read_and_extract(log_path, root))
         texts = [i.text.lower() for i in insights]
         self.assertTrue(any("traceback" in t for t in texts))
+
+    def test_extract_from_json_picks_output_field(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            log_path = root / "out.json"
+            log_path.write_text(
+                json.dumps({"result": {"output": "Failed: disk full on write"}}),
+                encoding="utf-8",
+            )
+            insights = list(auto_reflection.read_and_extract(log_path, root))
+        self.assertTrue(any("disk full" in i.text.lower() for i in insights))
+
+    def test_weekly_summary_skips_duplicate_day_heading(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            from datetime import datetime, timezone
+
+            run_at = datetime(2030, 6, 15, 12, 0, tzinfo=timezone.utc)
+            p1 = auto_reflection.update_weekly_summary(root, run_at, "first body")
+            p2 = auto_reflection.update_weekly_summary(root, run_at, "second body")
+            self.assertEqual(p1, p2)
+            text = p1.read_text(encoding="utf-8")
+            self.assertEqual(text.count("## 2030-06-15 (UTC)"), 1)
+            self.assertIn("first body", text)
+            self.assertNotIn("second body", text)
+
+    def test_weekly_summary_appends_when_date_only_appears_in_prose(self):
+        """A bare ISO date in the file must not be mistaken for the day section marker."""
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            from datetime import datetime, timezone
+
+            run_at = datetime(2030, 6, 15, 12, 0, tzinfo=timezone.utc)
+            path = auto_reflection.weekly_report_path(root, run_at)
+            path.parent.mkdir(parents=True)
+            path.write_text("# Weekly reflection — 2030 W24\n\nNote: 2030-06-15 was noisy.\n")
+            auto_reflection.update_weekly_summary(root, run_at, "fresh summary")
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("## 2030-06-15 (UTC)", text)
+            self.assertIn("fresh summary", text)
 
     def test_run_reflection_writes_learnings_and_skips_writes_on_dry_run(self):
         with tempfile.TemporaryDirectory() as raw:
