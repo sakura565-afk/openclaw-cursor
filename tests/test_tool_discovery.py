@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 import tempfile
 import textwrap
@@ -15,187 +16,165 @@ sys.path.insert(0, str(ROOT))
 from scripts import tool_discovery  # noqa: E402
 
 
-class ToolDiscoveryTests(unittest.TestCase):
-    def _build_repo(self) -> Path:
-        tempdir = tempfile.TemporaryDirectory()
-        self.addCleanup(tempdir.cleanup)
-        root = Path(tempdir.name)
-        scripts_dir = root / "scripts"
-        scripts_dir.mkdir(parents=True, exist_ok=True)
-        (scripts_dir / "__init__.py").write_text('"""scripts"""', encoding="utf-8")
-        return root
+class OpenClawToolDiscoveryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        self.repo = Path(self._td.name)
+        self.env_old = os.environ.get("TOOL_DISCOVERY_ROOT")
+        os.environ["TOOL_DISCOVERY_ROOT"] = str(self.repo)
 
-    def test_analyze_scripts_infers_capabilities_and_dependencies(self) -> None:
-        root = self._build_repo()
-        (root / "scripts" / "queue_monitor.py").write_text(
+    def tearDown(self) -> None:
+        if self.env_old is None:
+            os.environ.pop("TOOL_DISCOVERY_ROOT", None)
+        else:
+            os.environ["TOOL_DISCOVERY_ROOT"] = self.env_old
+
+    def _write_openclaw_tool_js(self) -> None:
+        dist = self.repo / "node_modules" / "openclaw" / "dist"
+        dist.mkdir(parents=True, exist_ok=True)
+        (dist / "tools.js").write_text(
             textwrap.dedent(
                 """
-                import argparse
-                import json
-                import requests
-                import subprocess
-
-                def monitor_queue():
-                    return 1
-
-                def parse_args():
-                    parser = argparse.ArgumentParser()
-                    subs = parser.add_subparsers(dest="cmd")
-                    subs.add_parser("watch")
-                    subs.add_parser("report")
-                    return parser.parse_args()
-                """
-            ).strip()
-            + "\n",
-            encoding="utf-8",
-        )
-        (root / "scripts" / "queue_analytics.py").write_text(
-            textwrap.dedent(
-                """
-                import argparse
-                import json
-                import pathlib
-
-                def build_report():
-                    return {}
-
-                def parse_args():
-                    parser = argparse.ArgumentParser()
-                    subs = parser.add_subparsers(dest="cmd")
-                    subs.add_parser("report")
-                    return parser.parse_args()
+                export const x = {
+                  type: "function",
+                  function: {
+                    name: "alpha_read",
+                    description: "Read alpha channel",
+                    parameters: { "type": "object", "properties": { "path": { "type": "string" } } }
+                  }
+                };
                 """
             ).strip()
             + "\n",
             encoding="utf-8",
         )
 
-        profiles = tool_discovery.analyze_scripts(root)
-        by_name = {profile.name: profile for profile in profiles}
-        self.assertIn("queue_monitor", by_name)
-        self.assertIn("queue_analytics", by_name)
-        self.assertEqual(by_name["queue_monitor"].risk_level, "high")
-        self.assertIn("Queue orchestration", by_name["queue_monitor"].capabilities)
-        self.assertIn("queue_analytics", by_name["queue_monitor"].dependencies)
-
-    def test_generate_markdown_includes_examples_and_dependencies(self) -> None:
-        profile = tool_discovery.ToolProfile(
-            name="sync_obsidian",
-            path=Path("scripts/sync_obsidian.py"),
-            description="Sync Obsidian notes",
-            commands=["sync"],
-            capabilities=["Data synchronization"],
-            io_profile=["filesystem", "network"],
-            dependencies=["telegram_sender"],
-            examples=["python -m scripts.sync_obsidian sync"],
-        )
-
-        markdown = tool_discovery.generate_markdown([profile])
-        self.assertIn("### Example usage", markdown)
-        self.assertIn("telegram_sender", markdown)
-        self.assertIn("python -m scripts.sync_obsidian sync", markdown)
-
-    def test_suggest_tools_returns_contextual_reasoning(self) -> None:
-        profiles = [
-            tool_discovery.ToolProfile(
-                name="queue_manager",
-                path=Path("scripts/queue_manager.py"),
-                description="Manage queue workload",
-                commands=["list", "watch"],
-                capabilities=["Queue orchestration", "Monitoring and observability"],
-                io_profile=["filesystem"],
-                dependencies=["memory_analytics"],
-            ),
-            tool_discovery.ToolProfile(
-                name="telegram_sender",
-                path=Path("scripts/telegram_sender.py"),
-                description="Send notifications",
-                commands=["send"],
-                capabilities=["Messaging and notifications"],
-                io_profile=["network"],
-            ),
-        ]
-
-        suggestions = tool_discovery.suggest_tools(
-            profiles,
-            goal="monitor queue latency and generate report",
-            context="need safe local file logs",
-            top_n=2,
-        )
-        self.assertEqual(len(suggestions), 2)
-        self.assertEqual(suggestions[0]["tool"], "queue_manager")
-        reasons = " ".join(suggestions[0]["reasoning"])
-        self.assertIn("Capability match", reasons)
-        self.assertIn("I/O fit", reasons)
-
-    def test_main_docs_command_writes_file(self) -> None:
-        root = self._build_repo()
-        (root / "scripts" / "tiny_tool.py").write_text(
+    def _write_skill_md(self) -> None:
+        skills = self.repo / "skills" / "demo"
+        skills.mkdir(parents=True, exist_ok=True)
+        (skills / "SKILL.md").write_text(
             textwrap.dedent(
                 """
-                import argparse
-
-                def parse_args():
-                    parser = argparse.ArgumentParser()
-                    subs = parser.add_subparsers(dest="cmd")
-                    subs.add_parser("run")
-                    return parser.parse_args()
+                ---
+                name: Demo Skill
+                description: Demonstrates markdown skill discovery.
+                ---
+                Body ignored for description.
                 """
             ).strip()
             + "\n",
             encoding="utf-8",
         )
-        output_path = root / "docs" / "tools.md"
-        exit_code = tool_discovery.main(
-            ["--root", str(root), "docs", "--output", str(output_path)]
+
+    def _write_skill_python_tool(self) -> None:
+        py_dir = self.repo / "src" / "skills"
+        py_dir.mkdir(parents=True, exist_ok=True)
+        (py_dir / "boxed.py").write_text(
+            textwrap.dedent(
+                '''
+                TOOL = {
+                    "name": "boxed_ping",
+                    "description": "Ping helper",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+                '''
+            ).strip()
+            + "\n",
+            encoding="utf-8",
         )
 
+    def test_scan_collects_dist_js_skill_md_and_python(self) -> None:
+        self._write_openclaw_tool_js()
+        self._write_skill_md()
+        self._write_skill_python_tool()
+
+        tools = tool_discovery.scan_all(self.repo)
+        names = {t.name for t in tools}
+        self.assertIn("alpha_read", names)
+        self.assertIn("Demo Skill", names)
+        self.assertIn("boxed_ping", names)
+
+    def test_scan_command_writes_json_tools_md_and_last_scan(self) -> None:
+        self._write_openclaw_tool_js()
+        self._write_skill_md()
+
+        exit_code = tool_discovery.main(["scan"])
         self.assertEqual(exit_code, 0)
-        self.assertTrue(output_path.exists())
-        self.assertIn("tiny_tool", output_path.read_text(encoding="utf-8"))
 
-    def test_main_suggest_prints_json(self) -> None:
-        root = self._build_repo()
-        (root / "scripts" / "notify_tool.py").write_text(
+        learn = self.repo / ".learnings" / "tools"
+        self.assertTrue((self.repo / "tools.md").exists())
+        json_files = [p for p in learn.glob("*.json") if p.name != "_last_scan.json"]
+        self.assertGreaterEqual(len(json_files), 2)
+        self.assertTrue((learn / "_last_scan.json").exists())
+
+    def test_scan_detects_new_tool_on_second_run(self) -> None:
+        self._write_openclaw_tool_js()
+        self.assertEqual(tool_discovery.main(["scan"]), 0)
+
+        dist = self.repo / "node_modules" / "openclaw" / "dist"
+        (dist / "extra.js").write_text(
             textwrap.dedent(
                 """
-                import argparse
-                import requests
-
-                def parse_args():
-                    parser = argparse.ArgumentParser()
-                    subs = parser.add_subparsers(dest="cmd")
-                    subs.add_parser("send")
-                    return parser.parse_args()
+                const t = {
+                  type: "function",
+                  function: {
+                    name: "brand_new_tool",
+                    description: "Appears on second scan",
+                    parameters: {}
+                  }
+                };
                 """
             ).strip()
             + "\n",
             encoding="utf-8",
         )
 
-        buffer = io.StringIO()
-        previous = sys.stdout
+        buf_err: list[str] = []
+
+        class _Err:
+            def write(self, s: str) -> int:
+                buf_err.append(s)
+                return len(s)
+
+            def flush(self) -> None:
+                return None
+
+        prev_err = sys.stderr
         try:
-            sys.stdout = buffer
-            exit_code = tool_discovery.main(
-                [
-                    "--root",
-                    str(root),
-                    "suggest",
-                    "send notification",
-                    "--context",
-                    "api webhook",
-                    "--top",
-                    "1",
-                ]
-            )
+            sys.stderr = _Err()
+            exit_code = tool_discovery.main(["scan"])
         finally:
-            sys.stdout = previous
+            sys.stderr = prev_err
 
         self.assertEqual(exit_code, 0)
-        payload = json.loads(buffer.getvalue())
-        self.assertEqual(payload["goal"], "send notification")
-        self.assertEqual(len(payload["suggestions"]), 1)
+        joined = "".join(buf_err)
+        self.assertIn("NOTICE", joined)
+        self.assertIn("brand_new_tool", joined)
+
+    def test_list_and_show(self) -> None:
+        self._write_openclaw_tool_js()
+        self.assertEqual(tool_discovery.main(["scan"]), 0)
+
+        buf = io.StringIO()
+        prev = sys.stdout
+        try:
+            sys.stdout = buf
+            self.assertEqual(tool_discovery.main(["list", "--filter", "alpha"]), 0)
+        finally:
+            sys.stdout = prev
+        out = buf.getvalue()
+        self.assertIn("alpha_read", out)
+
+        show_buf = io.StringIO()
+        try:
+            sys.stdout = show_buf
+            self.assertEqual(tool_discovery.main(["show", "alpha_read"]), 0)
+        finally:
+            sys.stdout = prev
+        record = json.loads(show_buf.getvalue())
+        self.assertEqual(record["name"], "alpha_read")
+        self.assertEqual(record["source_kind"], "openclaw_dist")
 
 
 if __name__ == "__main__":
