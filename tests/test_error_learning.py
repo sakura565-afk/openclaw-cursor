@@ -13,7 +13,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from scripts import error_learning  # noqa: E402
+from scripts.self_improvement import error_learning  # noqa: E402
 
 
 class ErrorLearningTests(unittest.TestCase):
@@ -131,6 +131,68 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertEqual(search_stderr, "")
         self.assertIn("JSON payload was truncated", search_stdout)
         self.assertNotIn("cold restart", search_stdout)
+
+    def test_classify_error_type_heuristics(self) -> None:
+        self.assertEqual(
+            error_learning.classify_error_type("HTTP 429 rate limit exceeded for api.example.com"),
+            "api",
+        )
+        self.assertEqual(
+            error_learning.classify_error_type("bash: gerp: command not found"),
+            "tool",
+        )
+        self.assertEqual(
+            error_learning.classify_error_type("TypeError: unsupported operand type(s)"),
+            "logic",
+        )
+
+    def test_analyze_updates_markdown_and_respects_dry_run(self) -> None:
+        logs = self.root / "logs"
+        logs.mkdir(parents=True)
+        session = logs / "agent.log"
+        session.write_text(
+            "turn 1\nuser: hi\nassistant: calling API\n"
+            "Error: HTTP 503 Service Unavailable from upstream\n",
+            encoding="utf-8",
+        )
+        md_path = self.root / ".learnings" / "error_log.md"
+
+        dry_code, dry_out, dry_err = self.run_cli(
+            "analyze",
+            "--root",
+            str(self.root),
+            "--md-path",
+            str(md_path),
+            "--since-hours",
+            "8760",
+            "--glob",
+            "logs/**/*.log",
+            "--dry-run",
+        )
+        self.assertEqual(dry_code, 0)
+        self.assertEqual(dry_err, "")
+        self.assertIn("Dry run", dry_out)
+        self.assertIn("503", dry_out)
+        self.assertFalse(md_path.exists())
+
+        write_code, write_out, write_err = self.run_cli(
+            "analyze",
+            "--root",
+            str(self.root),
+            "--md-path",
+            str(md_path),
+            "--since-hours",
+            "8760",
+            "--glob",
+            "logs/**/*.log",
+        )
+        self.assertEqual(write_code, 0)
+        self.assertEqual(write_err, "")
+        self.assertTrue(md_path.exists())
+        md_text = md_path.read_text(encoding="utf-8")
+        self.assertIn(error_learning.MD_AUTO_START, md_text)
+        self.assertIn("503", md_text)
+        self.assertIn("Updated markdown report", write_out)
 
 
 if __name__ == "__main__":
