@@ -15,187 +15,209 @@ sys.path.insert(0, str(ROOT))
 from scripts import tool_discovery  # noqa: E402
 
 
-class ToolDiscoveryTests(unittest.TestCase):
-    def _build_repo(self) -> Path:
-        tempdir = tempfile.TemporaryDirectory()
-        self.addCleanup(tempdir.cleanup)
-        root = Path(tempdir.name)
-        scripts_dir = root / "scripts"
-        scripts_dir.mkdir(parents=True, exist_ok=True)
-        (scripts_dir / "__init__.py").write_text('"""scripts"""', encoding="utf-8")
-        return root
-
-    def test_analyze_scripts_infers_capabilities_and_dependencies(self) -> None:
-        root = self._build_repo()
-        (root / "scripts" / "queue_monitor.py").write_text(
+class ToolDiscoveryRegistryTests(unittest.TestCase):
+    def _make_minimal_workspace(self) -> Path:
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        ws = Path(td.name)
+        (ws / "scripts").mkdir(parents=True)
+        (ws / "scripts" / "demo_batch.py").write_text(
+            '"""Batch automation for nightly queues."""\n',
+            encoding="utf-8",
+        )
+        skill_dir = ws / "skills" / "myskill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
             textwrap.dedent(
                 """
-                import argparse
-                import json
-                import requests
-                import subprocess
+                ---
+                name: My Image Skill
+                description: Resize PNG assets for the gallery.
+                tags:
+                  - image
+                  - custom-tag
+                ---
 
-                def monitor_queue():
-                    return 1
-
-                def parse_args():
-                    parser = argparse.ArgumentParser()
-                    subs = parser.add_subparsers(dest="cmd")
-                    subs.add_parser("watch")
-                    subs.add_parser("report")
-                    return parser.parse_args()
+                Body text.
                 """
             ).strip()
             + "\n",
             encoding="utf-8",
         )
-        (root / "scripts" / "queue_analytics.py").write_text(
-            textwrap.dedent(
-                """
-                import argparse
-                import json
-                import pathlib
+        return ws
 
-                def build_report():
-                    return {}
+    def test_scan_entries_finds_script_and_skill(self) -> None:
+        ws = self._make_minimal_workspace()
+        roots = tool_discovery.collect_scan_roots(
+            ws,
+            ROOT,
+            include_repo=False,
+            include_global_skills=False,
+        )
+        entries = tool_discovery.scan_entries(roots)
+        by_name = {e.name: e for e in entries}
+        self.assertIn("demo_batch", by_name)
+        self.assertEqual(by_name["demo_batch"].kind, "script")
+        self.assertIn("automation", by_name["demo_batch"].tags)
+        self.assertIn("My Image Skill", by_name)
+        skill = by_name["My Image Skill"]
+        self.assertEqual(skill.kind, "skill")
+        self.assertIn("image", skill.tags)
+        self.assertIn("custom-tag", skill.tags)
 
-                def parse_args():
-                    parser = argparse.ArgumentParser()
-                    subs = parser.add_subparsers(dest="cmd")
-                    subs.add_parser("report")
-                    return parser.parse_args()
-                """
-            ).strip()
-            + "\n",
+    def test_diff_detects_modified_mtime(self) -> None:
+        ws = self._make_minimal_workspace()
+        roots = tool_discovery.collect_scan_roots(
+            ws,
+            ROOT,
+            include_repo=False,
+            include_global_skills=False,
+        )
+        first = tool_discovery.build_registry_payload(roots, None)
+        script_path = ws / "scripts" / "demo_batch.py"
+        first_tool = next(t for t in first["tools"] if t["name"] == "demo_batch")
+        self.assertIn("added", first["changes_since_previous_run"])
+        self.assertGreaterEqual(len(first["changes_since_previous_run"]["added"]), 1)
+
+        # Bump mtime without changing size much
+        script_path.write_text(
+            '"""Batch automation for nightly queues (v2)."""\n',
             encoding="utf-8",
         )
+        second = tool_discovery.build_registry_payload(roots, first)
+        modified = second["changes_since_previous_run"]["modified"]
+        self.assertIn(first_tool["path"], modified)
 
-        profiles = tool_discovery.analyze_scripts(root)
-        by_name = {profile.name: profile for profile in profiles}
-        self.assertIn("queue_monitor", by_name)
-        self.assertIn("queue_analytics", by_name)
-        self.assertEqual(by_name["queue_monitor"].risk_level, "high")
-        self.assertIn("Queue orchestration", by_name["queue_monitor"].capabilities)
-        self.assertIn("queue_analytics", by_name["queue_monitor"].dependencies)
-
-    def test_generate_markdown_includes_examples_and_dependencies(self) -> None:
-        profile = tool_discovery.ToolProfile(
-            name="sync_obsidian",
-            path=Path("scripts/sync_obsidian.py"),
-            description="Sync Obsidian notes",
-            commands=["sync"],
-            capabilities=["Data synchronization"],
-            io_profile=["filesystem", "network"],
-            dependencies=["telegram_sender"],
-            examples=["python -m scripts.sync_obsidian sync"],
+    def test_filter_entries_by_tag(self) -> None:
+        ws = self._make_minimal_workspace()
+        roots = tool_discovery.collect_scan_roots(
+            ws,
+            ROOT,
+            include_repo=False,
+            include_global_skills=False,
         )
+        payload = tool_discovery.build_registry_payload(roots, None)
+        entries = tool_discovery.entries_from_payload(payload)
+        hits = tool_discovery.filter_entries(entries, tag="image")
+        self.assertTrue(any(e.name == "My Image Skill" for e in hits))
+        self.assertFalse(any(e.name == "demo_batch" for e in hits))
 
-        markdown = tool_discovery.generate_markdown([profile])
-        self.assertIn("### Example usage", markdown)
-        self.assertIn("telegram_sender", markdown)
-        self.assertIn("python -m scripts.sync_obsidian sync", markdown)
-
-    def test_suggest_tools_returns_contextual_reasoning(self) -> None:
-        profiles = [
-            tool_discovery.ToolProfile(
-                name="queue_manager",
-                path=Path("scripts/queue_manager.py"),
-                description="Manage queue workload",
-                commands=["list", "watch"],
-                capabilities=["Queue orchestration", "Monitoring and observability"],
-                io_profile=["filesystem"],
-                dependencies=["memory_analytics"],
-            ),
-            tool_discovery.ToolProfile(
-                name="telegram_sender",
-                path=Path("scripts/telegram_sender.py"),
-                description="Send notifications",
-                commands=["send"],
-                capabilities=["Messaging and notifications"],
-                io_profile=["network"],
-            ),
-        ]
-
-        suggestions = tool_discovery.suggest_tools(
-            profiles,
-            goal="monitor queue latency and generate report",
-            context="need safe local file logs",
-            top_n=2,
-        )
-        self.assertEqual(len(suggestions), 2)
-        self.assertEqual(suggestions[0]["tool"], "queue_manager")
-        reasons = " ".join(suggestions[0]["reasoning"])
-        self.assertIn("Capability match", reasons)
-        self.assertIn("I/O fit", reasons)
-
-    def test_main_docs_command_writes_file(self) -> None:
-        root = self._build_repo()
-        (root / "scripts" / "tiny_tool.py").write_text(
-            textwrap.dedent(
-                """
-                import argparse
-
-                def parse_args():
-                    parser = argparse.ArgumentParser()
-                    subs = parser.add_subparsers(dest="cmd")
-                    subs.add_parser("run")
-                    return parser.parse_args()
-                """
-            ).strip()
-            + "\n",
-            encoding="utf-8",
-        )
-        output_path = root / "docs" / "tools.md"
-        exit_code = tool_discovery.main(
-            ["--root", str(root), "docs", "--output", str(output_path)]
-        )
-
-        self.assertEqual(exit_code, 0)
-        self.assertTrue(output_path.exists())
-        self.assertIn("tiny_tool", output_path.read_text(encoding="utf-8"))
-
-    def test_main_suggest_prints_json(self) -> None:
-        root = self._build_repo()
-        (root / "scripts" / "notify_tool.py").write_text(
-            textwrap.dedent(
-                """
-                import argparse
-                import requests
-
-                def parse_args():
-                    parser = argparse.ArgumentParser()
-                    subs = parser.add_subparsers(dest="cmd")
-                    subs.add_parser("send")
-                    return parser.parse_args()
-                """
-            ).strip()
-            + "\n",
-            encoding="utf-8",
-        )
-
-        buffer = io.StringIO()
-        previous = sys.stdout
+    def test_main_list_and_search_json(self) -> None:
+        ws = self._make_minimal_workspace()
+        reg = ws / "tool_registry.json"
+        buf = io.StringIO()
+        prev = sys.stdout
         try:
-            sys.stdout = buffer
-            exit_code = tool_discovery.main(
+            sys.stdout = buf
+            code = tool_discovery.main(
                 [
-                    "--root",
-                    str(root),
-                    "suggest",
-                    "send notification",
-                    "--context",
-                    "api webhook",
-                    "--top",
-                    "1",
+                    "--workspace",
+                    str(ws),
+                    "--registry",
+                    str(reg),
+                    "--no-repo",
+                    "--json",
+                    "list",
                 ]
             )
         finally:
-            sys.stdout = previous
+            sys.stdout = prev
+        self.assertEqual(code, 0)
+        data = json.loads(buf.getvalue())
+        self.assertGreaterEqual(len(data), 2)
+        names = {row["name"] for row in data}
+        self.assertIn("demo_batch", names)
 
-        self.assertEqual(exit_code, 0)
-        payload = json.loads(buffer.getvalue())
-        self.assertEqual(payload["goal"], "send notification")
-        self.assertEqual(len(payload["suggestions"]), 1)
+        buf2 = io.StringIO()
+        try:
+            sys.stdout = buf2
+            code2 = tool_discovery.main(
+                [
+                    "--workspace",
+                    str(ws),
+                    "--registry",
+                    str(reg),
+                    "--no-repo",
+                    "--json",
+                    "search",
+                    "--tag",
+                    "image",
+                ]
+            )
+        finally:
+            sys.stdout = prev
+        self.assertEqual(code2, 0)
+        found = json.loads(buf2.getvalue())
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["name"], "My Image Skill")
+
+    def test_main_show_found_and_not_found(self) -> None:
+        ws = self._make_minimal_workspace()
+        reg = ws / "tool_registry.json"
+        buf = io.StringIO()
+        prev = sys.stdout
+        try:
+            sys.stdout = buf
+            code = tool_discovery.main(
+                [
+                    "--workspace",
+                    str(ws),
+                    "--registry",
+                    str(reg),
+                    "--no-repo",
+                    "--json",
+                    "show",
+                    "demo_batch",
+                ]
+            )
+        finally:
+            sys.stdout = prev
+        self.assertEqual(code, 0)
+        row = json.loads(buf.getvalue())
+        self.assertEqual(row["name"], "demo_batch")
+
+        buf_miss = io.StringIO()
+        try:
+            sys.stdout = buf_miss
+            code_missing = tool_discovery.main(
+                [
+                    "--workspace",
+                    str(ws),
+                    "--registry",
+                    str(reg),
+                    "--no-repo",
+                    "--json",
+                    "show",
+                    "nonexistent_tool_xyz",
+                ]
+            )
+        finally:
+            sys.stdout = prev
+        self.assertEqual(code_missing, 2)
+        err_payload = json.loads(buf_miss.getvalue())
+        self.assertEqual(err_payload.get("error"), "not_found")
+
+    def test_default_command_writes_registry(self) -> None:
+        ws = self._make_minimal_workspace()
+        reg = ws / "tool_registry.json"
+        err = io.StringIO()
+        prev_err = sys.stderr
+        try:
+            sys.stderr = err
+            code = tool_discovery.main(
+                [
+                    "--workspace",
+                    str(ws),
+                    "--registry",
+                    str(reg),
+                    "--no-repo",
+                ]
+            )
+        finally:
+            sys.stderr = prev_err
+        self.assertEqual(code, 0)
+        self.assertTrue(reg.is_file())
+        self.assertIn("Registry updated", err.getvalue())
 
 
 if __name__ == "__main__":
