@@ -97,7 +97,7 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertIn("\033[", stdout)
         self.assertIn("warning", stdout)
         self.assertIn("[open]", stdout)
-        self.assertIn("Lesson:", stdout)
+        self.assertIn("Action:", stdout)
         self.assertIn("Error:", stdout)
 
     def test_stats_and_search_surface_relevant_entries(self) -> None:
@@ -131,6 +131,79 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertEqual(search_stderr, "")
         self.assertIn("JSON payload was truncated", search_stdout)
         self.assertNotIn("cold restart", search_stdout)
+
+    def test_patterns_and_suggest_use_signatures(self) -> None:
+        error_learning.add_entry(
+            self.log_path,
+            "network",
+            "Connection refused to 10.0.0.1:443",
+            "Fail over to the secondary endpoint",
+        )
+        error_learning.add_entry(
+            self.log_path,
+            "network",
+            "Connection refused to 192.168.0.2:443",
+            "Fail over to the secondary endpoint",
+        )
+        error_learning.add_entry(
+            self.log_path,
+            "warning",
+            "Model warmed up slowly after a cold restart",
+            "Keep a lightweight health check running between batches",
+        )
+
+        p_code, p_out, p_err = self.run_cli("patterns", "--min-count", "2")
+        self.assertEqual(p_code, 0)
+        self.assertEqual(p_err, "")
+        self.assertIn("Recurring error patterns", p_out)
+        self.assertIn("×2", p_out)
+        self.assertIn("Fail over", p_out)
+
+        s_code, s_out, s_err = self.run_cli("suggest", "Connection refused to 203.0.113.9:443")
+        self.assertEqual(s_code, 0)
+        self.assertEqual(s_err, "")
+        self.assertIn("secondary endpoint", s_out)
+        self.assertIn("Action:", s_out)
+
+    def test_add_surfaces_prior_learnings_for_same_shape(self) -> None:
+        error_learning.add_entry(
+            self.log_path,
+            "runtime",
+            "Error on line 42 in /tmp/foo.py",
+            "First mitigation",
+        )
+        error_learning.add_entry(
+            self.log_path,
+            "runtime",
+            "Error on line 99 in /tmp/foo.py",
+            "Second mitigation",
+        )
+        exit_code, stdout, stderr = self.run_cli(
+            "add",
+            "runtime",
+            "Error on line 7 in /tmp/foo.py",
+            "Third mitigation",
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn("Earlier learnings with the same error shape (2)", stdout)
+        self.assertIn("First mitigation", stdout)
+
+    def test_open_lists_only_unresolved(self) -> None:
+        error_learning.add_entry(
+            self.log_path,
+            "a",
+            "e1",
+            "l1",
+            resolved=False,
+        )
+        error_learning.add_entry(self.log_path, "b", "e2", "l2", resolved=True)
+        exit_code, stdout, stderr = self.run_cli("open")
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn("[open]", stdout)
+        self.assertIn("e1", stdout)
+        self.assertNotIn("e2", stdout)
 
 
 if __name__ == "__main__":
