@@ -91,6 +91,7 @@ class ToolDiscoveryTests(unittest.TestCase):
         )
 
         markdown = tool_discovery.generate_markdown([profile])
+        self.assertIn("Scripts tool inventory", markdown)
         self.assertIn("### Example usage", markdown)
         self.assertIn("telegram_sender", markdown)
         self.assertIn("python -m scripts.sync_obsidian sync", markdown)
@@ -196,6 +197,44 @@ class ToolDiscoveryTests(unittest.TestCase):
         payload = json.loads(buffer.getvalue())
         self.assertEqual(payload["goal"], "send notification")
         self.assertEqual(len(payload["suggestions"]), 1)
+
+    def test_inventory_writes_learning_tools_markdown(self) -> None:
+        root = self._build_repo()
+        skills = root / "skills" / "demo"
+        skills.mkdir(parents=True)
+        (skills / "NOTES.md").write_text("# Notes skill\n\nBody text for excerpt.\n", encoding="utf-8")
+        (skills / "SKILL.md").write_text(
+            "---\nname: Demo Skill\ndescription: A test skill\n---\n\n## Actions\n\n- do thing\n",
+            encoding="utf-8",
+        )
+        (root / "scripts" / "tiny_tool.py").write_text(
+            textwrap.dedent(
+                """
+                import argparse
+
+                def parse_args():
+                    parser = argparse.ArgumentParser()
+                    subs = parser.add_subparsers(dest="cmd")
+                    subs.add_parser("run")
+                    return parser.parse_args()
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        out_dir = root / "out" / "tools"
+        exit_code = tool_discovery.main(
+            ["--root", str(root), "inventory", "--output-dir", str(out_dir)]
+        )
+        self.assertEqual(exit_code, 0)
+        readme = out_dir / "README.md"
+        self.assertTrue(readme.exists())
+        self.assertIn("01-scripts.md", readme.read_text(encoding="utf-8"))
+        self.assertTrue((out_dir / "02-skill-md-tools.md").exists())
+        skill_files = (out_dir / "03-skill-markdown-files.md").read_text(encoding="utf-8")
+        self.assertIn("NOTES.md", skill_files)
+        runtime_doc = (out_dir / "04-runtime.md").read_text(encoding="utf-8")
+        self.assertIn("OPENCLAW_HOME", runtime_doc)
 
 
 if __name__ == "__main__":
