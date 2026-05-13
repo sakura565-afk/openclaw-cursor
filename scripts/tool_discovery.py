@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import importlib.util
 import json
 import re
 import sys
@@ -299,6 +300,21 @@ def suggest_tools(profiles: list[ToolProfile], goal: str, context: str, top_n: i
     return suggestions
 
 
+def _load_repo_workflow_tool_discovery():
+    """Import repository-root ``tool_discovery.py`` (workflow gap scanner) by file path."""
+
+    repo_root = Path(__file__).resolve().parent.parent
+    mod_path = repo_root / "tool_discovery.py"
+    name = "_openclaw_workflow_tool_discovery"
+    spec = importlib.util.spec_from_file_location(name, mod_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load workflow scanner from {mod_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Discover and suggest utility scripts by capability.")
     parser.add_argument("--root", default=".", help="Repository root path")
@@ -314,12 +330,45 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     suggest.add_argument("goal", help="User goal, e.g. 'monitor queue latency'")
     suggest.add_argument("--context", default="", help="Additional operational context")
     suggest.add_argument("--top", type=int, default=5, help="Number of tools to suggest")
+
+    workflow = subparsers.add_parser(
+        "workflow",
+        help="List src/ and scripts/ tools not referenced on deployment surfaces (README, docs, nightly, …).",
+    )
+    workflow.add_argument(
+        "--report-format",
+        choices=("markdown", "json"),
+        default="markdown",
+        help="Serialization for the gap report.",
+    )
+    workflow.add_argument(
+        "--report-output",
+        "-o",
+        help="Write the gap report to this path instead of stdout.",
+    )
+    workflow.add_argument(
+        "--extra-surface",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="Extra deployment surface file, relative to --root unless absolute (repeatable).",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     root = Path(args.root).resolve()
+
+    if args.command == "workflow":
+        mod = _load_repo_workflow_tool_discovery()
+        wf_argv: list[str] = ["--root", str(root), "--format", args.report_format]
+        if args.report_output:
+            wf_argv.extend(["--output", args.report_output])
+        for surf in args.extra_surface or []:
+            wf_argv.extend(["--extra-surface", surf])
+        return int(mod.main(wf_argv))
+
     profiles = analyze_scripts(root)
 
     if args.command == "analyze":
