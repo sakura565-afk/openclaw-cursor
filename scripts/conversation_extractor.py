@@ -1,22 +1,31 @@
 #!/usr/bin/env python3
-"""Extract decisions, learnings, and tool-usage highlights from OpenClaw session transcripts."""
+"""Extract meaningful exchanges from OpenClaw / Cursor-style session transcripts.
+
+Reads JSON or line-oriented logs (including under ``~/.openclaw/logs`` or the repo
+``.openclaw/logs``), builds structured Q&A / decision / correction records with
+metadata, deduplicates near-duplicates, and writes ``data/extracted_conversations.json``
+plus optional Markdown export.
+"""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from scripts.optimize_context import TURN_PATTERN, read_text, repo_root
 
 # -----------------------------------------------------------------------------
-# Patterns: decisions / commitments / takeaways (English + common mixed usage)
+# Patterns: decisions / learnings / corrections (English + light multilingual)
 # -----------------------------------------------------------------------------
 
 DECISION_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
@@ -27,7 +36,7 @@ DECISION_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"(?:we(?:'ve)?\s+(?:decided|agreed|chose)|let'?s\s+go\s+with|final(?:ly)?\s*:\s*)(.+)",
         r"(?:\bapproved\b|\bfinalize[ds]?\b|\bchosen\b\s+(?:approach|option|path))\s*[:\-]?\s*(.+)",
         r"^\s*(?:TL;DR|TDLR|takeaway)s?\s*[:\-—]\s*(.+)",
-        r"\b(?:concluded|conclusion)\s+(?:that\s+)?(.{10,})",  # allow inline
+        r"\b(?:concluded|conclusion)\s+(?:that\s+)?(.{10,})",
         r"\bdecision\s*[:\-—]\s*(.+)",
     )
 )
@@ -41,10 +50,19 @@ LEARNING_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     )
 )
 
-# Inline tool/function references in transcripts
+CORRECTION_HINT_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"\b(?:actually|correction|corrected|I\s+meant|sorry,)\b",
+        r"\b(?:not\s+\S+\s+but\s+rather|instead\s+of\s+\S+,)\b",
+        r"\b(?:that\s+was\s+wrong|my\s+mistake|misunderstood)\b",
+        r"(?:不对|更正|纠正一下|我说错了|应该是)",
+    )
+)
+
 TOOL_REGEXES: tuple[re.Pattern[str], ...] = (
     re.compile(r'\b(?:invoke|calling|called)\s+(?:tool\s+)?[`"]?([\w\-./:]+)[`"]?', re.I),
-    re.compile(r'`(?:functions?\.)?([\w\-]+)', re.I),
+    re.compile(r"`(?:functions?\.)?([\w\-]+)", re.I),
     re.compile(r'"(?:tool|toolName|name|function)"\s*:\s*"([^"]+)"'),
     re.compile(r"\[tool\s*:\s*([\w\-./:]+)\]", re.I),
     re.compile(r"\b(?:mcp|MCP)[_\s:]+([\w\-]+)", re.I),
@@ -63,9 +81,37 @@ STRUCT_TOOL_KEYS = frozenset(
     }
 )
 
+STOPWORDS = frozenset(
+    """
+    a an the and or but if then else for to of in on at by from with as is are was were
+    be been being it its this that these those we you i me my our your they them their
+    not no yes so do does did will would could should can may might just also into out up
+    about over under than then there here when what which who how why all any each some
+    such very more most other another one two first last new like get got use used using
+    """.split()
+)
+
+DEFAULT_LOG_SUFFIXES = (".json", ".log", ".txt", ".md")
+MAX_TEXT_FIELD = 50_000
+SCHEMA_VERSION = 1
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
 
 def utc_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
+
+
+def normalize_ws(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _truncate(s: str, limit: int = MAX_TEXT_FIELD) -> str:
+    if len(s) <= limit:
+        return s
+    return s[: max(0, limit - 3)] + "..."
 
 
 def _infer_turn(blob: dict[str, Any], index: int) -> int:
@@ -79,8 +125,6 @@ def _infer_turn(blob: dict[str, Any], index: int) -> int:
 
 
 def _stringify_toolish_dict(d: dict[str, Any]) -> str | None:
-    """Best-effort name for a structured tool/function block."""
-
     fn = d.get("function")
     if isinstance(fn, dict) and isinstance(fn.get("name"), str):
         return fn["name"]
@@ -92,8 +136,6 @@ def _stringify_toolish_dict(d: dict[str, Any]) -> str | None:
 
 
 def _flatten_content_piece(piece: Any) -> tuple[str, list[str]]:
-    """Turn a message content blob into (assistant text fragment, tool names)."""
-
     tools: list[str] = []
 
     if piece is None:
@@ -104,14 +146,13 @@ def _flatten_content_piece(piece: Any) -> tuple[str, list[str]]:
     if isinstance(piece, dict):
         typ = str(piece.get("type") or "").lower()
 
-        # Anthropic/OpenClaw-style tool_use blocks
         if typ in ("tool_use", "tool-use", "toolcall", "function", "tool_invocation"):
             name = _stringify_toolish_dict(piece)
             if name:
                 tools.append(name)
                 return "", tools
 
-        if typ == "tool_result" or typ == "tool-result":
+        if typ in ("tool_result", "tool-result"):
             return "", tools
 
         if isinstance(piece.get("text"), str):
@@ -125,7 +166,6 @@ def _flatten_content_piece(piece: Any) -> tuple[str, list[str]]:
 
         inner = piece.get("input") or piece.get("arguments")
         if isinstance(inner, dict) and txt == "":
-            # sometimes model echoes tool inputs as learning context
             try:
                 snippet = json.dumps(inner, ensure_ascii=False)[:500]
                 if snippet:
@@ -160,7 +200,6 @@ def _tool_names_from_calls(value: Any) -> list[str]:
                 n = fn.get("name")
                 if isinstance(n, str) and n.strip():
                     names.append(n.strip())
-            # OpenAI-ish id + name siblings
             n2 = item.get("name") or item.get("tool_name")
             if isinstance(n2, str) and n2.strip() and n2 not in names:
                 names.append(n2.strip())
@@ -208,7 +247,7 @@ def _segments_from_messages(messages: list[Any]) -> list[tuple[int, str | None, 
                 continue
             seen.add(tn)
             segments.append((turn, "tool", f"{tn}"))
-        # fall back name field on structured tool-only rows
+
         if not text.strip() and not blob_tools:
             maybe = raw.get("name") or raw.get("tool")
             if isinstance(maybe, str) and rl in {"tool", "assistant", "", "assistant_tool"}:
@@ -219,7 +258,6 @@ def _segments_from_messages(messages: list[Any]) -> list[tuple[int, str | None, 
             text = (text + "\n" + rest).strip() if text else rest
 
         if text.strip():
-            # Distinguish tool *invocation* rows (handled above) from provider "tool" role *outputs*.
             eff_role = "tool_output" if rl == "tool" else (rl if rl else None)
             segments.append((turn, eff_role, text.strip()))
 
@@ -227,8 +265,6 @@ def _segments_from_messages(messages: list[Any]) -> list[tuple[int, str | None, 
 
 
 def _unpack_session_json(data: Any) -> list[tuple[int, str | None, str]]:
-    """Interpret common OpenClaw / chat export envelopes."""
-
     candidates: Any = None
 
     if isinstance(data, dict):
@@ -272,8 +308,6 @@ def _unpack_session_json(data: Any) -> list[tuple[int, str | None, str]]:
 
 
 def _fallback_json_segments(data: Any) -> list[tuple[int, str | None, str]]:
-    """When structure is unknown, emit long string leaves and nested tool call names."""
-
     out: list[tuple[int, str | None, str]] = []
 
     def walk(node: Any, turn: int) -> None:
@@ -318,6 +352,13 @@ def _fallback_json_segments(data: Any) -> list[tuple[int, str | None, str]]:
     return uniq
 
 
+def _parse_json_data(data: Any) -> list[tuple[int, str | None, str]]:
+    structured = _unpack_session_json(data)
+    if structured:
+        return structured
+    return _fallback_json_segments(data)
+
+
 def parse_json_session(path: Path) -> list[tuple[int, str | None, str]]:
     raw = read_text(path)
     if not raw.strip():
@@ -326,20 +367,13 @@ def parse_json_session(path: Path) -> list[tuple[int, str | None, str]]:
         data = json.loads(raw)
     except json.JSONDecodeError:
         return []
-
-    structured = _unpack_session_json(data)
-    if structured:
-        return structured
-
-    return _fallback_json_segments(data)
+    return _parse_json_data(data)
 
 
 def parse_text_session(path: Path) -> list[tuple[int, str | None, str]]:
-    """Line-oriented logs with optional turn hints (compatible with optimize_context)."""
-
     segments: list[tuple[int, str | None, str]] = []
     current_turn = 1
-    ROLE_PREFIX = re.compile(
+    role_prefix = re.compile(
         r"^\s*(?P<role>user|human|assistant|agent|tool|system)\s*[:|\\-]+\s*(?P<body>.+)$",
         re.IGNORECASE,
     )
@@ -352,7 +386,7 @@ def parse_text_session(path: Path) -> list[tuple[int, str | None, str]]:
         else:
             current_turn = max(current_turn, line_number)
 
-        m_role = ROLE_PREFIX.match(line)
+        m_role = role_prefix.match(line)
         if m_role:
             rl = m_role.group("role").lower()
             mapping = {"human": "user"}
@@ -376,6 +410,61 @@ def parse_session_log(path: Path) -> list[tuple[int, str | None, str]]:
         return parse_text_session(path)
 
     return parse_text_session(path)
+
+
+def load_json_raw(path: Path) -> Any | None:
+    raw = read_text(path)
+    if not raw.strip():
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+
+def envelope_session_metadata(path: Path, data: Any | None) -> dict[str, Any]:
+    """Best-effort session-level metadata from JSON envelope or filesystem."""
+
+    st = path.stat()
+    mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat()
+    meta: dict[str, Any] = {
+        "source_path": path.resolve().as_posix(),
+        "file_mtime_utc": mtime,
+        "session_id": path.stem,
+    }
+
+    if isinstance(data, dict):
+        for key in (
+            "session_id",
+            "id",
+            "conversation_id",
+            "chat_id",
+            "slug",
+            "sessionId",
+            "conversationId",
+        ):
+            val = data.get(key)
+            if isinstance(val, str) and val.strip():
+                meta["session_id"] = val.strip()
+                break
+        for ts_key in ("started_at", "created_at", "updated_at", "timestamp", "time", "date"):
+            val = data.get(ts_key)
+            if isinstance(val, str) and val.strip():
+                meta["session_timestamp"] = val.strip()
+                break
+            if isinstance(val, (int, float)):
+                try:
+                    meta["session_timestamp"] = datetime.fromtimestamp(
+                        float(val), tz=timezone.utc
+                    ).isoformat()
+                except (OSError, OverflowError, ValueError):
+                    pass
+                break
+        title = data.get("title") or data.get("name") or data.get("summary")
+        if isinstance(title, str) and title.strip():
+            meta["title"] = title.strip()[:500]
+
+    return meta
 
 
 def match_patterns(text: str, patterns: tuple[re.Pattern[str], ...]) -> list[str]:
@@ -405,10 +494,6 @@ def match_patterns(text: str, patterns: tuple[re.Pattern[str], ...]) -> list[str
     return hits
 
 
-def normalize_ws(s: str) -> str:
-    return re.sub(r"\s+", " ", s).strip()
-
-
 def extract_tool_signals(text: str) -> Counter[str]:
     counts: Counter[str] = Counter()
     for rg in TOOL_REGEXES:
@@ -423,9 +508,473 @@ def extract_tool_signals(text: str) -> Counter[str]:
     return counts
 
 
+def infer_topics(*texts: str, max_topics: int = 12) -> list[str]:
+    bag: Counter[str] = Counter()
+    token_re = re.compile(r"[A-Za-z_][\w\-]{2,}|[\u4e00-\u9fff]{2,}")
+    for blob in texts:
+        if not blob:
+            continue
+        for m in token_re.finditer(blob):
+            tok = m.group(0).lower()
+            if tok in STOPWORDS or tok.isdigit():
+                continue
+            if len(tok) < 3:
+                continue
+            bag[tok] += 1
+    return [w for w, _ in bag.most_common(max_topics)]
+
+
+def _role_bucket(role: str | None) -> str:
+    rl = (role or "").lower()
+    if rl in {"human"}:
+        return "user"
+    if rl in {"agent"}:
+        return "assistant"
+    if rl in {"user", "assistant", "system", "tool", "tool_output"}:
+        return rl
+    return "unknown"
+
+
+def segments_to_messages_ordered(
+    segments: list[tuple[int, str | None, str]],
+) -> list[tuple[int, str, str]]:
+    """Flatten to ordered (turn, effective_role, text) with unknown role preserved."""
+
+    out: list[tuple[int, str, str]] = []
+    for turn, role, text in segments:
+        if not text.strip():
+            continue
+        bucket = _role_bucket(role)
+        if bucket == "tool":
+            out.append((turn, "tool", text.strip()))
+        elif bucket == "tool_output":
+            out.append((turn, "tool_output", text.strip()))
+        else:
+            out.append((turn, bucket, text.strip()))
+    return out
+
+
+def build_exchanges_from_messages(
+    messages: list[tuple[int, str, str]],
+    session_meta: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Pair user prompts with following assistant replies; attach decisions/corrections."""
+
+    exchanges: list[dict[str, Any]] = []
+    pending_user: list[str] = []
+    pending_turns: list[int] = []
+    tool_buffer: list[str] = []
+
+    structured_tool_names: list[str] = []
+    for _turn, role, txt in messages:
+        if role == "tool":
+            structured_tool_names.append(txt.split("(", 1)[0].strip())
+    structured_tool_names = list(dict.fromkeys(structured_tool_names))[:40]
+
+    def flush_pair(answer: str, answer_turn: int) -> None:
+        nonlocal pending_user, pending_turns, tool_buffer
+        if not pending_user and not answer.strip():
+            tool_buffer.clear()
+            return
+        q = "\n\n".join(pending_user).strip()
+        a = answer.strip()
+        if not q and not a:
+            tool_buffer.clear()
+            pending_user = []
+            pending_turns = []
+            return
+
+        participants = ["user", "assistant"] if q and a else []
+        if q and not a:
+            participants = ["user"]
+        if a and not q:
+            participants = ["assistant"]
+
+        turns_for_range = list(pending_turns)
+        if answer.strip():
+            turns_for_range.append(answer_turn)
+        turn_lo = min(turns_for_range) if turns_for_range else None
+        turn_hi = max(turns_for_range) if turns_for_range else None
+
+        blob = "\n\n".join([*pending_user, answer]).strip()
+        tools = list(extract_tool_signals(blob).keys())[:40]
+
+        decisions = match_patterns(blob, DECISION_LINE_PATTERNS)
+        learnings = match_patterns(blob, LEARNING_LINE_PATTERNS)
+        correction = any(p.search(q) for p in CORRECTION_HINT_PATTERNS) if q else False
+
+        ex_type = "qa_pair"
+        if correction:
+            ex_type = "correction"
+        elif decisions and not q:
+            ex_type = "decision"
+        elif learnings and not q:
+            ex_type = "learning"
+
+        topics = infer_topics(q, a, *(decisions[:3] + learnings[:3]))
+
+        rec: dict[str, Any] = {
+            "exchange_type": ex_type,
+            "session_id": session_meta.get("session_id", ""),
+            "source_path": session_meta.get("source_path", ""),
+            "timestamp": session_meta.get("session_timestamp") or session_meta.get("file_mtime_utc"),
+            "turn_range": [turn_lo, turn_hi] if turn_lo is not None and turn_hi is not None else None,
+            "participants": participants,
+            "topics": topics,
+            "question": _truncate(q) if q else None,
+            "answer": _truncate(a) if a else None,
+            "decisions_detected": decisions[:20],
+            "learnings_detected": learnings[:20],
+            "tools_mentioned": list(dict.fromkeys([*structured_tool_names, *tools]))[:48],
+            "tool_trace": _truncate("\n".join(tool_buffer), 8000) if tool_buffer else None,
+            "context_summary": _truncate(normalize_ws(blob[:1200]), 2000),
+        }
+        exchanges.append(rec)
+        pending_user = []
+        pending_turns = []
+        tool_buffer.clear()
+
+    last_turn = 0
+    for turn, role, text in messages:
+        last_turn = max(last_turn, turn)
+        if role == "tool":
+            tool_buffer.append(f"[tool] {text}")
+            continue
+        if role == "tool_output":
+            tool_buffer.append(f"[tool_output] {_truncate(text, 4000)}")
+            continue
+        if role == "user":
+            if pending_user:
+                pending_user.append(text)
+                pending_turns.append(turn)
+            else:
+                pending_user = [text]
+                pending_turns = [turn]
+            continue
+        if role == "system":
+            continue
+        if role == "assistant":
+            flush_pair(text, turn)
+            continue
+        # Narrative blocks without a clear role (common in plain logs)
+        if role == "unknown":
+            flush_pair(text, turn)
+            continue
+
+    if pending_user:
+        flush_pair("", last_turn or 0)
+
+    return exchanges
+
+
+def stable_exchange_hash(rec: dict[str, Any]) -> str:
+    key = "|".join(
+        [
+            str(rec.get("session_id", "")),
+            str(rec.get("exchange_type", "")),
+            normalize_ws(str(rec.get("question") or ""))[:600],
+            normalize_ws(str(rec.get("answer") or ""))[:600],
+        ]
+    )
+    return hashlib.sha256(key.encode("utf-8", errors="replace")).hexdigest()[:20]
+
+
+def similarity(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def dedupe_exchanges(exchanges: list[dict[str, Any]], threshold: float) -> list[dict[str, Any]]:
+    if threshold <= 0:
+        return exchanges
+
+    def fingerprint(rec: dict[str, Any]) -> str:
+        parts = [
+            normalize_ws(str(rec.get("question") or "")),
+            normalize_ws(str(rec.get("answer") or "")),
+            " ".join(rec.get("decisions_detected") or []),
+            " ".join(rec.get("learnings_detected") or []),
+        ]
+        return normalize_ws("\n".join(parts))[:8000]
+
+    kept: list[dict[str, Any]] = []
+    fps: list[str] = []
+    for rec in exchanges:
+        fp = fingerprint(rec)
+        dup = False
+        for i, prev in enumerate(fps):
+            if similarity(fp, prev) >= threshold:
+                dup = True
+                prev_rec = kept[i]
+                if len(fp) > len(prev):
+                    kept[i] = rec
+                    fps[i] = fp
+                elif len(fp) == len(prev):
+                    pt = set(prev_rec.get("topics") or [])
+                    pt.update(rec.get("topics") or [])
+                    prev_rec["topics"] = sorted(pt)[:20]
+                break
+        if not dup:
+            kept.append(rec)
+            fps.append(fp)
+    return kept
+
+
+def filter_exchanges(
+    exchanges: list[dict[str, Any]],
+    topic_substr: str | None,
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    topic_lower = topic_substr.lower() if topic_substr else None
+
+    for rec in exchanges:
+        if topic_lower:
+            hay = " ".join(rec.get("topics") or []).lower()
+            hay += " " + normalize_ws(
+                (rec.get("question") or "") + " " + (rec.get("answer") or "")
+            ).lower()
+            if topic_lower not in hay:
+                continue
+
+        out.append(rec)
+    return out
+
+
+def _parse_ts(raw: Any) -> datetime | None:
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return raw if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    s = raw.strip()
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(s[:10], fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def parse_cli_datetime(s: str) -> datetime:
+    dt = _parse_ts(s)
+    if dt is None:
+        raise argparse.ArgumentTypeError(f"not a valid ISO date/datetime: {s!r}")
+    return dt
+
+
+def default_log_roots(workspace: Path) -> list[Path]:
+    roots: list[Path] = []
+    env_ws = os.environ.get("OPENCLAW_WORKSPACE", "").strip()
+    if env_ws:
+        roots.append(Path(env_ws).expanduser() / "logs")
+        roots.append(Path(env_ws).expanduser() / ".openclaw" / "logs")
+    home = Path.home()
+    roots.append(home / ".openclaw" / "logs")
+    roots.append(workspace / ".openclaw" / "logs")
+    roots.append(workspace / ".openclaw")
+    return roots
+
+
+def discover_session_files(
+    roots: Iterable[Path],
+    suffixes: tuple[str, ...] = DEFAULT_LOG_SUFFIXES,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> list[Path]:
+    files: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        root = root.expanduser().resolve()
+        if not root.exists():
+            continue
+        if root.is_file():
+            candidates = [root]
+        else:
+            candidates = []
+            for suf in suffixes:
+                candidates.extend(root.rglob(f"*{suf}"))
+        for p in candidates:
+            if not p.is_file():
+                continue
+            key = p.resolve().as_posix()
+            if key in seen:
+                continue
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+            if since and mtime < since:
+                continue
+            if until and mtime > until:
+                continue
+            seen.add(key)
+            files.append(p)
+    files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+    return files
+
+
+def load_session(path: Path, workspace: Path) -> tuple[list[tuple[int, str | None, str]], dict[str, Any]]:
+    data: Any | None = None
+    if path.suffix.lower() == ".json":
+        data = load_json_raw(path)
+        meta = envelope_session_metadata(path, data)
+        segments = _parse_json_data(data) if data is not None else []
+        if not segments:
+            segments = parse_text_session(path)
+    else:
+        meta = envelope_session_metadata(path, None)
+        segments = parse_session_log(path)
+
+    rel = path.resolve().as_posix()
+    wposix = workspace.resolve().as_posix()
+    if rel.startswith(wposix):
+        meta["source_path"] = Path(rel[len(wposix) :].lstrip("/")).as_posix()
+
+    return segments, meta
+
+
+def build_document(
+    paths: list[Path],
+    workspace: Path,
+    topic: str | None,
+    since: datetime | None,
+    until: datetime | None,
+    dedupe_threshold: float,
+) -> dict[str, Any]:
+    all_exchanges: list[dict[str, Any]] = []
+    session_index: dict[str, dict[str, Any]] = {}
+    files_used = 0
+
+    for path in paths:
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+        if since and mtime < since:
+            continue
+        if until and mtime > until:
+            continue
+
+        files_used += 1
+        segments, meta = load_session(path, workspace)
+        messages = segments_to_messages_ordered(segments)
+        sid = str(meta.get("session_id") or path.stem)
+        if sid not in session_index:
+            session_index[sid] = {
+                "session_id": sid,
+                "source_path": meta.get("source_path", path.as_posix()),
+                "title": meta.get("title"),
+                "session_timestamp": meta.get("session_timestamp"),
+                "file_mtime_utc": meta.get("file_mtime_utc"),
+                "exchange_count": 0,
+            }
+
+        ex_list = build_exchanges_from_messages(messages, meta)
+        all_exchanges.extend(ex_list)
+        session_index[sid]["exchange_count"] += len(ex_list)
+
+    all_exchanges = dedupe_exchanges(all_exchanges, dedupe_threshold)
+    all_exchanges = filter_exchanges(all_exchanges, topic)
+
+    for rec in all_exchanges:
+        rec["exchange_id"] = stable_exchange_hash(rec)
+
+    doc = {
+        "artifact": "extracted_conversations",
+        "schema_version": SCHEMA_VERSION,
+        "generated_at_utc": utc_now_iso(),
+        "sources_scanned": files_used,
+        "exchange_count": len(all_exchanges),
+        "sessions_index": list(session_index.values()),
+        "exchanges": all_exchanges,
+    }
+    return doc
+
+
+def reindex_sessions(doc: dict[str, Any]) -> None:
+    idx: dict[str, dict[str, Any]] = {}
+    for ex in doc.get("exchanges") or []:
+        if not isinstance(ex, dict):
+            continue
+        sid = str(ex.get("session_id") or "unknown")
+        if sid not in idx:
+            idx[sid] = {
+                "session_id": sid,
+                "source_path": ex.get("source_path", ""),
+                "title": None,
+                "session_timestamp": None,
+                "file_mtime_utc": None,
+                "exchange_count": 0,
+            }
+        idx[sid]["exchange_count"] += 1
+    doc["sessions_index"] = list(idx.values())
+
+
+def render_aggregate_markdown(doc: dict[str, Any]) -> str:
+    lines = [
+        "# Extracted conversations",
+        "",
+        f"- **Generated (UTC)**: {doc.get('generated_at_utc', '')}",
+        f"- **Sessions scanned**: {doc.get('sources_scanned', 0)}",
+        f"- **Exchanges**: {doc.get('exchange_count', 0)}",
+        "",
+        "## Sessions",
+    ]
+    for s in doc.get("sessions_index") or []:
+        sid = s.get("session_id", "")
+        lines.append(f"- **{sid}** — {s.get('exchange_count', 0)} exchanges — `{s.get('source_path', '')}`")
+    lines.extend(["", "## Exchanges"])
+    for i, ex in enumerate(doc.get("exchanges") or [], start=1):
+        lines.append(f"### {i}. [{ex.get('exchange_type', '?')}] {ex.get('exchange_id', '')}")
+        lines.append("")
+        lines.append(f"- **Session**: `{ex.get('session_id', '')}`")
+        lines.append(f"- **When**: {ex.get('timestamp', '')}")
+        if ex.get("topics"):
+            lines.append(f"- **Topics**: {', '.join(ex['topics'])}")
+        if ex.get("participants"):
+            lines.append(f"- **Participants**: {', '.join(ex['participants'])}")
+        if ex.get("question"):
+            lines.extend(["", "**Question / prompt**", "", "```", ex["question"], "```"])
+        if ex.get("answer"):
+            lines.extend(["", "**Answer / response**", "", "```", ex["answer"], "```"])
+        if ex.get("tool_trace"):
+            lines.extend(["", "<details><summary>Tool trace</summary>", "", "```", ex["tool_trace"], "```", "</details>"])
+        dd = ex.get("decisions_detected") or []
+        if dd:
+            lines.extend(["", "**Decisions detected**"])
+            for d in dd[:12]:
+                lines.append(f"- {d}")
+        ll = ex.get("learnings_detected") or []
+        if ll:
+            lines.extend(["", "**Learnings detected**"])
+            for d in ll[:12]:
+                lines.append(f"- {d}")
+        if ex.get("tools_mentioned"):
+            lines.append("")
+            lines.append("**Tools**: " + ", ".join(f"`{t}`" for t in ex["tools_mentioned"][:24]))
+        lines.append("")
+    lines.append("---")
+    lines.append("*Produced by `scripts/conversation_extractor.py` — suitable for review or training data curation.*")
+    lines.append("")
+    return "\n".join(lines)
+
+
 @dataclass
 class ConversationDigest:
-    """Structured output for markdown + JSON."""
+    """Per-session digest for optional legacy memory-style export."""
 
     source: str
     generated_at_utc: str
@@ -463,7 +1012,6 @@ def analyze_segments(segments: list[tuple[int, str | None, str]], source_display
             decisions_acc.extend(match_patterns(text, DECISION_LINE_PATTERNS))
             learnings_acc.extend(match_patterns(text, LEARNING_LINE_PATTERNS))
         elif rl == "user":
-            # users sometimes phrase decisions explicitly
             decisions_acc.extend(match_patterns(text, DECISION_LINE_PATTERNS))
 
         blobs_for_text_tools.append(text)
@@ -471,11 +1019,12 @@ def analyze_segments(segments: list[tuple[int, str | None, str]], source_display
     combined = "\n\n".join(blobs_for_text_tools)
     textual_tools = extract_tool_signals(combined)
 
-    uniq = lambda xs: list(dict.fromkeys([x for x in xs if x]))  # noqa: E731
+    def uniq(xs: list[str]) -> list[str]:
+        return list(dict.fromkeys([x for x in xs if x]))
 
     return ConversationDigest(
         source=source_display,
-        generated_at_utc=datetime.now(timezone.utc).isoformat(),
+        generated_at_utc=utc_now_iso(),
         segments=segments,
         decisions=uniq(decisions_acc)[:120],
         learnings=uniq(learnings_acc)[:120],
@@ -484,9 +1033,9 @@ def analyze_segments(segments: list[tuple[int, str | None, str]], source_display
     )
 
 
-def render_markdown(d: ConversationDigest) -> str:
+def render_digest_markdown(d: ConversationDigest) -> str:
     lines = [
-        f"# Conversation 精华 extract",
+        "# Conversation extract (digest)",
         "",
         f"- **Source**: `{d.source}`",
         f"- **Generated (UTC)**: {d.generated_at_utc}",
@@ -494,38 +1043,25 @@ def render_markdown(d: ConversationDigest) -> str:
         "",
         "## Decisions",
     ]
-
     if d.decisions:
         for item in d.decisions:
             lines.append(f"- {item}")
     else:
         lines.append("- *(no explicit decision lines detected)*")
-
     lines.extend(["", "## Learnings & takeaways"])
     if d.learnings:
         for item in d.learnings:
             lines.append(f"- {item}")
     else:
         lines.append("- *(no explicit learning cues detected)*")
-
     lines.extend(["", "## Tool usage"])
-
     merged = d.all_tools()
     if merged:
         for name, ct in merged.most_common(40):
             lines.append(f"- `{name}` — {ct} mentions")
-        if d.tool_structured and d.tool_textual:
-            lines.extend(
-                [
-                    "",
-                    "Structured tool rows count toward assistant tool blocks;"
-                    " additional matches capture names embedded in prose or JSON echoes.",
-                ]
-            )
     else:
         lines.append("- *(no tool mentions parsed)*")
-
-    lines.extend(["", "---", "*OpenClaw conversation_extractor.py — distill session value into `memory/`.*"])
+    lines.extend(["", "---", "*Legacy digest from `conversation_extractor.py`.*"])
     return "\n".join(lines) + "\n"
 
 
@@ -547,7 +1083,7 @@ def digest_to_dict(d: ConversationDigest) -> dict[str, Any]:
     }
 
 
-def write_digest(
+def write_legacy_digest(
     digest: ConversationDigest,
     memory_dir: Path,
     stem: str,
@@ -555,60 +1091,113 @@ def write_digest(
     memory_dir.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^\w\-_.]+", "_", stem).strip("_") or "session"
     tag = utc_stamp()
-
     md_path = memory_dir / f"conversation_extract_{safe}_{tag}.md"
     js_path = memory_dir / f"conversation_extract_{safe}_{tag}.json"
-
-    md_path.write_text(render_markdown(digest), encoding="utf-8")
+    md_path.write_text(render_digest_markdown(digest), encoding="utf-8")
     js_path.write_text(json.dumps(digest_to_dict(digest), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
     return md_path, js_path
 
 
-def run_extraction(session_path: Path, memory_dir: Path, workspace_root: Path) -> tuple[Path, Path]:
-    segments = parse_session_log(session_path.resolve())
-
-    digest = analyze_segments(segments, session_path.resolve().as_posix())
-
-    stem = session_path.stem
-    # prefer session id from parent folder if standard layout .../sessions/foo/session.json
-    parent = session_path.parent.name
-    if parent and parent not in {".", ""}:
-        stem = f"{parent}__{session_path.stem}"
-
-    relative = session_path.resolve().as_posix()
-    workspace_posix = workspace_root.resolve().as_posix()
-    if relative.startswith(workspace_posix):
-        short = Path(relative[len(workspace_posix) :].lstrip("/")).as_posix()
-        digest.source = short
-
-    return write_digest(digest, memory_dir, stem)
+def merge_with_existing_json(path: Path, new_doc: dict[str, Any]) -> dict[str, Any]:
+    if not path.exists():
+        return new_doc
+    try:
+        prev = json.loads(read_text(path))
+    except json.JSONDecodeError:
+        return new_doc
+    if not isinstance(prev, dict) or "exchanges" not in prev:
+        return new_doc
+    old_ex = prev.get("exchanges")
+    if not isinstance(old_ex, list):
+        return new_doc
+    merged_ex = list(old_ex) + list(new_doc.get("exchanges") or [])
+    new_doc["exchanges"] = merged_ex
+    new_doc["exchange_count"] = len(merged_ex)
+    new_doc["generated_at_utc"] = utc_now_iso()
+    reindex_sessions(new_doc)
+    return new_doc
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Extract OpenClaw conversation 精华 into memory/")
+    p = argparse.ArgumentParser(
+        description="Extract structured Q&A / decisions / corrections from OpenClaw session logs.",
+    )
     p.add_argument(
-        "session_log",
+        "sessions",
+        nargs="*",
         type=Path,
-        nargs="?",
-        help="Path to session transcript (.json, .log, or text). Omit with --stdin.",
+        help="Explicit transcript paths (.json, .log, .txt). Used together with --bulk unless omitted.",
+    )
+    p.add_argument(
+        "--bulk",
+        action="store_true",
+        help="Scan default and custom log directories for transcript files.",
+    )
+    p.add_argument(
+        "--logs-dir",
+        dest="logs_dirs",
+        action="append",
+        default=None,
+        help="Extra directory to scan (repeatable). Used with --bulk or alone implies bulk.",
+    )
+    p.add_argument(
+        "--since",
+        type=parse_cli_datetime,
+        default=None,
+        help="Only include sessions whose transcript file mtime is on/after this UTC instant (ISO).",
+    )
+    p.add_argument(
+        "--until",
+        type=parse_cli_datetime,
+        default=None,
+        help="Only include sessions whose transcript file mtime is on/before this UTC instant (ISO).",
+    )
+    p.add_argument(
+        "--topic",
+        type=str,
+        default=None,
+        help="Case-insensitive substring filter on inferred topics and exchange text.",
+    )
+    p.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        help=f"JSON output path (default: <repo>/data/extracted_conversations.json).",
+    )
+    p.add_argument(
+        "--markdown",
+        type=Path,
+        default=None,
+        help="Also write a human-readable Markdown export to this path.",
+    )
+    p.add_argument(
+        "--merge",
+        action="store_true",
+        help="Merge new exchanges into existing --output JSON before deduplication.",
+    )
+    p.add_argument(
+        "--dedupe-threshold",
+        type=float,
+        default=0.88,
+        help="SequenceMatcher ratio for near-duplicate removal (0 disables). Default: 0.88",
     )
     p.add_argument(
         "--stdin",
         action="store_true",
-        help="Read transcript JSON/text from stdin (written to a temp file under memory/).",
-    )
-    p.add_argument(
-        "--memory-dir",
-        type=Path,
-        default=None,
-        help="Destination directory (default: <repo>/memory).",
+        help="Read one transcript from stdin (JSON or text); combines with output flags.",
     )
     p.add_argument(
         "--workspace-root",
         type=Path,
         default=None,
-        help="Workspace root for relative paths in output (defaults to repo root).",
+        help="Repository/workspace root for relative paths (default: repo root).",
+    )
+    p.add_argument(
+        "--legacy-memory-dir",
+        type=Path,
+        default=None,
+        help="If set, also write per-session digest .md/.json under this directory (legacy shape).",
     )
     return p
 
@@ -616,42 +1205,97 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     ws = (args.workspace_root or repo_root()).resolve()
-    memory_dir = (args.memory_dir or ws / "memory").resolve()
+    out_path = (args.output or ws / "data" / "extracted_conversations.json").resolve()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    logs_dirs = [Path(p) for p in (args.logs_dirs or [])]
+    implied_bulk = bool(logs_dirs) and not args.sessions and not args.stdin
+
+    paths: list[Path] = []
     if args.stdin:
         import tempfile
 
-        memory_dir.mkdir(parents=True, exist_ok=True)
         payload = sys.stdin.read()
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt", prefix="stdin_session_", dir=memory_dir)
+        tmp = tempfile.NamedTemporaryFile(
+            delete=False, suffix=".txt", prefix="stdin_session_", dir=out_path.parent
+        )
         try:
-            path = Path(tmp.name)
-            path.write_text(payload, encoding="utf-8")
+            tpath = Path(tmp.name)
+            tpath.write_text(payload, encoding="utf-8")
         finally:
             tmp.close()
+        paths.append(tpath)
 
-        md_path, json_path = run_extraction(path, memory_dir, ws)
-        try:
-            path.unlink(missing_ok=True)  # type: ignore[arg-type]
-        except OSError:
-            pass
+    for s in args.sessions:
+        paths.append(s.expanduser().resolve())
 
-        print(f"Wrote {md_path.as_posix()}")
-        print(f"Wrote {json_path.as_posix()}")
-        return 0
+    if args.bulk or implied_bulk:
+        if args.bulk:
+            roots = default_log_roots(ws) + logs_dirs
+        else:
+            roots = logs_dirs
+        discovered = discover_session_files(roots, since=args.since, until=args.until)
+        for d in discovered:
+            if d.resolve() not in {p.resolve() for p in paths}:
+                paths.append(d)
 
-    if not args.session_log:
-        sys.stderr.write("error: session_log path required unless --stdin is set.\n")
+    if not paths:
+        sys.stderr.write(
+            "error: no transcripts. Pass session paths, use --bulk, --logs-dir, or --stdin.\n",
+        )
         return 2
 
-    sp = args.session_log.resolve()
-    if not sp.exists():
-        sys.stderr.write(f"error: file not found: {sp}\n")
-        return 2
+    for p in paths:
+        if not p.exists():
+            sys.stderr.write(f"error: file not found: {p}\n")
+            return 2
 
-    md_path, json_path = run_extraction(sp, memory_dir, ws)
-    print(f"Wrote {md_path.as_posix()}")
-    print(f"Wrote {json_path.as_posix()}")
+    doc = build_document(
+        paths,
+        ws,
+        topic=args.topic,
+        since=args.since,
+        until=args.until,
+        dedupe_threshold=args.dedupe_threshold,
+    )
+
+    if args.merge:
+        doc = merge_with_existing_json(out_path, doc)
+        doc["exchanges"] = dedupe_exchanges(doc["exchanges"], args.dedupe_threshold)
+        doc["exchange_count"] = len(doc["exchanges"])
+        for rec in doc["exchanges"]:
+            rec["exchange_id"] = stable_exchange_hash(rec)
+        reindex_sessions(doc)
+
+    out_path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"Wrote {out_path.as_posix()} ({doc['exchange_count']} exchanges)")
+
+    if args.markdown:
+        args.markdown.parent.mkdir(parents=True, exist_ok=True)
+        args.markdown.write_text(render_aggregate_markdown(doc), encoding="utf-8")
+        print(f"Wrote {args.markdown.resolve().as_posix()}")
+
+    if args.legacy_memory_dir:
+        mem = args.legacy_memory_dir.resolve()
+        for path in paths:
+            if path.name.startswith("stdin_session_"):
+                continue
+            segments, _meta = load_session(path, ws)
+            digest = analyze_segments(segments, path.as_posix())
+            stem = path.stem
+            parent = path.parent.name
+            if parent and parent not in {".", ""}:
+                stem = f"{parent}__{path.stem}"
+            md_p, js_p = write_legacy_digest(digest, mem, stem)
+            print(f"Legacy digest: {md_p.as_posix()} | {js_p.as_posix()}")
+
+    for p in paths:
+        if p.name.startswith("stdin_session_"):
+            try:
+                p.unlink(missing_ok=True)  # type: ignore[arg-type]
+            except OSError:
+                pass
+
     return 0
 
 
