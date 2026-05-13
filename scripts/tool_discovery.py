@@ -147,8 +147,11 @@ def infer_io_profile(imports: set[str], text: str) -> list[str]:
 def analyze_scripts(root: Path) -> list[ToolProfile]:
     profiles: list[ToolProfile] = []
     for path in discover_script_paths(root):
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source, filename=str(path))
+        try:
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(path))
+        except (OSError, SyntaxError, UnicodeError):
+            continue
         name = path.stem
         imports = extract_imports(tree)
         functions = extract_functions(tree)
