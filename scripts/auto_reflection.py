@@ -14,6 +14,9 @@ Environment (all optional unless posting):
 
 - AUTO_REFLECTION_ROOT — workspace root (default: current working directory)
 - AUTO_REFLECTION_SESSION_GLOBS — extra comma-separated glob patterns relative to root
+- AUTO_REFLECTION_CONVERSATION_EXTRACT — set to 1/true/yes to summarize OpenClaw sessions into memory/ after a run
+- AUTO_REFLECTION_CONVERSATION_EXTRACT_MAX_SESSIONS — max sessions to pull (default: 5)
+- AUTO_REFLECTION_CONVERSATION_EXTRACT_ALL_AGENTS — set to 1/true to pass --all-agents to session listing
 - TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID — post summary via Telegram sendMessage
 - REFLECTION_WEBHOOK_URL — POST JSON {\"text\": \"...\", \"meta\": {...}} to this URL
 """
@@ -33,6 +36,11 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Sequence
+
+
+def _env_truthy(name: str) -> bool:
+    v = os.environ.get(name, "").strip().lower()
+    return v in ("1", "true", "yes", "on")
 
 
 LEARNINGS_DIR = ".learnings"
@@ -555,9 +563,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not write files or POST; prints intended actions.",
     )
     parser.add_argument(
-        "--stdout-summary",
+        "--conversation-extract",
         action="store_true",
-        help="Print the markdown summary to stdout.",
+        help="After reflection, extract OpenClaw session summaries into memory/ (also via AUTO_REFLECTION_CONVERSATION_EXTRACT).",
     )
     return parser
 
@@ -578,6 +586,28 @@ def main(argv: list[str] | None = None) -> int:
 
     for line in maybe_post_results(run, dry_run=args.dry_run):
         print(line, file=sys.stderr)
+
+    if (
+        (args.conversation_extract or _env_truthy("AUTO_REFLECTION_CONVERSATION_EXTRACT"))
+        and not args.dry_run
+    ):
+        try:
+            from scripts.conversation_extractor import run_post_reflection_conversation_extract
+
+            max_sess_raw = os.environ.get("AUTO_REFLECTION_CONVERSATION_EXTRACT_MAX_SESSIONS", "5").strip()
+            try:
+                max_sess = max(1, int(max_sess_raw))
+            except ValueError:
+                max_sess = 5
+            for line in run_post_reflection_conversation_extract(
+                root,
+                max_sessions=max_sess,
+                dry_run=False,
+                all_agents=_env_truthy("AUTO_REFLECTION_CONVERSATION_EXTRACT_ALL_AGENTS"),
+            ):
+                print(line, file=sys.stderr)
+        except Exception as exc:
+            print(f"Conversation extract skipped: {exc}", file=sys.stderr)
 
     if args.stdout_summary:
         print(run.summary_markdown)
