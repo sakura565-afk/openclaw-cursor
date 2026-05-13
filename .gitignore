@@ -1,5 +1,7 @@
 logs/sync_obsidian_*.json
 logs/nightly_pipeline.log
+data/extracted_conversations.json
+data/extracted_conversations.md
 .learnings/
 __pycache__/
 *.py[cod]
