@@ -252,6 +252,26 @@ def _unpack_session_json(data: Any) -> list[tuple[int, str | None, str]]:
                         candidates = flat
                         break
 
+            if candidates is None:
+                choices = data.get("choices")
+                if isinstance(choices, list) and choices:
+                    collected: list[dict[str, Any]] = []
+                    for choice in choices:
+                        if not isinstance(choice, dict):
+                            continue
+                        msg = choice.get("message")
+                        if isinstance(msg, dict):
+                            collected.append(msg)
+                        delta = choice.get("delta")
+                        if isinstance(delta, dict) and (
+                            delta.get("content") is not None
+                            or delta.get("tool_calls") is not None
+                            or delta.get("role")
+                        ):
+                            collected.append(delta)
+                    if collected:
+                        return _segments_from_messages(collected)
+
     elif isinstance(data, list):
         if data and all(isinstance(x, dict) for x in data):
             if data and any(k in data[0] for k in ("role", "content", "speaker", "turn")):
@@ -318,33 +338,24 @@ def _fallback_json_segments(data: Any) -> list[tuple[int, str | None, str]]:
     return uniq
 
 
-def parse_json_session(path: Path) -> list[tuple[int, str | None, str]]:
-    raw = read_text(path)
-    if not raw.strip():
-        return []
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return []
-
+def _segments_from_json_parsed(data: Any) -> list[tuple[int, str | None, str]]:
     structured = _unpack_session_json(data)
     if structured:
         return structured
-
     return _fallback_json_segments(data)
 
 
-def parse_text_session(path: Path) -> list[tuple[int, str | None, str]]:
+def _parse_text_lines(lines: list[str]) -> list[tuple[int, str | None, str]]:
     """Line-oriented logs with optional turn hints (compatible with optimize_context)."""
 
     segments: list[tuple[int, str | None, str]] = []
     current_turn = 1
-    ROLE_PREFIX = re.compile(
+    role_prefix = re.compile(
         r"^\s*(?P<role>user|human|assistant|agent|tool|system)\s*[:|\\-]+\s*(?P<body>.+)$",
         re.IGNORECASE,
     )
 
-    for line_number, line in enumerate(read_text(path).splitlines(), start=1):
+    for line_number, line in enumerate(lines, start=1):
         stripped = line.rstrip("\n\r")
         m_turn = TURN_PATTERN.search(line)
         if m_turn:
@@ -352,7 +363,7 @@ def parse_text_session(path: Path) -> list[tuple[int, str | None, str]]:
         else:
             current_turn = max(current_turn, line_number)
 
-        m_role = ROLE_PREFIX.match(line)
+        m_role = role_prefix.match(line)
         if m_role:
             rl = m_role.group("role").lower()
             mapping = {"human": "user"}
@@ -364,18 +375,44 @@ def parse_text_session(path: Path) -> list[tuple[int, str | None, str]]:
     return segments
 
 
+def parse_transcript(raw: str, *, json_file: bool = False) -> list[tuple[int, str | None, str]]:
+    """Parse transcript text: try JSON when forced by filename or when content looks like JSON."""
+
+    text = raw.lstrip("\ufeff")
+    if not text.strip():
+        return []
+
+    stripped = text.strip()
+    should_try_json = json_file or stripped.startswith(("{", "["))
+
+    if should_try_json:
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            if json_file:
+                return _parse_text_lines(text.splitlines())
+        else:
+            segs = _segments_from_json_parsed(data)
+            if segs:
+                return segs
+
+    return _parse_text_lines(text.splitlines())
+
+
+def parse_json_session(path: Path) -> list[tuple[int, str | None, str]]:
+    return parse_transcript(read_text(path), json_file=True)
+
+
+def parse_text_session(path: Path) -> list[tuple[int, str | None, str]]:
+    return parse_transcript(read_text(path), json_file=False)
+
+
 def parse_session_log(path: Path) -> list[tuple[int, str | None, str]]:
     if not path.exists():
         return []
 
     suf = path.suffix.lower()
-    if suf == ".json":
-        segs = parse_json_session(path)
-        if segs:
-            return segs
-        return parse_text_session(path)
-
-    return parse_text_session(path)
+    return parse_transcript(read_text(path), json_file=(suf == ".json"))
 
 
 def match_patterns(text: str, patterns: tuple[re.Pattern[str], ...]) -> list[str]:
@@ -465,20 +502,23 @@ def analyze_segments(segments: list[tuple[int, str | None, str]], source_display
         elif rl == "user":
             # users sometimes phrase decisions explicitly
             decisions_acc.extend(match_patterns(text, DECISION_LINE_PATTERNS))
+        elif rl == "system":
+            learnings_acc.extend(match_patterns(text, LEARNING_LINE_PATTERNS))
 
         blobs_for_text_tools.append(text)
 
     combined = "\n\n".join(blobs_for_text_tools)
     textual_tools = extract_tool_signals(combined)
 
-    uniq = lambda xs: list(dict.fromkeys([x for x in xs if x]))  # noqa: E731
+    def _dedupe_preserve(xs: list[str]) -> list[str]:
+        return list(dict.fromkeys([x for x in xs if x]))
 
     return ConversationDigest(
         source=source_display,
         generated_at_utc=datetime.now(timezone.utc).isoformat(),
         segments=segments,
-        decisions=uniq(decisions_acc)[:120],
-        learnings=uniq(learnings_acc)[:120],
+        decisions=_dedupe_preserve(decisions_acc)[:120],
+        learnings=_dedupe_preserve(learnings_acc)[:120],
         tool_structured=structured_tools,
         tool_textual=textual_tools,
     )
@@ -486,7 +526,7 @@ def analyze_segments(segments: list[tuple[int, str | None, str]], source_display
 
 def render_markdown(d: ConversationDigest) -> str:
     lines = [
-        f"# Conversation 精华 extract",
+        "# Conversation digest",
         "",
         f"- **Source**: `{d.source}`",
         f"- **Generated (UTC)**: {d.generated_at_utc}",
@@ -585,8 +625,33 @@ def run_extraction(session_path: Path, memory_dir: Path, workspace_root: Path) -
     return write_digest(digest, memory_dir, stem)
 
 
+def run_extraction_from_payload(
+    payload: str,
+    memory_dir: Path,
+    workspace_root: Path,
+    *,
+    source_label: str = "<stdin>",
+    stem: str = "stdin",
+) -> tuple[Path, Path]:
+    """Parse transcript text (JSON if payload looks like JSON, else line-oriented) and write digest files."""
+
+    segments = parse_transcript(payload, json_file=False)
+    digest = analyze_segments(segments, source_label)
+    try:
+        sp = Path(source_label)
+    except (TypeError, ValueError):
+        sp = None
+    if sp is not None and sp.is_absolute() and sp.exists():
+        relative = sp.resolve().as_posix()
+        workspace_posix = workspace_root.resolve().as_posix()
+        if relative.startswith(workspace_posix):
+            digest.source = Path(relative[len(workspace_posix) :].lstrip("/")).as_posix()
+
+    return write_digest(digest, memory_dir, stem)
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Extract OpenClaw conversation 精华 into memory/")
+    p = argparse.ArgumentParser(description="Extract OpenClaw conversation highlights into memory/")
     p.add_argument(
         "session_log",
         type=Path,
@@ -596,7 +661,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--stdin",
         action="store_true",
-        help="Read transcript JSON/text from stdin (written to a temp file under memory/).",
+        help="Read transcript from stdin (JSON if the payload looks like JSON, else line-oriented text).",
     )
     p.add_argument(
         "--memory-dir",
@@ -619,22 +684,15 @@ def main(argv: list[str] | None = None) -> int:
     memory_dir = (args.memory_dir or ws / "memory").resolve()
 
     if args.stdin:
-        import tempfile
-
         memory_dir.mkdir(parents=True, exist_ok=True)
         payload = sys.stdin.read()
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt", prefix="stdin_session_", dir=memory_dir)
-        try:
-            path = Path(tmp.name)
-            path.write_text(payload, encoding="utf-8")
-        finally:
-            tmp.close()
-
-        md_path, json_path = run_extraction(path, memory_dir, ws)
-        try:
-            path.unlink(missing_ok=True)  # type: ignore[arg-type]
-        except OSError:
-            pass
+        md_path, json_path = run_extraction_from_payload(
+            payload,
+            memory_dir,
+            ws,
+            source_label="<stdin>",
+            stem="stdin",
+        )
 
         print(f"Wrote {md_path.as_posix()}")
         print(f"Wrote {json_path.as_posix()}")
