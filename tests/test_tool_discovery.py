@@ -3,9 +3,11 @@ from __future__ import annotations
 import io
 import json
 import sys
+import ast
 import tempfile
 import textwrap
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 
 
@@ -196,6 +198,62 @@ class ToolDiscoveryTests(unittest.TestCase):
         payload = json.loads(buffer.getvalue())
         self.assertEqual(payload["goal"], "send notification")
         self.assertEqual(len(payload["suggestions"]), 1)
+
+    def test_extract_cli_commands_includes_add_argument_choices(self) -> None:
+        src = textwrap.dedent(
+            """
+            import argparse
+
+            def main():
+                p = argparse.ArgumentParser()
+                p.add_argument("action", choices=["run", "status"])
+            """
+        ).strip()
+        tree = ast.parse(src)
+        cmds = tool_discovery.extract_cli_commands(tree)
+        self.assertEqual(cmds, ["run", "status"])
+
+    def test_analyze_scripts_skips_syntax_errors(self) -> None:
+        root = self._build_repo()
+        (root / "scripts" / "broken.py").write_text("def x(\n", encoding="utf-8")
+        (root / "scripts" / "ok_tool.py").write_text(
+            textwrap.dedent(
+                """
+                \"\"\"Healthy tool.\"\"\"
+                import argparse
+
+                def parse_args():
+                    p = argparse.ArgumentParser()
+                    s = p.add_subparsers(dest="cmd")
+                    s.add_parser("ping")
+                    return p.parse_args()
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        err = io.StringIO()
+        with redirect_stderr(err):
+            profiles = tool_discovery.analyze_scripts(root)
+        names = {p.name for p in profiles}
+        self.assertEqual(names, {"ok_tool"})
+        self.assertIn("broken.py", err.getvalue())
+
+    def test_main_list_command_prints_names(self) -> None:
+        root = self._build_repo()
+        (root / "scripts" / "alpha.py").write_text('"""a."""\n', encoding="utf-8")
+        (root / "scripts" / "beta.py").write_text('"""b."""\n', encoding="utf-8")
+
+        buf = io.StringIO()
+        prev = sys.stdout
+        try:
+            sys.stdout = buf
+            code = tool_discovery.main(["--root", str(root), "list"])
+        finally:
+            sys.stdout = prev
+        self.assertEqual(code, 0)
+        lines = [ln for ln in buf.getvalue().splitlines() if ln.strip()]
+        self.assertEqual(lines, ["alpha", "beta"])
 
 
 if __name__ == "__main__":

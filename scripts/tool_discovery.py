@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Statically analyze `scripts/*.py` tools: imports, CLI surface, capabilities, and light dependency hints."""
 from __future__ import annotations
 
 import argparse
@@ -25,9 +26,11 @@ KEYWORD_CAPABILITIES: tuple[tuple[str, str], ...] = (
     ("orchestration", "Task orchestration"),
 )
 
-HIGH_RISK_MARKERS = {"subprocess", "os", "shutil", "requests", "socket"}
-IO_MARKERS = {"pathlib", "open", "json", "csv", "sqlite3"}
-NETWORK_MARKERS = {"requests", "urllib", "http", "socket", "telegram"}
+HIGH_RISK_MARKERS = frozenset(
+    {"subprocess", "os", "shutil", "requests", "socket", "ssl", "ctypes", "multiprocessing"}
+)
+IO_MARKERS = frozenset({"pathlib", "open", "json", "csv", "sqlite3"})
+NETWORK_MARKERS = frozenset({"requests", "urllib", "http", "socket", "telegram", "httpx", "aiohttp"})
 
 
 @dataclass
@@ -73,7 +76,20 @@ def _literal_string(node: ast.AST) -> str | None:
     return None
 
 
+def _choice_literals_from_node(value: ast.AST) -> list[str]:
+    """String literals inside a choices= list/tuple/set, if they are compile-time constants."""
+    if isinstance(value, (ast.List, ast.Tuple, ast.Set)):
+        out: list[str] = []
+        for elt in value.elts:
+            s = _literal_string(elt)
+            if s:
+                out.append(s)
+        return out
+    return []
+
+
 def extract_cli_commands(tree: ast.AST) -> list[str]:
+    """Collect subcommand names from `add_parser` and `add_argument(..., choices=...)`."""
     commands: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -82,7 +98,18 @@ def extract_cli_commands(tree: ast.AST) -> list[str]:
             maybe_command = _literal_string(node.args[0])
             if maybe_command:
                 commands.add(maybe_command)
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "add_argument":
+            for kw in node.keywords:
+                if kw.arg != "choices" or kw.value is None:
+                    continue
+                for literal in _choice_literals_from_node(kw.value):
+                    commands.add(literal)
     return sorted(commands)
+
+
+def public_commands(commands: list[str]) -> list[str]:
+    """Omit argparse-internal or private entrypoints (e.g. `_worker`) from user-facing hints."""
+    return [c for c in commands if not c.startswith("_")]
 
 
 def extract_imports(tree: ast.AST) -> set[str]:
@@ -147,8 +174,16 @@ def infer_io_profile(imports: set[str], text: str) -> list[str]:
 def analyze_scripts(root: Path) -> list[ToolProfile]:
     profiles: list[ToolProfile] = []
     for path in discover_script_paths(root):
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source, filename=str(path))
+        try:
+            source = path.read_text(encoding="utf-8-sig")
+        except OSError as exc:
+            print(f"tool_discovery: skip {path}: cannot read ({exc})", file=sys.stderr)
+            continue
+        try:
+            tree = ast.parse(source, filename=str(path))
+        except SyntaxError as exc:
+            print(f"tool_discovery: skip {path}: {exc}", file=sys.stderr)
+            continue
         name = path.stem
         imports = extract_imports(tree)
         functions = extract_functions(tree)
@@ -196,9 +231,12 @@ def enrich_dependency_graph(profiles: list[ToolProfile]) -> None:
 def build_examples(profile: ToolProfile) -> list[str]:
     base = f"python -m scripts.{profile.name}"
     examples: list[str] = []
-    if profile.commands:
-        for command in profile.commands[:3]:
+    visible = public_commands(profile.commands)
+    if visible:
+        for command in visible[:3]:
             examples.append(f"{base} {command}")
+    elif profile.commands:
+        examples.append(base)
     else:
         examples.append(base)
     if "network" in profile.io_profile:
@@ -252,12 +290,23 @@ def score_tool_for_goal(profile: ToolProfile, goal: str, context: str) -> tuple[
     reasons: list[str] = []
     score = 0
 
+    name_slug = profile.name.replace("_", " ").lower()
+    if len(name_slug) >= 4 and name_slug in goal_lower:
+        score += 4
+        reasons.append(f"Tool name aligns with goal: {profile.name}")
+    else:
+        for part in profile.name.split("_"):
+            if len(part) >= 4 and part.lower() in goal_lower:
+                score += 2
+                reasons.append(f"Name token match: {part}")
+                break
+
     for capability in profile.capabilities:
         cap_words = capability.lower().split()
         if any(word in goal_lower for word in cap_words):
             score += 3
             reasons.append(f"Capability match: {capability}")
-    for command in profile.commands:
+    for command in public_commands(profile.commands):
         if command in goal_lower or command in context_lower:
             score += 2
             reasons.append(f"Command match: {command}")
@@ -291,7 +340,7 @@ def suggest_tools(profiles: list[ToolProfile], goal: str, context: str, top_n: i
                 "tool": profile.name,
                 "score": score,
                 "reasoning": reasons or ["General fallback candidate"],
-                "commands": profile.commands[:4],
+                "commands": public_commands(profile.commands)[:4],
                 "dependencies": profile.dependencies,
                 "suggested_chain": [profile.name, *profile.dependencies[:2]],
             }
@@ -314,6 +363,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     suggest.add_argument("goal", help="User goal, e.g. 'monitor queue latency'")
     suggest.add_argument("--context", default="", help="Additional operational context")
     suggest.add_argument("--top", type=int, default=5, help="Number of tools to suggest")
+
+    subparsers.add_parser("list", help="Print discovered tool names (one per line)")
     return parser.parse_args(argv)
 
 
@@ -328,6 +379,11 @@ def main(argv: list[str] | None = None) -> int:
         else:
             for profile in profiles:
                 print(f"{profile.name}: {', '.join(profile.capabilities)} | deps={profile.dependencies}")
+        return 0
+
+    if args.command == "list":
+        for profile in profiles:
+            print(profile.name)
         return 0
 
     if args.command == "docs":
