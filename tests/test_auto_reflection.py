@@ -5,9 +5,11 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -20,132 +22,119 @@ SPEC.loader.exec_module(auto_reflection)
 
 
 class AutoReflectionTests(unittest.TestCase):
-    def test_dedupe_insights_collapses_near_duplicates(self):
-        a = auto_reflection.Insight(
-            text="Error: timeout",
-            source_paths=["logs/a.log"],
+    def test_dedupe_events_merges_severity(self) -> None:
+        a = auto_reflection.ReflectionEvent(
+            kind="error",
+            text="Error: timeout contacting host",
+            source="a.json",
             severity="warning",
-            category="integration",
         )
-        b = auto_reflection.Insight(
-            text="Error: timeout",
-            source_paths=["logs/b.log"],
+        b = auto_reflection.ReflectionEvent(
+            kind="error",
+            text="Error: timeout contacting host",
+            source="b.json",
             severity="error",
-            category="general",
         )
-        out = auto_reflection.dedupe_insights([a, b])
+        out = auto_reflection.dedupe_events([a, b])
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0].severity, "error")
-        self.assertEqual(set(out[0].source_paths), {"logs/a.log", "logs/b.log"})
 
-    def test_extract_from_json_walks_nested_errors(self):
+    def test_json_session_surfaces_nested_errors(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            log_path = root / "logs" / "agent.json"
-            log_path.parent.mkdir(parents=True)
-            log_path.write_text(
+            home = Path(raw) / "oc"
+            sdir = home / "sessions"
+            sdir.mkdir(parents=True)
+            path = sdir / "agent.json"
+            path.write_text(
                 json.dumps(
                     {
                         "turns": [
-                            {"detail": "Traceback (most recent call last): simulated"},
+                            {"detail": "Traceback (most recent call last): simulated failure"},
                             {"message": "all good"},
                         ]
                     }
                 ),
                 encoding="utf-8",
             )
-            insights = list(auto_reflection.read_and_extract(log_path, root))
-        texts = [i.text.lower() for i in insights]
-        self.assertTrue(any("traceback" in t for t in texts))
+            events = list(auto_reflection.extract_events_for_file(path, sdir))
+        kinds = [e.kind for e in events]
+        self.assertIn("error", kinds)
 
-    def test_run_reflection_writes_learnings_and_skips_writes_on_dry_run(self):
+    def test_run_reflection_writes_dated_learnings(self) -> None:
+        fixed = datetime(2040, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            (root / "logs").mkdir(parents=True)
-            (root / "logs" / "run.log").write_text(
-                "Lesson learned: verify API keys before deploying.\n"
-                "Fatal: database migration failed.\n",
+            home = Path(raw) / "oc"
+            sess = home / "sessions" / "thr"
+            sess.mkdir(parents=True)
+            (sess / "t.log").write_text(
+                "Lesson learned: verify credentials before calling the API.\n"
+                "Decision: ship the minimal fix first, then iterate.\n",
                 encoding="utf-8",
             )
+            ts = fixed.timestamp()
+            os.utime(sess / "t.log", (ts, ts))
 
-            run_dry = auto_reflection.run_reflection(
-                root,
-                since_hours=1,
-                extra_globs=[],
-                dry_run=True,
-            )
-            self.assertFalse((root / ".learnings").exists())
-            self.assertGreaterEqual(len(run_dry.insights), 1)
+            with mock.patch.object(auto_reflection, "utc_now", return_value=fixed):
+                run = auto_reflection.run_reflection(home, days=7, dry_run=False)
 
-            run_full = auto_reflection.run_reflection(
-                root,
-                since_hours=1,
-                extra_globs=[],
-                dry_run=False,
-            )
-            self.assertGreater(run_full.files_scanned, 0)
-            learnings = root / ".learnings"
-            self.assertTrue(learnings.exists())
-            self.assertTrue((learnings / "insights").exists())
-            self.assertTrue((learnings / "summaries").exists())
-            md_files = list((learnings / "insights").glob("run_*.md"))
-            self.assertEqual(len(md_files), 1)
-            body = md_files[0].read_text(encoding="utf-8")
+            out = home / ".learnings" / "auto_reflection_2040-06-15.md"
+            self.assertTrue(out.exists())
+            self.assertEqual(run.output_path, str(out))
+            body = out.read_text(encoding="utf-8")
+            self.assertIn("openclaw-auto-reflection", body)
             self.assertIn("Lesson learned:", body)
+            self.assertIn("ship the minimal fix", body)
+            self.assertIn("Self-improvement", body)
 
-    def test_post_webhook_uses_json_post(self):
-        captured: dict[str, object] = {}
+    def test_run_reflection_dry_run_skips_write(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw) / "oc"
+            (home / "sessions").mkdir(parents=True)
 
-        class DummyResp:
-            def __enter__(self):
-                return self
+            with mock.patch.object(auto_reflection, "utc_now", return_value=datetime.now(timezone.utc)):
+                auto_reflection.run_reflection(home, days=1, dry_run=True)
 
-            def __exit__(self, *args):
-                return False
-
-            def read(self):
-                return b'{"ok":true}'
-
-        def fake_urlopen(req, timeout=30):
-            captured["data"] = json.loads(req.data.decode())
-            captured["hdr"] = req.get_header("Content-type")
-            return DummyResp()
-
-        with mock.patch.object(auto_reflection.urllib.request, "urlopen", fake_urlopen):
-            ok, msg = auto_reflection.post_webhook(
-                "https://hooks.example.invalid/x",
-                {"text": "hi", "meta": {"k": 1}},
-            )
-
-        self.assertTrue(ok)
-        self.assertEqual(captured["data"]["text"], "hi")
-        self.assertEqual(captured["data"]["meta"]["k"], 1)
+            self.assertFalse((home / ".learnings").exists())
 
 
 class AutoReflectionMainTests(unittest.TestCase):
-    def test_main_stderr_posts_log_without_network(self):
+    def test_main_writes_and_prints_summary(self) -> None:
+        fixed = datetime(2040, 1, 2, 8, 0, tzinfo=timezone.utc)
         with tempfile.TemporaryDirectory() as raw:
-            root = Path(raw)
-            (root / "logs").mkdir(parents=True)
-            (root / "logs" / "x.log").write_text("Error: something failed.\n")
+            home = Path(raw) / "oc"
+            s = home / "sessions"
+            s.mkdir(parents=True)
+            (s / "x.md").write_text("Error: something failed in the session.\n", encoding="utf-8")
+            ts = fixed.timestamp()
+            os.utime(s / "x.md", (ts, ts))
 
             stderr = io.StringIO()
             stdout = io.StringIO()
-            with mock.patch.object(auto_reflection.sys, "stderr", stderr):
-                with mock.patch.object(auto_reflection.sys, "stdout", stdout):
-                    rc = auto_reflection.main(
-                        [
-                            "--root",
-                            str(root),
-                            "--since-hours",
-                            "24",
-                            "--stdout-summary",
-                        ]
-                    )
+            with mock.patch.object(auto_reflection, "utc_now", return_value=fixed):
+                with mock.patch.object(auto_reflection.sys, "stderr", stderr):
+                    with mock.patch.object(auto_reflection.sys, "stdout", stdout):
+                        rc = auto_reflection.main(
+                            [
+                                "--openclaw-home",
+                                str(home),
+                                "--days",
+                                "1",
+                                "--stdout-summary",
+                            ]
+                        )
+
             self.assertEqual(rc, 0)
-            err = stderr.getvalue()
-            self.assertIn("No REFLECTION_WEBHOOK_URL", err)
-            self.assertIn("Reflection summary", stdout.getvalue())
+            self.assertIn("Wrote", stderr.getvalue())
+            self.assertIn("OpenClaw auto-reflection", stdout.getvalue())
+            written = home / ".learnings" / "auto_reflection_2040-01-02.md"
+            self.assertTrue(written.exists())
+
+    def test_main_rejects_non_positive_days(self) -> None:
+        stderr = io.StringIO()
+        with mock.patch.object(auto_reflection.sys, "stderr", stderr):
+            rc = auto_reflection.main(["--days", "0", "--openclaw-home", "/tmp"])
+        self.assertEqual(rc, 2)
+        self.assertIn("--days", stderr.getvalue())
 
 
 if __name__ == "__main__":

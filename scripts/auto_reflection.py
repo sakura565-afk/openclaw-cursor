@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
 """
-Cron-friendly self-reflection over recent agent-style logs and session artifacts.
+Self-reflection over OpenClaw session history (~/.openclaw/sessions/).
 
-Scans configurable paths for logs and JSON, extracts recurring failure patterns and
-actionable notes, writes structured outputs under `.learnings/`, builds a periodic
-summary, and optionally posts the summary (Telegram or generic webhook).
+Scans recent session transcripts, extracts errors, corrections, and decisions,
+and writes a dated markdown report under ~/.openclaw/.learnings/ using the same
+structured run pattern as other self-improvement tooling (YAML front matter,
+actionable follow-ups).
 
-Example crontab (daily at 09:00 UTC):
+Example:
 
-    0 9 * * * cd /path/to/repo && /usr/bin/python3 -m scripts.auto_reflection
+    python3 scripts/auto_reflection.py --days 3
+    python3 -m scripts.auto_reflection --days 1 --stdout-summary
 
-Environment (all optional unless posting):
+Environment:
 
-- AUTO_REFLECTION_ROOT — workspace root (default: current working directory)
-- AUTO_REFLECTION_SESSION_GLOBS — extra comma-separated glob patterns relative to root
-- TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID — post summary via Telegram sendMessage
-- REFLECTION_WEBHOOK_URL — POST JSON {\"text\": \"...\", \"meta\": {...}} to this URL
+- OPENCLAW_HOME — override ~/.openclaw (default: ``Path.home() / ".openclaw"``)
 """
 
 from __future__ import annotations
@@ -26,112 +25,119 @@ import json
 import os
 import re
 import sys
-import urllib.error
-import urllib.request
 from collections import Counter
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Sequence
 
+MAX_FILE_BYTES = 2 * 1024 * 1024
+DEFAULT_DAYS = 7
+LEARNINGS_SUBDIR = ".learnings"
 
-LEARNINGS_DIR = ".learnings"
-INSIGHTS_SUBDIR = "insights"
-SUMMARIES_SUBDIR = "summaries"
-STATE_NAME = ".state.json"
-
-DEFAULT_SINCE_HOURS = 24 * 7
-DEFAULT_SESSION_GLOBS = (
-    "logs/**/*.log",
-    "logs/**/*.json",
-    "memory/**/*_log.md",
-    "memory/**/*.md",
-)
+# --- Pattern sets (aligned with scripts/conversation_extractor decision/learning cues) ---
 
 FAILURE_HINTS = re.compile(
     r"(?i)(\b(traceback|exception|error|failed|failure|timed?\s*out|exit\s*code\s*[1-9]\d*)\b|"
     r"\b(Fatal|Critical)\b|^Error:|\[\s*ERROR\s*\])"
 )
-LESSON_HINTS = re.compile(
-    r"(?i)(\blesson learned\b|\btakeaway\b|\bremember to\b|\bnext time\b|"
-    r"\bavoid\b|\bshould have\b|\broot cause\b)"
+
+CORRECTION_HINTS = re.compile(
+    r"(?i)(\bcorrection\b|\bcorrected\b|\bto clarify\b|\bclarification\b|"
+    r"\bI meant\b|\bactually,?\b|\binstead of\b|\bI was wrong\b|\bmy mistake\b|"
+    r"\bon second thought\b|\bretract(?:ing)?\b|\bfixed\s*:\b|\brevised\b|"
+    r"\bupdated (?:the |our )?approach\b|\bshould have\b|\broot cause\b|"
+    r"\blesson learned\b|\btakeaway\b|\bnext time\b)"
 )
-MAX_FILE_BYTES = 2 * 1024 * 1024
-TELEGRAM_TEXT_LIMIT = 4000
 
-
-@dataclass
-class Insight:
-    """One deduplicated insight line derived from logs."""
-
-    text: str
-    source_paths: list[str] = field(default_factory=list)
-    severity: str = "info"  # info | warning | error
-    category: str = "general"
-
-
-@dataclass
-class ReflectionRun:
-    """Serializable result of one reflection pass."""
-
-    run_id: str
-    started_at_utc: str
-    finished_at_utc: str
-    files_scanned: int
-    session_files: list[str]
-    insights: list[Insight]
-    summary_markdown: str
+DECISION_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"^\s*(?:decision|resolution|resolved|outcome)\s*[:\-—]\s*(.+)",
+        r"^\s*\*{0,2}(?:decision|resolution)\*{0,2}\s*[:\-—]\s*(.+)",
+        r"(?:we(?:'ve)?\s+(?:decided|agreed|chose)|let'?s\s+go\s+with|final(?:ly)?\s*:\s*)(.+)",
+        r"(?:\bapproved\b|\bfinalize[ds]?\b|\bchosen\b\s+(?:approach|option|path))\s*[:\-]?\s*(.+)",
+        r"^\s*(?:TL;DR|TDLR|takeaway)s?\s*[:\-—]\s*(.+)",
+        r"\b(?:concluded|conclusion)\s+(?:that\s+)?(.{10,})",
+        r"\bdecision\s*[:\-—]\s*(.+)",
+    )
+)
 
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _state_path(root: Path) -> Path:
-    return root / LEARNINGS_DIR / STATE_NAME
+def openclaw_home_path() -> Path:
+    raw = os.environ.get("OPENCLAW_HOME", "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return (Path.home() / ".openclaw").resolve()
 
 
-def load_state(root: Path) -> dict[str, Any]:
-    path = _state_path(root)
-    if not path.exists():
-        return {}
+def sessions_dir(home: Path) -> Path:
+    return (home / "sessions").resolve()
+
+
+def learnings_dir(home: Path) -> Path:
+    return (home / LEARNINGS_SUBDIR).resolve()
+
+
+def rel_under_sessions(sessions_root: Path, path: Path) -> str:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
+        return path.relative_to(sessions_root).as_posix()
+    except ValueError:
+        return path.name
 
 
-def save_state(root: Path, data: dict[str, Any]) -> None:
-    path = _state_path(root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
 
 
-def iter_session_files(root: Path, globs: Sequence[str], cutoff: datetime) -> list[Path]:
-    seen: set[Path] = set()
-    out: list[Path] = []
-    for pattern in globs:
-        for path in root.glob(pattern):
-            if not path.is_file():
-                continue
-            try:
-                st = path.stat()
-            except OSError:
-                continue
-            if datetime.fromtimestamp(st.st_mtime, tz=timezone.utc) < cutoff:
-                continue
-            if st.st_size > MAX_FILE_BYTES:
-                continue
-            rp = path.resolve()
-            if rp in seen:
-                continue
-            seen.add(rp)
-            out.append(path)
-    out.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return out
+def _ensure_repo_on_path() -> None:
+    root = str(_repo_root())
+    if root not in sys.path:
+        sys.path.insert(0, root)
 
 
-def _severity_for_line(line: str) -> str:
+def normalize_snippet(text: str, limit: int = 480) -> str:
+    line = re.sub(r"\s+", " ", text.strip())
+    return line[:limit]
+
+
+def event_fingerprint(kind: str, text: str) -> str:
+    return hashlib.sha256(f"{kind}|{text.lower()}".encode("utf-8")).hexdigest()[:16]
+
+
+@dataclass
+class ReflectionEvent:
+    """One surfaced transcript moment."""
+
+    kind: str  # error | correction | decision
+    text: str
+    source: str
+    severity: str = "info"  # info | warning | error
+
+    def fingerprint(self) -> str:
+        return event_fingerprint(self.kind, self.text)
+
+
+@dataclass
+class ReflectionRun:
+    """Serializable outcome of a reflection pass (self-improving-agent style envelope)."""
+
+    run_id: str
+    generated_at_utc: str
+    days: int
+    openclaw_home: str
+    sessions_scanned: int
+    files: list[str]
+    events: list[ReflectionEvent]
+    summary_markdown: str
+    output_path: str = ""
+
+
+def _severity_for_error_line(line: str) -> str:
     if re.search(r"(?i)\b(traceback|exception|fatal|critical)\b", line):
         return "error"
     if FAILURE_HINTS.search(line):
@@ -139,337 +145,384 @@ def _severity_for_line(line: str) -> str:
     return "info"
 
 
-def _category_for_line(line: str) -> str:
-    if LESSON_HINTS.search(line):
-        return "lesson"
-    if re.search(r"(?i)\b(test|pytest|unittest)\b", line):
-        return "testing"
-    if re.search(r"(?i)\b(git|commit|merge|branch)\b", line):
-        return "git"
-    if re.search(r"(?i)\b(api|http|request|timeout)\b", line):
-        return "integration"
-    return "general"
+def classify_line(line: str) -> ReflectionEvent | None:
+    stripped = line.strip()
+    if len(stripped) < 16:
+        return None
 
+    if FAILURE_HINTS.search(stripped):
+        return ReflectionEvent(
+            kind="error",
+            text=normalize_snippet(stripped),
+            source="",
+            severity=_severity_for_error_line(stripped),
+        )
 
-def normalize_insight_text(line: str) -> str:
-    line = line.strip()
-    line = re.sub(r"\s+", " ", line)
-    return line[:500]
+    if CORRECTION_HINTS.search(stripped):
+        return ReflectionEvent(
+            kind="correction",
+            text=normalize_snippet(stripped),
+            source="",
+            severity="info",
+        )
 
-
-def insight_fingerprint(text: str) -> str:
-    return hashlib.sha256(text.lower().encode("utf-8")).hexdigest()[:16]
-
-
-def extract_insights_from_text(path: Path, root: Path, raw: str) -> Iterator[Insight]:
-    rel = path.relative_to(root).as_posix()
-    for line in raw.splitlines():
-        stripped = line.strip()
-        if len(stripped) < 12:
-            continue
-        if FAILURE_HINTS.search(stripped) or LESSON_HINTS.search(stripped):
-            text = normalize_insight_text(stripped)
-            if not text:
-                continue
-            yield Insight(
-                text=text,
-                source_paths=[rel],
-                severity=_severity_for_line(stripped),
-                category=_category_for_line(stripped),
+    for pat in DECISION_LINE_PATTERNS:
+        m = pat.search(stripped)
+        if m:
+            body = m.group(1).strip() if m.lastindex else stripped
+            if len(body) < 12:
+                body = stripped
+            return ReflectionEvent(
+                kind="decision",
+                text=normalize_snippet(body),
+                source="",
+                severity="info",
             )
 
+    return None
 
-def extract_insights_from_json(path: Path, root: Path, raw: str) -> Iterator[Insight]:
-    rel = path.relative_to(root).as_posix()
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        yield from extract_insights_from_text(path, root, raw)
+
+def dedupe_events(events: Iterable[ReflectionEvent]) -> list[ReflectionEvent]:
+    buckets: dict[str, ReflectionEvent] = {}
+    for ev in events:
+        fp = ev.fingerprint()
+        cur = buckets.get(fp)
+        if cur is None:
+            buckets[fp] = ReflectionEvent(
+                kind=ev.kind,
+                text=ev.text,
+                source=ev.source,
+                severity=ev.severity,
+            )
+        else:
+            sev_rank = {"error": 3, "warning": 2, "info": 1}
+            if sev_rank.get(ev.severity, 0) > sev_rank.get(cur.severity, 0):
+                cur.severity = ev.severity
+    return list(buckets.values())
+
+
+def _walk_json_strings(node: Any, chunks: list[str], *, min_len: int) -> None:
+    if isinstance(node, str):
+        s = node.strip()
+        if len(s) >= min_len:
+            chunks.append(s)
         return
-
-    strings: list[str] = []
-
-    def walk(obj: Any) -> None:
-        if isinstance(obj, dict):
-            for k, v in obj.items():
-                if isinstance(k, str) and re.search(r"(?i)\b(error|stderr|message|detail)\b", k):
-                    if isinstance(v, str) and v.strip():
-                        strings.append(v.strip())
-                walk(v)
-        elif isinstance(obj, list):
-            for item in obj:
-                walk(item)
-        elif isinstance(obj, str) and FAILURE_HINTS.search(obj):
-            strings.append(obj.strip())
-
-    walk(data)
-    for s in strings:
-        for insight in extract_insights_from_text(path, root, s):
-            if rel not in insight.source_paths:
-                insight.source_paths.insert(0, rel)
-            yield insight
+    if isinstance(node, dict):
+        for v in node.values():
+            _walk_json_strings(v, chunks, min_len=min_len)
+        return
+    if isinstance(node, list):
+        for v in node:
+            _walk_json_strings(v, chunks, min_len=min_len)
 
 
-def read_and_extract(path: Path, root: Path) -> list[Insight]:
+def _segments_from_json_file(path: Path) -> list[str]:
+    _ensure_repo_on_path()
+    try:
+        from scripts.conversation_extractor import parse_json_session
+
+        segs = [text for _, _, text in parse_json_session(path) if text.strip()]
+        if segs:
+            return segs
+    except Exception:
+        pass
+
     try:
         raw = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
-    if path.suffix.lower() == ".json":
-        return list(extract_insights_from_json(path, root, raw))
-    return list(extract_insights_from_text(path, root, raw))
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return [raw]
+
+    chunks: list[str] = []
+    _walk_json_strings(data, chunks, min_len=24)
+    return chunks
 
 
-def dedupe_insights(insights: Iterable[Insight]) -> list[Insight]:
-    buckets: dict[str, Insight] = {}
-    for ins in insights:
-        fp = insight_fingerprint(ins.text)
-        existing = buckets.get(fp)
-        if existing is None:
-            buckets[fp] = Insight(
-                text=ins.text,
-                source_paths=list(ins.source_paths),
-                severity=ins.severity,
-                category=ins.category,
-            )
+def _segments_from_jsonl(path: Path) -> list[str]:
+    out: list[str] = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and isinstance(obj.get("messages"), list):
+            try:
+                out.extend(_segments_from_json_str(json.dumps({"messages": obj["messages"]})))
+            except (TypeError, ValueError):
+                walk_obj(obj, out)
         else:
-            for p in ins.source_paths:
-                if p not in existing.source_paths:
-                    existing.source_paths.append(p)
-            sev_rank = {"error": 3, "warning": 2, "info": 1}
-            if sev_rank.get(ins.severity, 0) > sev_rank.get(existing.severity, 0):
-                existing.severity = ins.severity
-    return list(buckets.values())
+            walk_obj(obj, out)
+    return out
+
+
+def _segments_from_json_str(raw: str) -> list[str]:
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return [raw]
+    chunks: list[str] = []
+    _walk_json_strings(data, chunks, min_len=24)
+    return chunks
+
+
+def walk_obj(obj: Any, out: list[str]) -> None:
+    _walk_json_strings(obj, out, min_len=24)
+
+
+def iter_transcript_chunks(path: Path) -> list[str]:
+    suf = path.suffix.lower()
+    if suf == ".json":
+        return _segments_from_json_file(path)
+    if suf == ".jsonl":
+        return _segments_from_jsonl(path)
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    if not raw.strip():
+        return []
+    if suf in {".md", ".txt", ".log"} or not suf:
+        return raw.splitlines()
+    # Unknown extension: try JSON first, else lines
+    try:
+        json.loads(raw)
+    except json.JSONDecodeError:
+        return raw.splitlines()
+    return _segments_from_json_str(raw)
+
+
+def extract_events_for_file(path: Path, sessions_root: Path) -> Iterator[ReflectionEvent]:
+    try:
+        rel = path.relative_to(sessions_root).as_posix()
+    except ValueError:
+        rel = path.name
+
+    for chunk in iter_transcript_chunks(path):
+        if "\n" in chunk:
+            lines = chunk.splitlines()
+        else:
+            lines = [chunk]
+
+        for line in lines:
+            hit = classify_line(line)
+            if hit is None:
+                continue
+            hit.source = rel
+            yield hit
+
+
+def iter_session_files(sessions_root: Path, cutoff: datetime) -> list[Path]:
+    if not sessions_root.is_dir():
+        return []
+
+    out: list[Path] = []
+    for path in sessions_root.rglob("*"):
+        if not path.is_file():
+            continue
+        if path.name.startswith("."):
+            continue
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+        if mtime < cutoff:
+            continue
+        if st.st_size > MAX_FILE_BYTES:
+            continue
+        out.append(path)
+
+    out.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return out
+
+
+def _suggest_followups(events: Sequence[ReflectionEvent]) -> list[str]:
+    """Short improvement hooks derived from event mix (self-improving-agent pattern)."""
+
+    if not events:
+        return [
+            "No high-signal events in this window; keep capturing transcripts for richer reflection.",
+        ]
+
+    suggestions: list[str] = []
+    err_n = sum(1 for e in events if e.kind == "error")
+    corr_n = sum(1 for e in events if e.kind == "correction")
+    dec_n = sum(1 for e in events if e.kind == "decision")
+
+    if err_n:
+        suggestions.append(
+            f"Schedule a focused pass on the top {min(err_n, 3)} error themes above; "
+            "triage whether each is tooling, policy, or model drift."
+        )
+    if corr_n > dec_n * 2:
+        suggestions.append(
+            "Corrections dominate decisions; consider tightening upfront constraints or "
+            "checklists before long tool chains."
+        )
+    if dec_n and not err_n:
+        suggestions.append(
+            "Decisions without surfaced errors: capture rationale in session templates "
+            "so future runs can diff intent vs outcome."
+        )
+    if not suggestions:
+        suggestions.append(
+            "Review decision and correction sections together and promote any recurring "
+            "theme into a skill or workspace rule."
+        )
+    return suggestions[:5]
 
 
 def build_summary_markdown(
     run_at: datetime,
-    files_scanned: int,
-    insights: Sequence[Insight],
-    top_sessions: Sequence[str],
+    days: int,
+    home: Path,
+    session_files: Sequence[Path],
+    events: Sequence[ReflectionEvent],
+    followups: Sequence[str],
 ) -> str:
     lines = [
-        f"# Reflection summary ({run_at.date().isoformat()} UTC)",
+        f"# OpenClaw auto-reflection — {run_at.date().isoformat()} (UTC)",
         "",
-        f"- Session files scanned: **{files_scanned}**",
-        f"- Distinct insights: **{len(insights)}**",
+        f"- **Window:** last **{days}** day(s)",
+        f"- **OpenClaw home:** `{home}`",
+        f"- **Session files scanned:** {len(session_files)}",
+        f"- **Distinct key events:** {len(events)}",
         "",
     ]
-    if top_sessions:
-        lines.append("## Recently touched logs")
-        for p in top_sessions[:15]:
-            lines.append(f"- `{p}`")
+
+    if session_files:
+        lines.append("## Session files (recent first)")
+        for p in session_files[:25]:
+            try:
+                rel = p.relative_to(home / "sessions").as_posix()
+            except ValueError:
+                rel = p.as_posix()
+            lines.append(f"- `{rel}`")
+        if len(session_files) > 25:
+            lines.append(f"- _…and {len(session_files) - 25} more_")
         lines.append("")
-    if not insights:
-        lines.append("_No notable patterns in the scanned window._")
-        return "\n".join(lines)
 
-    lines.append("## Insights")
-    by_cat: dict[str, list[Insight]] = {}
-    for ins in insights:
-        by_cat.setdefault(ins.category, []).append(ins)
+    if not events:
+        lines.append("_No errors, corrections, or explicit decisions matched the heuristics in this window._")
+    else:
+        by_kind: dict[str, list[ReflectionEvent]] = {"error": [], "correction": [], "decision": []}
+        for ev in events:
+            by_kind.setdefault(ev.kind, []).append(ev)
 
-    for cat in sorted(by_cat.keys()):
-        lines.append(f"### {cat}")
         rank = {"error": 0, "warning": 1, "info": 2}
-        for ins in sorted(
-            by_cat[cat],
-            key=lambda i: (rank.get(i.severity, 9), i.text.lower()),
+        for kind, title in (
+            ("error", "Errors"),
+            ("correction", "Corrections"),
+            ("decision", "Decisions"),
         ):
-            badge = ins.severity.upper()
-            sources = ", ".join(f"`{s}`" for s in ins.source_paths[:3])
-            if len(ins.source_paths) > 3:
-                sources += ", …"
-            lines.append(f"- **[{badge}]** {ins.text} _(sources: {sources})_")
+            bucket = by_kind.get(kind, [])
+            if not bucket:
+                continue
+            lines.append(f"## {title}")
+            for ev in sorted(bucket, key=lambda e: (rank.get(e.severity, 9), e.text.lower())):
+                badge = ev.severity.upper() if kind == "error" else "NOTE"
+                lines.append(f"- **[{badge}]** {ev.text} _( `{ev.source}` )_")
+            lines.append("")
+
+        ctr = Counter(e.kind for e in events)
+        lines.append("## Event counts")
+        for k, n in ctr.most_common():
+            lines.append(f"- **{k}**: {n}")
         lines.append("")
 
-    ctr = Counter(i.category for i in insights)
-    lines.append("## Category counts")
-    for cat, n in ctr.most_common():
-        lines.append(f"- **{cat}**: {n}")
+    lines.append("## Self-improvement — next pass")
+    for item in followups:
+        lines.append(f"- {item}")
+    lines.append("")
+
     return "\n".join(lines).rstrip() + "\n"
 
 
-def weekly_report_path(root: Path, dt: datetime) -> Path:
-    iso = dt.isocalendar()
-    week = f"{iso.year}-W{iso.week:02d}"
-    return root / LEARNINGS_DIR / SUMMARIES_SUBDIR / f"weekly_{week}.md"
-
-
-def update_weekly_summary(root: Path, run_at: datetime, body: str) -> Path:
-    """Append this run into the ISO-week summary file (idempotent headings per day)."""
-
-    path = weekly_report_path(root, run_at)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    day_heading = f"\n## {run_at.date().isoformat()} (UTC)\n\n"
-    chunk = day_heading + body + "\n"
-    if path.exists():
-        existing = path.read_text(encoding="utf-8")
-        if run_at.date().isoformat() in existing:
-            return path
-        path.write_text(existing.rstrip() + "\n" + chunk, encoding="utf-8")
-    else:
-        path.write_text(f"# Weekly reflection — {run_at.isocalendar().year} W{run_at.isocalendar().week:02d}\n" + chunk)
-    return path
-
-
-def write_insight_artifacts(root: Path, run: ReflectionRun) -> tuple[Path, Path]:
-    insights_dir = root / LEARNINGS_DIR / INSIGHTS_SUBDIR
-    insights_dir.mkdir(parents=True, exist_ok=True)
-    base = insights_dir / f"run_{run.run_id}"
-    md_path = base.with_suffix(".md")
-    json_path = base.with_suffix(".json")
-
-    md_lines = [
-        f"# Run {run.run_id}",
-        f"- Started: {run.started_at_utc}",
-        f"- Finished: {run.finished_at_utc}",
-        f"- Files scanned: {run.files_scanned}",
-        "",
-        run.summary_markdown,
-    ]
-    md_path.write_text("\n".join(md_lines), encoding="utf-8")
-
-    json_path.write_text(json.dumps(asdict(run), indent=2) + "\n", encoding="utf-8")
-    return md_path, json_path
-
-
-def write_latest_pointers(root: Path, md_path: Path, weekly_path: Path) -> None:
-    """Small files for automation consumers."""
-
-    ptr = root / LEARNINGS_DIR / "latest.json"
-    data = {
-        "insights_md": md_path.relative_to(root).as_posix(),
-        "weekly_summary_md": weekly_path.relative_to(root).as_posix(),
-        "generated_at_utc": utc_now().replace(microsecond=0).isoformat(),
+def build_front_matter(
+    run: ReflectionRun,
+    followups: Sequence[str],
+) -> str:
+    payload = {
+        "id": "openclaw-auto-reflection",
+        "name": "OpenClaw session auto-reflection",
+        "generated_at_utc": run.generated_at_utc,
+        "openclaw_home": run.openclaw_home,
+        "scan_days": run.days,
+        "sessions_scanned": run.sessions_scanned,
+        "distinct_events": len(run.events),
+        "self_improvement": {"next_actions": list(followups)},
     }
-    ptr.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-
-
-def post_webhook(url: str, payload: dict[str, Any]) -> tuple[bool, str]:
-    body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")[:500]
-            return True, raw or "ok"
-    except urllib.error.HTTPError as exc:
-        try:
-            detail = exc.read().decode("utf-8", errors="replace")[:500]
-        except OSError:
-            detail = str(exc)
-        return False, detail
-    except urllib.error.URLError as exc:
-        return False, str(exc.reason if hasattr(exc, "reason") else exc)
-
-
-def post_telegram_summary(token: str, chat_id: str, text: str) -> tuple[bool, str]:
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    chunks: list[str] = []
-    remaining = text
-    while remaining:
-        chunks.append(remaining[:TELEGRAM_TEXT_LIMIT])
-        remaining = remaining[TELEGRAM_TEXT_LIMIT:]
-
-    last_msg = ""
-    for i, chunk in enumerate(chunks):
-        prefix = f"(part {i + 1}/{len(chunks)})\n" if len(chunks) > 1 else ""
-        body = json.dumps(
-            {"chat_id": chat_id, "text": prefix + chunk, "disable_web_page_preview": True}
-        ).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=45) as resp:
-                last_msg = resp.read().decode("utf-8", errors="replace")[:500]
-        except urllib.error.HTTPError as exc:
-            try:
-                detail = exc.read().decode("utf-8", errors="replace")
-            except OSError:
-                detail = str(exc)
-            return False, detail
-        except urllib.error.URLError as exc:
-            return False, str(exc.reason if hasattr(exc, "reason") else exc)
-    return True, last_msg or "ok"
-
-
-def collect_globs(extra: Sequence[str]) -> tuple[str, ...]:
-    merged = list(DEFAULT_SESSION_GLOBS)
-    env_extra = os.environ.get("AUTO_REFLECTION_SESSION_GLOBS", "")
-    if env_extra.strip():
-        merged.extend(p.strip() for p in env_extra.split(",") if p.strip())
-    merged.extend(extra)
-    return tuple(dict.fromkeys(merged))
+    # YAML-ish without external dependency: json is valid structured metadata readers can parse
+    return "---\n" + json.dumps(payload, indent=2, ensure_ascii=False) + "\n---\n\n"
 
 
 def run_reflection(
-    root: Path,
+    home: Path,
     *,
-    since_hours: float,
-    extra_globs: Sequence[str],
-    overlap_minutes: int = 90,
+    days: int,
+    run_at: datetime | None = None,
     dry_run: bool = False,
 ) -> ReflectionRun:
-    started = utc_now()
-    state = load_state(root)
-    last_run_s = state.get("last_run_utc")
-    if last_run_s:
-        try:
-            last_dt = datetime.fromisoformat(last_run_s.replace("Z", "+00:00"))
-            if last_dt.tzinfo is None:
-                last_dt = last_dt.replace(tzinfo=timezone.utc)
-            cutoff = last_dt - timedelta(minutes=overlap_minutes)
-        except ValueError:
-            cutoff = started - timedelta(hours=since_hours)
-    else:
-        cutoff = started - timedelta(hours=since_hours)
+    now = run_at or utc_now()
+    started = now.replace(microsecond=0)
+    cutoff = started - timedelta(days=days)
 
-    globs = collect_globs(extra_globs)
-    session_files = iter_session_files(root, globs, cutoff)
+    sdir = sessions_dir(home)
+    session_files = iter_session_files(sdir, cutoff)
 
-    insights: list[Insight] = []
+    events: list[ReflectionEvent] = []
     for sf in session_files:
-        insights.extend(read_and_extract(sf, root))
+        events.extend(extract_events_for_file(sf, sdir))
 
-    insights = dedupe_insights(insights)
-    insights.sort(key=lambda x: (x.category, x.severity, x.text))
+    events = dedupe_events(events)
+    events.sort(key=lambda e: (e.kind, e.severity, e.text.lower()))
 
-    top_sessions = [p.relative_to(root).as_posix() for p in session_files[:20]]
-    summary = build_summary_markdown(started, len(session_files), insights, top_sessions)
+    followups = _suggest_followups(events)
+    summary_body = build_summary_markdown(started, days, home, session_files, events, followups)
 
-    finished = utc_now()
     run_id = started.strftime("%Y%m%d_%H%M%S")
+    out_path = learnings_dir(home) / f"auto_reflection_{started.date().isoformat()}.md"
+    full_markdown = build_front_matter(
+        ReflectionRun(
+            run_id=run_id,
+            generated_at_utc=started.isoformat(),
+            days=days,
+            openclaw_home=str(home),
+            sessions_scanned=len(session_files),
+            files=[rel_under_sessions(sdir, p) for p in session_files],
+            events=events,
+            summary_markdown="",
+        ),
+        followups,
+    ) + summary_body
 
     run = ReflectionRun(
         run_id=run_id,
-        started_at_utc=started.replace(microsecond=0).isoformat(),
-        finished_at_utc=finished.replace(microsecond=0).isoformat(),
-        files_scanned=len(session_files),
-        session_files=[p.relative_to(root).as_posix() for p in session_files],
-        insights=insights,
-        summary_markdown=summary,
+        generated_at_utc=started.isoformat(),
+        days=days,
+        openclaw_home=str(home),
+        sessions_scanned=len(session_files),
+        files=[rel_under_sessions(sdir, p) for p in session_files],
+        events=events,
+        summary_markdown=full_markdown,
+        output_path=str(out_path),
     )
 
     if dry_run:
         return run
 
-    md_path, _ = write_insight_artifacts(root, run)
-    weekly_path = update_weekly_summary(root, started, summary)
-    write_latest_pointers(root, md_path, weekly_path)
-
-    state["last_run_utc"] = finished.replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    state["last_run_id"] = run_id
-    state["last_insight_count"] = len(insights)
-    save_state(root, state)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(full_markdown, encoding="utf-8")
 
     try:
         from src.coordination.iskra_kara_shared_memory import notify_kara_from_iskra
@@ -477,10 +530,11 @@ def run_reflection(
         notify_kara_from_iskra(
             "reflection",
             {
-                "summary_markdown": run.summary_markdown,
+                "summary_markdown": summary_body,
                 "run_id": run.run_id,
-                "files_scanned": run.files_scanned,
-                "insight_count": len(run.insights),
+                "files_scanned": run.sessions_scanned,
+                "event_count": len(run.events),
+                "output_path": str(out_path),
             },
         )
     except Exception:
@@ -489,98 +543,56 @@ def run_reflection(
     return run
 
 
-def maybe_post_results(run: ReflectionRun, *, dry_run: bool) -> list[str]:
-    log: list[str] = []
-    text = run.summary_markdown
-    webhook = os.environ.get("REFLECTION_WEBHOOK_URL", "").strip()
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-
-    payload = {
-        "text": text,
-        "meta": {
-            "run_id": run.run_id,
-            "started_at": run.started_at_utc,
-            "files_scanned": run.files_scanned,
-            "insight_count": len(run.insights),
-        },
-    }
-
-    if dry_run:
-        log.append("[dry-run] Skipping webhook and Telegram.")
-        return log
-
-    if webhook:
-        ok, msg = post_webhook(webhook, payload)
-        log.append(f"Webhook {'ok' if ok else 'FAILED'}: {msg[:400]}")
-
-    if token and chat_id:
-        ok, msg = post_telegram_summary(token, chat_id, text)
-        log.append(f"Telegram {'ok' if ok else 'FAILED'}: {msg[:400]}")
-    elif token or chat_id:
-        log.append("Telegram skipped: need both TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.")
-
-    if not webhook and not (token and chat_id):
-        log.append("No REFLECTION_WEBHOOK_URL or full Telegram credentials; summary only on disk.")
-
-    return log
-
-
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Analyze recent agent logs, refresh .learnings/, and optionally post a summary.",
+    p = argparse.ArgumentParser(
+        description="Scan ~/.openclaw/sessions for errors, corrections, and decisions; write .learnings summary.",
     )
-    parser.add_argument(
-        "--root",
+    p.add_argument(
+        "--days",
+        type=int,
+        default=DEFAULT_DAYS,
+        metavar="N",
+        help=f"Include session files modified in the last N days (default: {DEFAULT_DAYS}).",
+    )
+    p.add_argument(
+        "--openclaw-home",
         type=Path,
         default=None,
-        help="Workspace root (default: AUTO_REFLECTION_ROOT or cwd).",
+        help="Override OpenClaw home (default: OPENCLAW_HOME or ~/.openclaw).",
     )
-    parser.add_argument(
-        "--since-hours",
-        type=float,
-        default=DEFAULT_SINCE_HOURS,
-        help=f"Hours of history to include when no prior state exists (default: {DEFAULT_SINCE_HOURS}).",
-    )
-    parser.add_argument(
-        "--glob",
-        action="append",
-        default=[],
-        metavar="PATTERN",
-        help="Additional glob relative to root (repeatable).",
-    )
-    parser.add_argument(
+    p.add_argument(
         "--dry-run",
         action="store_true",
-        help="Do not write files or POST; prints intended actions.",
+        help="Do not write the markdown file; still builds the summary in memory.",
     )
-    parser.add_argument(
+    p.add_argument(
         "--stdout-summary",
         action="store_true",
-        help="Print the markdown summary to stdout.",
+        help="Print the full markdown document to stdout.",
     )
-    return parser
+    return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    home = (args.openclaw_home.expanduser().resolve() if args.openclaw_home else openclaw_home_path())
 
-    root = args.root or Path(os.environ.get("AUTO_REFLECTION_ROOT", "") or ".").resolve()
     if args.dry_run:
-        print(f"[dry-run] root={root}", file=sys.stderr)
+        print(f"[dry-run] openclaw_home={home}", file=sys.stderr)
 
-    run = run_reflection(
-        root,
-        since_hours=args.since_hours,
-        extra_globs=args.glob,
-        dry_run=args.dry_run,
-    )
+    if args.days < 1:
+        print("--days must be >= 1", file=sys.stderr)
+        return 2
 
-    for line in maybe_post_results(run, dry_run=args.dry_run):
-        print(line, file=sys.stderr)
+    run = run_reflection(home, days=args.days, dry_run=args.dry_run)
+
+    if args.dry_run:
+        print(f"[dry-run] would write: {run.output_path}", file=sys.stderr)
+    else:
+        print(f"Wrote {run.output_path}", file=sys.stderr)
 
     if args.stdout_summary:
-        print(run.summary_markdown)
+        print(run.summary_markdown, end="")
 
     return 0
 
