@@ -78,6 +78,16 @@ class ToolDiscoveryTests(unittest.TestCase):
         self.assertIn("Queue orchestration", by_name["queue_monitor"].capabilities)
         self.assertIn("queue_analytics", by_name["queue_monitor"].dependencies)
 
+    def test_analyze_scripts_skips_syntax_errors(self) -> None:
+        root = self._build_repo()
+        (root / "scripts" / "good_tool.py").write_text(
+            "import argparse\n\ndef parse_args():\n    parser = argparse.ArgumentParser()\n    return parser.parse_args([])\n",
+            encoding="utf-8",
+        )
+        (root / "scripts" / "broken_tool.py").write_text("def x(\n", encoding="utf-8")
+        profiles = tool_discovery.analyze_scripts(root)
+        self.assertEqual([p.name for p in profiles], ["good_tool"])
+
     def test_generate_markdown_includes_examples_and_dependencies(self) -> None:
         profile = tool_discovery.ToolProfile(
             name="sync_obsidian",
