@@ -2,9 +2,12 @@
 """
 Cron-friendly self-reflection over recent agent-style logs and session artifacts.
 
-Scans configurable paths for logs and JSON, extracts recurring failure patterns and
-actionable notes, writes structured outputs under `.learnings/`, builds a periodic
-summary, and optionally posts the summary (Telegram or generic webhook).
+Scans configurable paths for logs and JSON, analyzes session history, detects
+patterns in errors, corrections, and successful approaches, emits actionable
+recommendations and a stats summary, writes structured outputs under
+`.learnings/` (including date-stamped files under `.learnings/reflections/`),
+builds a periodic weekly summary, and optionally posts the summary (Telegram or
+generic webhook).
 
 Example crontab (daily at 09:00 UTC):
 
@@ -23,6 +26,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import os
 import re
 import sys
@@ -35,9 +39,12 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Sequence
 
 
+logger = logging.getLogger(__name__)
+
 LEARNINGS_DIR = ".learnings"
 INSIGHTS_SUBDIR = "insights"
 SUMMARIES_SUBDIR = "summaries"
+REFLECTIONS_SUBDIR = "reflections"
 STATE_NAME = ".state.json"
 
 DEFAULT_SINCE_HOURS = 24 * 7
@@ -56,8 +63,16 @@ LESSON_HINTS = re.compile(
     r"(?i)(\blesson learned\b|\btakeaway\b|\bremember to\b|\bnext time\b|"
     r"\bavoid\b|\bshould have\b|\broot cause\b)"
 )
+CORRECTION_HINTS = re.compile(
+    r"(?i)(\bfixed\b|\bcorrected\b|\bworkaround\b|\bpatched\b|\bupdated (?:to|the)\b|\bnow uses\b)"
+)
+SUCCESS_HINTS = re.compile(
+    r"(?i)(\bsuccess\b|\bworked\b|\ball tests passed\b|\bcompleted successfully\b|"
+    r"\bverified\b|\bno errors\b|\bbuild passed\b)"
+)
 MAX_FILE_BYTES = 2 * 1024 * 1024
 TELEGRAM_TEXT_LIMIT = 4000
+ERROR_LOG_MAX_ENTRIES = 200
 
 
 @dataclass
@@ -97,7 +112,8 @@ def load_state(root: Path) -> dict[str, Any]:
         return {}
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("Could not load reflection state from %s: %s", path, exc)
         return {}
 
 
@@ -128,6 +144,7 @@ def iter_session_files(root: Path, globs: Sequence[str], cutoff: datetime) -> li
             seen.add(rp)
             out.append(path)
     out.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    logger.info("Matched %d session files after cutoff %s", len(out), cutoff.isoformat())
     return out
 
 
@@ -136,12 +153,18 @@ def _severity_for_line(line: str) -> str:
         return "error"
     if FAILURE_HINTS.search(line):
         return "warning"
+    if SUCCESS_HINTS.search(line):
+        return "info"
     return "info"
 
 
 def _category_for_line(line: str) -> str:
     if LESSON_HINTS.search(line):
         return "lesson"
+    if SUCCESS_HINTS.search(line):
+        return "success"
+    if CORRECTION_HINTS.search(line):
+        return "correction"
     if re.search(r"(?i)\b(test|pytest|unittest)\b", line):
         return "testing"
     if re.search(r"(?i)\b(git|commit|merge|branch)\b", line):
@@ -161,22 +184,32 @@ def insight_fingerprint(text: str) -> str:
     return hashlib.sha256(text.lower().encode("utf-8")).hexdigest()[:16]
 
 
+def _line_triggers_insight(stripped: str) -> bool:
+    return bool(
+        FAILURE_HINTS.search(stripped)
+        or LESSON_HINTS.search(stripped)
+        or CORRECTION_HINTS.search(stripped)
+        or SUCCESS_HINTS.search(stripped)
+    )
+
+
 def extract_insights_from_text(path: Path, root: Path, raw: str) -> Iterator[Insight]:
     rel = path.relative_to(root).as_posix()
     for line in raw.splitlines():
         stripped = line.strip()
         if len(stripped) < 12:
             continue
-        if FAILURE_HINTS.search(stripped) or LESSON_HINTS.search(stripped):
-            text = normalize_insight_text(stripped)
-            if not text:
-                continue
-            yield Insight(
-                text=text,
-                source_paths=[rel],
-                severity=_severity_for_line(stripped),
-                category=_category_for_line(stripped),
-            )
+        if not _line_triggers_insight(stripped):
+            continue
+        text = normalize_insight_text(stripped)
+        if not text:
+            continue
+        yield Insight(
+            text=text,
+            source_paths=[rel],
+            severity=_severity_for_line(stripped),
+            category=_category_for_line(stripped),
+        )
 
 
 def extract_insights_from_json(path: Path, root: Path, raw: str) -> Iterator[Insight]:
@@ -199,7 +232,9 @@ def extract_insights_from_json(path: Path, root: Path, raw: str) -> Iterator[Ins
         elif isinstance(obj, list):
             for item in obj:
                 walk(item)
-        elif isinstance(obj, str) and FAILURE_HINTS.search(obj):
+        elif isinstance(obj, str) and (
+            FAILURE_HINTS.search(obj) or SUCCESS_HINTS.search(obj) or CORRECTION_HINTS.search(obj)
+        ):
             strings.append(obj.strip())
 
     walk(data)
@@ -213,7 +248,8 @@ def extract_insights_from_json(path: Path, root: Path, raw: str) -> Iterator[Ins
 def read_and_extract(path: Path, root: Path) -> list[Insight]:
     try:
         raw = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    except OSError as exc:
+        logger.debug("Skip unreadable file %s: %s", path, exc)
         return []
     if path.suffix.lower() == ".json":
         return list(extract_insights_from_json(path, root, raw))
@@ -240,6 +276,232 @@ def dedupe_insights(insights: Iterable[Insight]) -> list[Insight]:
             if sev_rank.get(ins.severity, 0) > sev_rank.get(existing.severity, 0):
                 existing.severity = ins.severity
     return list(buckets.values())
+
+
+def load_error_log_entries(root: Path, *, max_entries: int = ERROR_LOG_MAX_ENTRIES) -> list[dict[str, Any]]:
+    path = root / LEARNINGS_DIR / "error_log.json"
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("Could not read %s: %s", path, exc)
+        return []
+    raw_entries = data.get("entries")
+    if not isinstance(raw_entries, list):
+        return []
+    parsed: list[dict[str, Any]] = [e for e in raw_entries if isinstance(e, dict)]
+    return parsed[-max_entries:]
+
+
+def build_session_analysis_markdown(
+    root: Path,
+    session_paths: Sequence[Path],
+    cutoff: datetime,
+    run_at: datetime,
+) -> str:
+    lines = [
+        "## Session analysis",
+        "",
+        f"- **Analysis window:** `{cutoff.isoformat()}` → `{run_at.isoformat()}` (UTC)",
+        f"- **Files in window:** {len(session_paths)}",
+        "",
+    ]
+    if not session_paths:
+        lines.append("_No session artifacts matched the configured globs in this window._")
+        return "\n".join(lines)
+
+    ext_counts = Counter(p.suffix.lower() or "(no extension)" for p in session_paths)
+    total_bytes = 0
+    lines.append("### Recently touched artifacts")
+    lines.append("")
+    lines.append("| Relative path | Size (bytes) | Modified (UTC) |")
+    lines.append("| --- | ---: | --- |")
+    for p in session_paths[:40]:
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        total_bytes += st.st_size
+        mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+        rel = p.relative_to(root).as_posix()
+        lines.append(f"| `{rel}` | {st.st_size} | {mtime} |")
+    if len(session_paths) > 40:
+        lines.append(f"| _… {len(session_paths) - 40} more files_ | | |")
+    lines.append("")
+    lines.append("### File-type mix")
+    for ext, n in ext_counts.most_common():
+        lines.append(f"- `{ext}`: **{n}**")
+    lines.append("")
+    lines.append(f"- **Approx. total size (listed rows):** {total_bytes} bytes")
+    return "\n".join(lines)
+
+
+def build_pattern_detection_markdown(
+    insights: Sequence[Insight],
+    error_entries: Sequence[dict[str, Any]],
+) -> str:
+    lines = ["## Pattern detection", ""]
+    if not insights and not error_entries:
+        lines.append("_No structured signals yet; widen the time window or add session logs._")
+        return "\n".join(lines)
+
+    if insights:
+        by_cat = Counter(i.category for i in insights)
+        by_sev = Counter(i.severity for i in insights)
+        lines.append("### From scanned session logs")
+        lines.append("")
+        lines.append("- **Insight categories:** " + ", ".join(f"`{k}`×{v}" for k, v in by_cat.most_common(12)))
+        lines.append("- **Severity mix:** " + ", ".join(f"`{k}`×{v}" for k, v in by_sev.most_common()))
+        hi = [i for i in insights if i.severity in ("error", "warning")]
+        if hi:
+            lines.append("")
+            lines.append("**Recurring failure / risk lines (sample):**")
+            for ins in sorted(hi, key=lambda x: (-len(x.source_paths), x.text.lower()))[:8]:
+                lines.append(f"- [{ins.severity}] {ins.text} _(hits: {len(ins.source_paths)})_")
+        succ = [i for i in insights if i.category in ("success", "correction", "lesson")]
+        if succ:
+            lines.append("")
+            lines.append("**Successful approaches / corrections (sample):**")
+            for ins in succ[:8]:
+                lines.append(f"- [{ins.category}] {ins.text}")
+        lines.append("")
+
+    if error_entries:
+        cats: Counter[str] = Counter()
+        unresolved = 0
+        for e in error_entries:
+            c = e.get("category")
+            if isinstance(c, str) and c.strip():
+                cats[c.strip()] += 1
+            if e.get("resolved") is False:
+                unresolved += 1
+        lines.append("### From `.learnings/error_log.json`")
+        lines.append("")
+        lines.append(f"- **Entries considered:** {len(error_entries)}")
+        lines.append(f"- **Unresolved in sample:** {unresolved}")
+        if cats:
+            lines.append("- **Top recorded categories:** " + ", ".join(f"`{k}`×{v}" for k, v in cats.most_common(8)))
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def build_actionable_recommendations(
+    insights: Sequence[Insight],
+    error_entries: Sequence[dict[str, Any]],
+) -> list[str]:
+    recs: list[str] = []
+    by_cat = Counter(i.category for i in insights)
+    by_sev = Counter(i.severity for i in insights)
+
+    if by_sev.get("error", 0) + by_sev.get("warning", 0) >= 3:
+        recs.append(
+            "Several high-signal errors or warnings appeared across logs; schedule a focused pass "
+            "to triage root causes and add regression checks for the top two themes."
+        )
+    if by_cat.get("integration", 0) >= 2:
+        recs.append(
+            "Integration-related hints cluster together; confirm timeouts, retries, and API "
+            "credentials, and capture a minimal reproduction for the worst offender."
+        )
+    if by_cat.get("testing", 0) >= 2:
+        recs.append(
+            "Testing-related noise is elevated; stabilize flaky tests or split slow suites so "
+            "failures surface earlier with clearer diagnostics."
+        )
+    if by_cat.get("git", 0) >= 2:
+        recs.append(
+            "Git workflow friction shows up repeatedly; document the branch/merge checklist "
+            "you actually follow and automate pre-push checks where possible."
+        )
+
+    unresolved_lessons: list[str] = []
+    for e in error_entries:
+        if e.get("resolved") is False:
+            lesson = e.get("lesson")
+            if isinstance(lesson, str) and lesson.strip():
+                unresolved_lessons.append(lesson.strip()[:240])
+    if unresolved_lessons:
+        recs.append(
+            f"Address {len(unresolved_lessons)} unresolved item(s) from the error learning log; "
+            "oldest lesson: " + unresolved_lessons[0][:200]
+        )
+
+    succ_n = sum(1 for i in insights if i.category == "success")
+    fix_n = sum(1 for i in insights if i.category == "correction")
+    if succ_n and not recs:
+        recs.append("Capture what made recent successes work (commands, settings) in team notes or runbooks.")
+    elif fix_n >= 2:
+        recs.append(
+            "Multiple corrections logged; distill them into a short “pitfalls” section in the README "
+            "or onboarding doc so the same mistakes are not repeated."
+        )
+
+    if not recs:
+        recs.append(
+            "Keep logging lessons and failures in `memory/` logs or `.learnings/error_log.json`; "
+            "the next reflection pass will have richer patterns to act on."
+        )
+    return recs
+
+
+def build_stats_summary(
+    cutoff: datetime,
+    run_at: datetime,
+    session_files: Sequence[Path],
+    insights: Sequence[Insight],
+    error_entries: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    by_cat = Counter(i.category for i in insights)
+    by_sev = Counter(i.severity for i in insights)
+    unresolved = sum(1 for e in error_entries if e.get("resolved") is False)
+    return {
+        "window_start_utc": cutoff.isoformat(),
+        "window_end_utc": run_at.isoformat(),
+        "files_scanned": len(session_files),
+        "insights_distinct": len(insights),
+        "insights_by_category": dict(by_cat),
+        "insights_by_severity": dict(by_sev),
+        "error_log_entries_loaded": len(error_entries),
+        "error_log_unresolved_in_sample": unresolved,
+    }
+
+
+def build_stats_summary_markdown(stats: dict[str, Any]) -> str:
+    lines = [
+        "## Stats summary",
+        "",
+        "| Metric | Value |",
+        "| --- | --- |",
+        f"| Window start (UTC) | `{stats['window_start_utc']}` |",
+        f"| Window end (UTC) | `{stats['window_end_utc']}` |",
+        f"| Session files scanned | **{stats['files_scanned']}** |",
+        f"| Distinct insights | **{stats['insights_distinct']}** |",
+        f"| Error log entries (sample) | **{stats['error_log_entries_loaded']}** |",
+        f"| Unresolved in error-log sample | **{stats['error_log_unresolved_in_sample']}** |",
+        "",
+        "### Insight mix",
+        "",
+    ]
+    by_cat = stats.get("insights_by_category") or {}
+    by_sev = stats.get("insights_by_severity") or {}
+    if isinstance(by_cat, dict) and by_cat:
+        lines.append("- **By category:** " + ", ".join(f"`{k}`×{v}" for k, v in sorted(by_cat.items(), key=lambda kv: -kv[1])))
+    else:
+        lines.append("- **By category:** _none_")
+    if isinstance(by_sev, dict) and by_sev:
+        lines.append("- **By severity:** " + ", ".join(f"`{k}`×{v}" for k, v in sorted(by_sev.items(), key=lambda kv: -kv[1])))
+    else:
+        lines.append("- **By severity:** _none_")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def build_recommendations_markdown(recs: Sequence[str]) -> str:
+    lines = ["## Actionable recommendations", ""]
+    for r in recs:
+        lines.append(f"- {r}")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def build_summary_markdown(
@@ -290,6 +552,55 @@ def build_summary_markdown(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def build_full_reflection_markdown(
+    run: ReflectionRun,
+    session_block: str,
+    patterns_block: str,
+    recs_block: str,
+    stats_block: str,
+) -> str:
+    parts = [
+        f"# Auto-reflection — run `{run.run_id}`",
+        "",
+        f"- **Started:** {run.started_at_utc}",
+        f"- **Finished:** {run.finished_at_utc}",
+        f"- **Files scanned:** {run.files_scanned}",
+        "",
+        session_block.rstrip(),
+        "",
+        patterns_block.rstrip(),
+        "",
+        recs_block.rstrip(),
+        "",
+        stats_block.rstrip(),
+        "",
+        "---",
+        "",
+        run.summary_markdown.rstrip(),
+        "",
+    ]
+    return "\n".join(parts).rstrip() + "\n"
+
+
+def reflection_day_path(root: Path, run_at: datetime) -> Path:
+    return root / LEARNINGS_DIR / REFLECTIONS_SUBDIR / f"{run_at.date().isoformat()}.md"
+
+
+def append_daily_reflection(root: Path, run_at: datetime, run_id: str, body: str) -> Path:
+    """Append this run under `.learnings/reflections/YYYY-MM-DD.md`."""
+
+    path = reflection_day_path(root, run_at)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    heading = f"\n## Run {run_id} — {run_at.strftime('%H:%M:%S')} UTC\n\n"
+    chunk = heading + body + "\n"
+    if path.exists():
+        path.write_text(path.read_text(encoding="utf-8").rstrip() + "\n" + chunk, encoding="utf-8")
+    else:
+        path.write_text(f"# Daily reflections — {run_at.date().isoformat()} (UTC)\n" + chunk, encoding="utf-8")
+    logger.info("Appended reflection markdown to %s", path)
+    return path
+
+
 def weekly_report_path(root: Path, dt: datetime) -> Path:
     iso = dt.isocalendar()
     week = f"{iso.year}-W{iso.week:02d}"
@@ -331,16 +642,42 @@ def write_insight_artifacts(root: Path, run: ReflectionRun) -> tuple[Path, Path]
     md_path.write_text("\n".join(md_lines), encoding="utf-8")
 
     json_path.write_text(json.dumps(asdict(run), indent=2) + "\n", encoding="utf-8")
+    logger.info("Wrote insight artifacts %s and %s", md_path, json_path)
     return md_path, json_path
 
 
-def write_latest_pointers(root: Path, md_path: Path, weekly_path: Path) -> None:
+def write_reflection_json(
+    root: Path,
+    run: ReflectionRun,
+    stats: dict[str, Any],
+    recommendations: Sequence[str],
+) -> Path:
+    out_dir = root / LEARNINGS_DIR / REFLECTIONS_SUBDIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"run_{run.run_id}.json"
+    payload = {
+        "run_id": run.run_id,
+        "started_at_utc": run.started_at_utc,
+        "finished_at_utc": run.finished_at_utc,
+        "stats": stats,
+        "recommendations": list(recommendations),
+        "session_files": run.session_files,
+        "insights": [asdict(i) for i in run.insights],
+        "summary_markdown": run.summary_markdown,
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    logger.info("Wrote structured reflection JSON to %s", path)
+    return path
+
+
+def write_latest_pointers(root: Path, md_path: Path, weekly_path: Path, day_path: Path) -> None:
     """Small files for automation consumers."""
 
     ptr = root / LEARNINGS_DIR / "latest.json"
     data = {
         "insights_md": md_path.relative_to(root).as_posix(),
         "weekly_summary_md": weekly_path.relative_to(root).as_posix(),
+        "reflections_day_md": day_path.relative_to(root).as_posix(),
         "generated_at_utc": utc_now().replace(microsecond=0).isoformat(),
     }
     ptr.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -434,7 +771,9 @@ def run_reflection(
         cutoff = started - timedelta(hours=since_hours)
 
     globs = collect_globs(extra_globs)
+    logger.info("Reflection globs: %s", globs)
     session_files = iter_session_files(root, globs, cutoff)
+    error_entries = load_error_log_entries(root)
 
     insights: list[Insight] = []
     for sf in session_files:
@@ -459,12 +798,23 @@ def run_reflection(
         summary_markdown=summary,
     )
 
+    session_block = build_session_analysis_markdown(root, session_files, cutoff, started)
+    patterns_block = build_pattern_detection_markdown(insights, error_entries)
+    recs = build_actionable_recommendations(insights, error_entries)
+    recs_block = build_recommendations_markdown(recs)
+    stats = build_stats_summary(cutoff, started, session_files, insights, error_entries)
+    stats_block = build_stats_summary_markdown(stats)
+    full_doc = build_full_reflection_markdown(run, session_block, patterns_block, recs_block, stats_block)
+
     if dry_run:
+        logger.info("Dry-run: skipping writes for run %s", run_id)
         return run
 
     md_path, _ = write_insight_artifacts(root, run)
+    day_path = append_daily_reflection(root, started, run_id, full_doc)
+    write_reflection_json(root, run, stats, recs)
     weekly_path = update_weekly_summary(root, started, summary)
-    write_latest_pointers(root, md_path, weekly_path)
+    write_latest_pointers(root, md_path, weekly_path, day_path)
 
     state["last_run_utc"] = finished.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     state["last_run_id"] = run_id
@@ -481,10 +831,12 @@ def run_reflection(
                 "run_id": run.run_id,
                 "files_scanned": run.files_scanned,
                 "insight_count": len(run.insights),
+                "stats": stats,
+                "recommendations": recs,
             },
         )
     except Exception:
-        pass
+        logger.debug("notify_kara_from_iskra skipped (import or runtime)", exc_info=True)
 
     return run
 
@@ -559,11 +911,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the markdown summary to stdout.",
     )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable debug logging on stderr.",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(levelname)s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
 
     root = args.root or Path(os.environ.get("AUTO_REFLECTION_ROOT", "") or ".").resolve()
     if args.dry_run:
