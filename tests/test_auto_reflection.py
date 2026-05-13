@@ -54,11 +54,11 @@ class AutoReflectionTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            insights = list(auto_reflection.read_and_extract(log_path, root))
+            insights = list(auto_reflection.read_and_extract(log_path, "logs/agent.json"))
         texts = [i.text.lower() for i in insights]
         self.assertTrue(any("traceback" in t for t in texts))
 
-    def test_run_reflection_writes_learnings_and_skips_writes_on_dry_run(self):
+    def test_run_reflection_writes_daily_and_skips_writes_on_dry_run(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             (root / "logs").mkdir(parents=True)
@@ -75,7 +75,7 @@ class AutoReflectionTests(unittest.TestCase):
                 dry_run=True,
             )
             self.assertFalse((root / ".learnings").exists())
-            self.assertGreaterEqual(len(run_dry.insights), 1)
+            self.assertGreaterEqual(len(run_dry.went_wrong), 1)
 
             run_full = auto_reflection.run_reflection(
                 root,
@@ -86,12 +86,34 @@ class AutoReflectionTests(unittest.TestCase):
             self.assertGreater(run_full.files_scanned, 0)
             learnings = root / ".learnings"
             self.assertTrue(learnings.exists())
-            self.assertTrue((learnings / "insights").exists())
-            self.assertTrue((learnings / "summaries").exists())
-            md_files = list((learnings / "insights").glob("run_*.md"))
+            daily_dir = learnings / "daily"
+            self.assertTrue(daily_dir.exists())
+            md_files = list(daily_dir.glob("*.md"))
             self.assertEqual(len(md_files), 1)
             body = md_files[0].read_text(encoding="utf-8")
             self.assertIn("Lesson learned:", body)
+            self.assertIn("What went well", body)
+            self.assertIn("What went wrong", body)
+
+    def test_weekly_distill_appends_monthly(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            daily_dir = root / ".learnings" / "daily"
+            daily_dir.mkdir(parents=True)
+            day = auto_reflection.utc_now().replace(hour=12, minute=0, second=0, microsecond=0)
+            p = auto_reflection.daily_reflection_path(root, day)
+            p.write_text(
+                "## What went well\n\n- Task completed successfully.\n\n"
+                "## What went wrong\n\n- Timeout connecting to API.\n\n"
+                "## Actionable insights\n\n- Add retries with backoff.\n",
+                encoding="utf-8",
+            )
+            mp = auto_reflection.run_weekly_distill(root, end=day, dry_run=False)
+            self.assertIsNotNone(mp)
+            assert mp is not None
+            text = mp.read_text(encoding="utf-8")
+            self.assertIn("Monthly insights", text)
+            self.assertIn("Timeout connecting", text)
 
     def test_post_webhook_uses_json_post(self):
         captured: dict[str, object] = {}
@@ -145,7 +167,22 @@ class AutoReflectionMainTests(unittest.TestCase):
             self.assertEqual(rc, 0)
             err = stderr.getvalue()
             self.assertIn("No REFLECTION_WEBHOOK_URL", err)
-            self.assertIn("Reflection summary", stdout.getvalue())
+            self.assertIn("Daily reflection", stdout.getvalue())
+
+    def test_main_view_lists_recent(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            daily = root / ".learnings" / "daily"
+            daily.mkdir(parents=True)
+            (daily / "2026-05-10.md").write_text("# x\n", encoding="utf-8")
+
+            stderr = io.StringIO()
+            stdout = io.StringIO()
+            with mock.patch.object(auto_reflection.sys, "stderr", stderr):
+                with mock.patch.object(auto_reflection.sys, "stdout", stdout):
+                    rc = auto_reflection.main(["--root", str(root), "--view"])
+            self.assertEqual(rc, 0)
+            self.assertIn("2026-05-10.md", stdout.getvalue())
 
 
 if __name__ == "__main__":
