@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract decisions, learnings, and tool-usage highlights from OpenClaw session transcripts."""
+"""Extract key decisions, lessons, reusable patterns, and tool usage from chat transcripts for memory pipelines."""
 
 from __future__ import annotations
 
@@ -40,6 +40,21 @@ LEARNING_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"(?:核心价值|关键点|经验教训|结论是|需要注意的是)\s*[：:]\s*(.+)",
     )
 )
+
+# Reusable workflows, conventions, and “how we do this here” cues
+PATTERN_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"^\s*(?:pattern|playbook|workflow|recipe|checklist)\s*[:\-—]\s*(.+)",
+        r"^\s*(?:convention|standard|rule\s+of\s+thumb|guideline)\s*[:\-—]\s*(.+)",
+        r"^\s*(?:reusable|repeatable)\s+(?:approach|pattern|steps?)\s*[:\-—]?\s*(.+)",
+        r"(?:when\s+you|when\s+we|if\s+you)\s+.{5,120}?\s+(?:use|prefer|run|call|apply)\s+(.{10,})",
+        r"(?:always|never)\s+(?:do|use|run|prefer|avoid|call)\s+(.+)",
+    )
+)
+
+SCHEMA_VERSION = 1
+ARTIFACT_TYPE = "conversation_knowledge"
 
 # Inline tool/function references in transcripts
 TOOL_REGEXES: tuple[re.Pattern[str], ...] = (
@@ -409,6 +424,10 @@ def normalize_ws(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def _dedupe_preserve_order(items: list[str], *, max_items: int) -> list[str]:
+    return list(dict.fromkeys([x for x in items if x]))[:max_items]
+
+
 def extract_tool_signals(text: str) -> Counter[str]:
     counts: Counter[str] = Counter()
     for rg in TOOL_REGEXES:
@@ -432,6 +451,7 @@ class ConversationDigest:
     segments: list[tuple[int, str | None, str]]
     decisions: list[str]
     learnings: list[str]
+    patterns: list[str]
     tool_structured: Counter[str] = field(default_factory=Counter)
     tool_textual: Counter[str] = field(default_factory=Counter)
 
@@ -444,6 +464,7 @@ class ConversationDigest:
 def analyze_segments(segments: list[tuple[int, str | None, str]], source_display: str) -> ConversationDigest:
     decisions_acc: list[str] = []
     learnings_acc: list[str] = []
+    patterns_acc: list[str] = []
     structured_tools: Counter[str] = Counter()
     blobs_for_text_tools: list[str] = []
 
@@ -462,23 +483,25 @@ def analyze_segments(segments: list[tuple[int, str | None, str]], source_display
         if rl in {"", "assistant", "agent"} or rl is None:
             decisions_acc.extend(match_patterns(text, DECISION_LINE_PATTERNS))
             learnings_acc.extend(match_patterns(text, LEARNING_LINE_PATTERNS))
+            patterns_acc.extend(match_patterns(text, PATTERN_LINE_PATTERNS))
         elif rl == "user":
             # users sometimes phrase decisions explicitly
             decisions_acc.extend(match_patterns(text, DECISION_LINE_PATTERNS))
+            patterns_acc.extend(match_patterns(text, PATTERN_LINE_PATTERNS))
 
         blobs_for_text_tools.append(text)
 
     combined = "\n\n".join(blobs_for_text_tools)
     textual_tools = extract_tool_signals(combined)
 
-    uniq = lambda xs: list(dict.fromkeys([x for x in xs if x]))  # noqa: E731
-
+    cap = 120
     return ConversationDigest(
         source=source_display,
         generated_at_utc=datetime.now(timezone.utc).isoformat(),
         segments=segments,
-        decisions=uniq(decisions_acc)[:120],
-        learnings=uniq(learnings_acc)[:120],
+        decisions=_dedupe_preserve_order(decisions_acc, max_items=cap),
+        learnings=_dedupe_preserve_order(learnings_acc, max_items=cap),
+        patterns=_dedupe_preserve_order(patterns_acc, max_items=cap),
         tool_structured=structured_tools,
         tool_textual=textual_tools,
     )
@@ -486,13 +509,13 @@ def analyze_segments(segments: list[tuple[int, str | None, str]], source_display
 
 def render_markdown(d: ConversationDigest) -> str:
     lines = [
-        f"# Conversation 精华 extract",
+        "# Conversation knowledge extract",
         "",
         f"- **Source**: `{d.source}`",
         f"- **Generated (UTC)**: {d.generated_at_utc}",
         f"- **Segments indexed**: {len(d.segments)}",
         "",
-        "## Decisions",
+        "## Key decisions",
     ]
 
     if d.decisions:
@@ -501,12 +524,19 @@ def render_markdown(d: ConversationDigest) -> str:
     else:
         lines.append("- *(no explicit decision lines detected)*")
 
-    lines.extend(["", "## Learnings & takeaways"])
+    lines.extend(["", "## Lessons learned & takeaways"])
     if d.learnings:
         for item in d.learnings:
             lines.append(f"- {item}")
     else:
         lines.append("- *(no explicit learning cues detected)*")
+
+    lines.extend(["", "## Reusable patterns"])
+    if d.patterns:
+        for item in d.patterns:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- *(no workflow or convention cues detected)*")
 
     lines.extend(["", "## Tool usage"])
 
@@ -530,21 +560,65 @@ def render_markdown(d: ConversationDigest) -> str:
 
 
 def digest_to_dict(d: ConversationDigest) -> dict[str, Any]:
+    """JSON envelope for downstream memory pipelines (skills, nightly merge, etc.)."""
+
+    ranked = d.all_tools().most_common()
     return {
+        "artifact_type": ARTIFACT_TYPE,
+        "schema_version": SCHEMA_VERSION,
         "source": d.source,
         "generated_at_utc": d.generated_at_utc,
         "counts": {
             "segments": len(d.segments),
-            "decisions": len(d.decisions),
-            "learnings": len(d.learnings),
+            "key_decisions": len(d.decisions),
+            "lessons_learned": len(d.learnings),
+            "reusable_patterns": len(d.patterns),
             "tool_names_distinct": len(d.all_tools()),
         },
-        "decisions": d.decisions,
-        "learnings": d.learnings,
-        "tools_ranked": d.all_tools().most_common(),
+        "key_decisions": d.decisions,
+        "lessons_learned": d.learnings,
+        "reusable_patterns": d.patterns,
+        "tools_ranked": [{"name": n, "count": c} for n, c in ranked],
         "tools_structured": dict(d.tool_structured),
         "tools_from_text_heuristic": dict(d.tool_textual),
+        "memory_integration": {
+            "suggested_tags": _suggested_tags(d),
+            "summary_one_liners": _summary_one_liners(d),
+        },
+        # Backward-compatible field names (older consumers)
+        "decisions": d.decisions,
+        "learnings": d.learnings,
     }
+
+
+def _suggested_tags(d: ConversationDigest) -> list[str]:
+    tags: list[str] = []
+    if d.decisions:
+        tags.append("decisions")
+    if d.learnings:
+        tags.append("lessons")
+    if d.patterns:
+        tags.append("patterns")
+    if d.all_tools():
+        tags.append("tools")
+    return tags
+
+
+def _summary_one_liners(d: ConversationDigest) -> list[str]:
+    """Short lines suitable for appending to MEMORY.md or daily notes."""
+
+    out: list[str] = []
+    if d.decisions:
+        out.append(f"Decisions captured: {len(d.decisions)}")
+    if d.learnings:
+        out.append(f"Learnings captured: {len(d.learnings)}")
+    if d.patterns:
+        out.append(f"Reusable patterns: {len(d.patterns)}")
+    top = d.all_tools().most_common(3)
+    if top:
+        names = ", ".join(f"{n} ({c})" for n, c in top)
+        out.append(f"Top tools: {names}")
+    return out
 
 
 def write_digest(
@@ -586,7 +660,9 @@ def run_extraction(session_path: Path, memory_dir: Path, workspace_root: Path) -
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Extract OpenClaw conversation 精华 into memory/")
+    p = argparse.ArgumentParser(
+        description="Parse session logs (JSON or text), extract knowledge, write markdown + JSON into memory/."
+    )
     p.add_argument(
         "session_log",
         type=Path,
