@@ -1,0 +1,42 @@
+metadata:
+  description: >-
+    Template for drafting a feature request with persona, problem, solution sketch,
+    and measurable acceptance criteria.
+  author: openclaw-cursor
+  version: "1.0.0"
+  tags:
+    - product
+    - planning
+    - engineering
+
+template: |
+  Draft a **feature request** document from the notes below. Keep it concise but complete enough for triage.
+
+  ## Product / area
+  {product_name}
+
+  ## Primary persona / user
+  {persona}
+
+  ## Problem statement
+  {problem_statement}
+
+  ## Proposed solution (high level)
+  {proposed_solution}
+
+  ## Acceptance criteria (raw notes)
+  {acceptance_criteria}
+
+  ## Constraints (time, tech, compliance, performance)
+  {constraints}
+
+  ## Output sections
+  1. **Problem** — why this matters now.
+  2. **Goals** — bullet list of user-visible outcomes.
+  3. **Non-goals** — what we are explicitly not doing in this iteration.
+  4. **Proposed experience** — short narrative or bullet flow.
+  5. **Acceptance criteria** — testable bullets (Given / When / Then where helpful).
+  6. **Risks & open questions** — dependencies, unknowns, metrics to watch.
+  7. **Rollout** — feature flag, migration, or communication needs if any.
+
+  Use neutral, professional tone. If inputs conflict, note the conflict and suggest a default.
