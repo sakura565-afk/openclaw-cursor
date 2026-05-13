@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Capture and learn from recurring OpenClaw session errors."""
+"""Capture and learn from recurring OpenClaw session errors.
+
+Clusters similar failures via normalized signatures, infers triage buckets, and
+exposes ``patterns``, ``suggest``, and ``open`` commands for faster remediation.
+"""
 
 from __future__ import annotations
 
@@ -7,8 +11,10 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -17,6 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LOG_PATH = ROOT / ".learnings" / "error_log.json"
 SCHEMA_VERSION = 1
+INSIGHTS_GLOB = "run_*.md"
 ANSI = {
     "reset": "\033[0m",
     "bold": "\033[1m",
@@ -61,6 +68,176 @@ def category_color(category: str) -> str:
         return "red"
     digest = hashlib.sha1(normalized.encode("utf-8")).digest()[0]
     return FALLBACK_CATEGORY_COLORS[digest % len(FALLBACK_CATEGORY_COLORS)]
+
+
+# Order matters: first matching bucket wins.
+_BUCKET_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "network",
+        (
+            "timeout",
+            "timed out",
+            "connection refused",
+            "econnrefused",
+            "enotfound",
+            "dns",
+            "ssl",
+            "tls",
+            "certificate",
+            "socket",
+            "unreachable",
+            "network",
+        ),
+    ),
+    (
+        "authentication",
+        (
+            "401",
+            "403",
+            "unauthorized",
+            "forbidden",
+            "invalid token",
+            "api key",
+            "credential",
+            "oauth",
+            "jwt",
+            "permission denied",
+        ),
+    ),
+    (
+        "parsing",
+        (
+            "json",
+            "yaml",
+            "parse",
+            "parser",
+            "syntax error",
+            "unexpected token",
+            "invalid format",
+            "malformed",
+            "unterminated",
+        ),
+    ),
+    (
+        "tooling",
+        (
+            "tool call",
+            "tool_use",
+            "mcp",
+            "function call",
+            "plugin",
+            "subprocess",
+            "command failed",
+            "exit code",
+        ),
+    ),
+    (
+        "resource_limits",
+        (
+            "memory",
+            "oom",
+            "disk",
+            "space",
+            "quota",
+            "rate limit",
+            "429",
+            "too many requests",
+        ),
+    ),
+    (
+        "configuration",
+        (
+            "config",
+            "environment variable",
+            "missing setting",
+            "invalid option",
+            "path not found",
+            "file not found",
+        ),
+    ),
+)
+
+_UUID_RE = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.IGNORECASE
+)
+_HEX_RE = re.compile(r"\b0x[0-9a-f]{4,}\b", re.IGNORECASE)
+_PATH_RE = re.compile(r"(?:/[\w.+-]+){2,}")
+_LINE_COL_RE = re.compile(r"\b(line|column)\s+\d+\b", re.IGNORECASE)
+_IP_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+_NUM_TOKEN_RE = re.compile(r"\b\d+\b")
+
+# Lines in reflection insight markdown that look like hard failures.
+_INSIGHT_FAILURE_RE = re.compile(
+    r"(?i)(\berror\b|\bexception\b|\btraceback\b|\bfailed\b|\bfailure\b|\btimed?\s*out\b)"
+)
+
+
+def error_signature(text: str) -> str:
+    """Normalize volatile details so recurring failures cluster together."""
+
+    raw = text.strip()
+    if not raw:
+        return ""
+    collapsed = " ".join(raw.lower().split())
+    collapsed = _UUID_RE.sub("<uuid>", collapsed)
+    collapsed = _HEX_RE.sub("<hex>", collapsed)
+    collapsed = _PATH_RE.sub("<path>", collapsed)
+    collapsed = _IP_RE.sub("<ip>", collapsed)
+    collapsed = _LINE_COL_RE.sub(r"\1 <n>", collapsed)
+    collapsed = _NUM_TOKEN_RE.sub("<n>", collapsed)
+    return collapsed
+
+
+def infer_bucket(category: str, error: str, lesson: str) -> str:
+    """Map free-form text to a coarse bucket for triage and stats."""
+
+    blob = normalize_text(f"{category} {error} {lesson}")
+    for bucket, tokens in _BUCKET_RULES:
+        if any(token in blob for token in tokens):
+            return bucket
+    cat = normalize_text(category).replace(" ", "_")
+    if cat in {"runtime_error", "warning", "parser_error", "tool_error", "config_error"}:
+        return cat
+    return "general"
+
+
+def entry_signature(entry: dict[str, object]) -> str:
+    return error_signature(str(entry["error"]))
+
+
+def count_signatures(entries: Iterable[dict[str, object]]) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    for entry in entries:
+        sig = entry_signature(entry)
+        if sig:
+            counts[sig] += 1
+    return counts
+
+
+def iter_insight_error_lines(learnings_root: Path, *, max_files: int = 40, max_lines_per_file: int = 80) -> list[str]:
+    """Pull likely error lines from auto_reflection insight markdown (if present)."""
+
+    insights = learnings_root / "insights"
+    if not insights.is_dir():
+        return []
+
+    paths = sorted(insights.glob(INSIGHTS_GLOB), key=lambda p: p.stat().st_mtime, reverse=True)[:max_files]
+    snippets: list[str] = []
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        kept = 0
+        for line in text.splitlines():
+            stripped = line.strip()
+            if len(stripped) < 12 or not _INSIGHT_FAILURE_RE.search(stripped):
+                continue
+            snippets.append(stripped)
+            kept += 1
+            if kept >= max_lines_per_file:
+                break
+    return snippets
 
 
 def canonical_payload(category: str, error: str, lesson: str, resolved: bool) -> dict[str, object]:
@@ -212,27 +389,82 @@ def add_entry(
     return new_entry, True
 
 
-def format_entry(entry: dict[str, object]) -> str:
+def related_same_signature(
+    entries: Iterable[dict[str, object]],
+    target: dict[str, object],
+) -> list[dict[str, object]]:
+    """Return other entries whose normalized error signature matches the target."""
+
+    sig = entry_signature(target)
+    if not sig:
+        return []
+    out: list[dict[str, object]] = []
+    tid = str(target.get("id", ""))
+    for entry in entries:
+        if str(entry.get("id")) == tid:
+            continue
+        if entry_signature(entry) == sig:
+            out.append(entry)
+    return out
+
+
+def format_compact_neighbor(entry: dict[str, object]) -> str:
+    """One-line summary for quick scanning when a pattern repeats."""
+
+    err = str(entry["error"]).replace("\n", " ")
+    if len(err) > 100:
+        err = err[:97] + "..."
+    lesson = str(entry["lesson"])
+    if len(lesson) > 120:
+        lesson = lesson[:117] + "..."
+    st = "resolved" if bool(entry["resolved"]) else "open"
+    return (
+        f"  {colorize(f'[{st}]', 'green' if st == 'resolved' else 'yellow')} "
+        f"{colorize(str(entry['id']), 'cyan')}: "
+        f"{colorize(err, 'red')} → {colorize(lesson, 'green')}"
+    )
+
+
+def format_entry(
+    entry: dict[str, object],
+    *,
+    sig_counts: Counter[str] | None = None,
+    action_first: bool = False,
+) -> str:
     """Render a single entry for console output."""
 
     category = str(entry["category"])
     resolved = bool(entry["resolved"])
     status_text = "resolved" if resolved else "open"
     status_color = "green" if resolved else "yellow"
-    lines = [
-        (
-            f"{colorize(category, category_color(category))} "
-            f"{colorize(f'[{status_text}]', status_color)} "
-            f"{colorize(str(entry['timestamp']), 'cyan')}"
-        ),
-        f"  {colorize('ID:', 'yellow')} {entry['id']}",
-        f"  {colorize('Error:', 'red')} {entry['error']}",
-        f"  {colorize('Lesson:', 'green')} {entry['lesson']}",
-    ]
-    return "\n".join(lines)
+    bucket = infer_bucket(category, str(entry["error"]), str(entry["lesson"]))
+    sig = entry_signature(entry)
+    recur = ""
+    if sig_counts and sig and sig_counts[sig] > 1:
+        recur = colorize(f" [pattern ×{sig_counts[sig]}]", "yellow")
+
+    header = (
+        f"{colorize(category, category_color(category))} "
+        f"{colorize(f'[{status_text}]', status_color)} "
+        f"{colorize(f'⟨{bucket}⟩', 'cyan')}{recur} "
+        f"{colorize(str(entry['timestamp']), 'cyan')}"
+    )
+    meta = f"  {colorize('ID:', 'yellow')} {entry['id']}"
+    err_line = f"  {colorize('Error:', 'red')} {entry['error']}"
+    action = f"  {colorize('Action:', 'green')} {entry['lesson']}"
+
+    if action_first:
+        return "\n".join((header, action, err_line, meta))
+    return "\n".join((header, meta, err_line, action))
 
 
-def print_entries(entries: list[dict[str, object]], *, heading: str) -> None:
+def print_entries(
+    entries: list[dict[str, object]],
+    *,
+    heading: str,
+    sig_counts: Counter[str] | None = None,
+    action_first: bool = False,
+) -> None:
     """Print a collection of entries in a human-readable layout."""
 
     print(colorize(heading, "bold"))
@@ -241,14 +473,15 @@ def print_entries(entries: list[dict[str, object]], *, heading: str) -> None:
         print(colorize("No entries found.", "yellow"))
         return
 
+    counts = sig_counts if sig_counts is not None else count_signatures(entries)
     for index, entry in enumerate(entries):
         if index:
             print()
-        print(format_entry(entry))
+        print(format_entry(entry, sig_counts=counts, action_first=action_first))
 
 
 def print_stats(entries: list[dict[str, object]]) -> None:
-    """Print category-level frequency stats."""
+    """Print category-level frequency stats and inferred buckets."""
 
     print(colorize("Error Learning Stats", "bold"))
     print(colorize("====================", "cyan"))
@@ -262,6 +495,20 @@ def print_stats(entries: list[dict[str, object]]) -> None:
         share = (count / total) * 100
         print(
             f"- {colorize(category, category_color(category))}: "
+            f"{colorize(str(count), 'red')} "
+            f"({share:.1f}%)"
+        )
+
+    buckets = Counter(
+        infer_bucket(str(e["category"]), str(e["error"]), str(e["lesson"])) for e in entries
+    )
+    print()
+    print(colorize("By triage bucket (inferred)", "bold"))
+    print(colorize("---------------------------", "cyan"))
+    for bucket, count in sorted(buckets.items(), key=lambda item: (-item[1], item[0].lower())):
+        share = (count / total) * 100
+        print(
+            f"- {colorize(bucket, 'cyan')}: "
             f"{colorize(str(count), 'red')} "
             f"({share:.1f}%)"
         )
@@ -285,6 +532,23 @@ def search_score(query: str, entry: dict[str, object]) -> float:
     return substring_bonus + overlap + (ratio * 0.5)
 
 
+def suggest_score(query: str, entry: dict[str, object], counts: Counter[str]) -> float:
+    """Rank entries for remediation: text match plus recurring-signature signal."""
+
+    base = search_score(query, entry)
+    qsig = error_signature(query)
+    esig = entry_signature(entry)
+    boost = 0.0
+    if qsig and esig:
+        if qsig == esig:
+            boost += 3.0 + min(counts[esig], 12) * 0.2
+        else:
+            boost += SequenceMatcher(None, qsig, esig).ratio() * 1.25
+    if bool(entry["resolved"]):
+        boost += 0.2
+    return base + boost
+
+
 def search_entries(entries: list[dict[str, object]], query: str, limit: int = 10) -> list[dict[str, object]]:
     """Return the most relevant matching entries for the given query."""
 
@@ -295,6 +559,87 @@ def search_entries(entries: list[dict[str, object]], query: str, limit: int = 10
             ranked.append((score, entry))
     ranked.sort(key=lambda item: (-item[0], str(item[1]["timestamp"])), reverse=False)
     return [entry for _, entry in ranked[:limit]]
+
+
+def suggest_entries(entries: list[dict[str, object]], query: str, limit: int = 8) -> list[dict[str, object]]:
+    """Surface the fastest wins: strong text match or the same recurring failure shape."""
+
+    counts = count_signatures(entries)
+    ranked: list[tuple[float, dict[str, object]]] = []
+    for entry in entries:
+        score = suggest_score(query, entry, counts)
+        if score >= 0.55:
+            ranked.append((score, entry))
+    ranked.sort(key=lambda item: (-item[0], str(item[1]["timestamp"])), reverse=False)
+    return [entry for _, entry in ranked[: max(limit, 1)]]
+
+
+def recurring_pattern_rows(
+    entries: list[dict[str, object]],
+    *,
+    min_count: int = 2,
+    limit: int = 25,
+) -> list[tuple[int, str, dict[str, object]]]:
+    """Clusters with at least ``min_count`` occurrences, newest representative first."""
+
+    counts = count_signatures(entries)
+    by_sig: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for entry in entries:
+        sig = entry_signature(entry)
+        if sig:
+            by_sig[sig].append(entry)
+
+    rows: list[tuple[int, str, dict[str, object]]] = []
+    for sig, count in counts.items():
+        if count < min_count or sig not in by_sig:
+            continue
+        group = by_sig[sig]
+        rep = max(group, key=lambda item: str(item["timestamp"]))
+        rows.append((count, sig, rep))
+
+    rows.sort(key=lambda item: (-item[0], -len(item[1]), str(item[2]["timestamp"])))
+    return rows[:limit]
+
+
+def print_recurring_patterns(
+    entries: list[dict[str, object]],
+    *,
+    min_count: int = 2,
+    limit: int = 25,
+    include_insights: bool = False,
+    learnings_dir: Path | None = None,
+) -> None:
+    """Print recurring normalized signatures with a concrete action line."""
+
+    print(colorize("Recurring error patterns", "bold"))
+    print(colorize("======================", "cyan"))
+    rows = recurring_pattern_rows(entries, min_count=min_count, limit=limit)
+    if not rows:
+        print(colorize("No repeated signatures yet (need ≥2 similar errors).", "yellow"))
+    else:
+        for idx, (count, sig, rep) in enumerate(rows):
+            if idx:
+                print()
+            bucket = infer_bucket(str(rep["category"]), str(rep["error"]), str(rep["lesson"]))
+            preview = sig if len(sig) <= 140 else sig[:137] + "..."
+            print(
+                f"{colorize(f'×{count}', 'red')} {colorize(f'⟨{bucket}⟩', 'cyan')} "
+                f"{colorize(str(rep['category']), category_color(str(rep['category'])))}"
+            )
+            print(f"  {colorize('Shape:', 'yellow')} {preview}")
+            print(f"  {colorize('Action:', 'green')} {rep['lesson']}")
+            print(f"  {colorize('Latest ID:', 'yellow')} {rep['id']}  {colorize(str(rep['timestamp']), 'cyan')}")
+
+    if include_insights and learnings_dir is not None:
+        snippets = iter_insight_error_lines(learnings_dir)
+        print()
+        print(colorize("Recent lines from .learnings/insights (unlogged signals)", "bold"))
+        print(colorize("-------------------------------------------------------", "cyan"))
+        if not snippets:
+            print(colorize("No insight files matched or no failure-like lines.", "yellow"))
+        else:
+            for line in snippets[:30]:
+                print(f"  {colorize('·', 'yellow')} {line[:240]}{'…' if len(line) > 240 else ''}")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -330,7 +675,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
 
     subparsers.add_parser("list", help="List all learned errors.")
-    subparsers.add_parser("stats", help="Show error frequency by category.")
+    subparsers.add_parser("open", help="List unresolved (open) learnings only.")
+    subparsers.add_parser("stats", help="Show error frequency by category and inferred triage bucket.")
 
     search_parser = subparsers.add_parser("search", help="Search for relevant past errors.")
     search_parser.add_argument("query", help="Search query.")
@@ -339,6 +685,40 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=10,
         help="Maximum number of matching entries to print.",
+    )
+
+    suggest_parser = subparsers.add_parser(
+        "suggest",
+        help="Recommend fixes for a new failure (boosts recurring signatures).",
+    )
+    suggest_parser.add_argument("error_text", help="Paste error message or short failure description.")
+    suggest_parser.add_argument(
+        "--limit",
+        type=int,
+        default=8,
+        help="Maximum number of suggestions to print.",
+    )
+
+    patterns_parser = subparsers.add_parser(
+        "patterns",
+        help="Show recurring normalized error shapes with the best-known action.",
+    )
+    patterns_parser.add_argument(
+        "--min-count",
+        type=int,
+        default=2,
+        help="Minimum occurrences to include a pattern.",
+    )
+    patterns_parser.add_argument(
+        "--limit",
+        type=int,
+        default=25,
+        help="Maximum number of pattern rows to print.",
+    )
+    patterns_parser.add_argument(
+        "--include-insights",
+        action="store_true",
+        help="Append failure-like lines from .learnings/insights if they exist.",
     )
     return parser.parse_args(argv)
 
@@ -373,13 +753,33 @@ def main(argv: list[str] | None = None) -> int:
             print(colorize("Saved error learning entry.", "green"))
         else:
             print(colorize("Duplicate entry detected; existing learning kept.", "yellow"))
-        print(format_entry(entry))
+
+        refreshed = [validate_entry(item) for item in load_store(args.log_path)["entries"]]
+        counts_all = count_signatures(refreshed)
+        print(format_entry(entry, sig_counts=counts_all))
+        neighbors = related_same_signature(refreshed, entry)
+        if neighbors:
+            print()
+            print(
+                colorize(
+                    f"Earlier learnings with the same error shape ({len(neighbors)}); try these first:",
+                    "yellow",
+                )
+            )
+            for prev in neighbors[:8]:
+                print(format_compact_neighbor(prev))
         return 0
 
     validated_entries = [validate_entry(entry) for entry in entries]
+    all_counts = count_signatures(validated_entries)
 
     if args.command == "list":
-        print_entries(validated_entries, heading="OpenClaw Error Learnings")
+        print_entries(validated_entries, heading="OpenClaw Error Learnings", sig_counts=all_counts)
+        return 0
+
+    if args.command == "open":
+        open_entries = [item for item in validated_entries if not bool(item["resolved"])]
+        print_entries(open_entries, heading="Open (Unresolved) Learnings", sig_counts=all_counts)
         return 0
 
     if args.command == "stats":
@@ -388,7 +788,31 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "search":
         matches = search_entries(validated_entries, args.query, limit=max(args.limit, 1))
-        print_entries(matches, heading=f"Search Results: {args.query}")
+        print_entries(matches, heading=f"Search Results: {args.query}", sig_counts=all_counts)
+        return 0
+
+    if args.command == "suggest":
+        matches = suggest_entries(
+            validated_entries,
+            args.error_text,
+            limit=max(args.limit, 1),
+        )
+        print_entries(
+            matches,
+            heading=f"Suggested fixes for: {args.error_text[:120]}{'…' if len(args.error_text) > 120 else ''}",
+            sig_counts=all_counts,
+            action_first=True,
+        )
+        return 0
+
+    if args.command == "patterns":
+        print_recurring_patterns(
+            validated_entries,
+            min_count=max(1, args.min_count),
+            limit=max(args.limit, 1),
+            include_insights=bool(args.include_insights),
+            learnings_dir=args.log_path.parent,
+        )
         return 0
 
     print(colorize(f"Unsupported command: {args.command}", "red"), file=sys.stderr)
