@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Scan OpenClaw workspace and repo for scripts, skills, and tools; maintain ``data/tool_registry.json``."""
+
 from __future__ import annotations
 
 import argparse
@@ -6,351 +8,683 @@ import ast
 import json
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Iterable, Iterator, Sequence
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-KEYWORD_CAPABILITIES: tuple[tuple[str, str], ...] = (
-    ("monitor", "Monitoring and observability"),
-    ("analytics", "Analytics and reporting"),
-    ("cleanup", "Cleanup and maintenance"),
-    ("sync", "Data synchronization"),
-    ("queue", "Queue orchestration"),
-    ("benchmark", "Performance benchmarking"),
-    ("model", "Model lifecycle management"),
-    ("telegram", "Messaging and notifications"),
-    ("media", "Media processing"),
-    ("context", "Context shaping and prompt preparation"),
-    ("dream", "Memory and ideation workflows"),
-    ("orchestration", "Task orchestration"),
+from src.coordination.iskra_kara_shared_memory import resolve_openclaw_workspace  # noqa: E402
+DEFAULT_REGISTRY_PATH = REPO_ROOT / "data" / "tool_registry.json"
+
+# (substrings to match in name + description + path), tag
+TAG_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("image", "photo", "thumbnail", "jpeg", "png", "gif", "webp", "exif", "comfy", "faceswap"), "image"),
+    (("audio", "sound", "wav", "mp3", "voice", "speech"), "audio"),
+    (("video", "ffmpeg", "mp4", "thumbnail"), "video"),
+    (("telegram", "slack", "notify", "sender", "message"), "messaging"),
+    (("ollama", "model", "embedding", "llm", "inference"), "model"),
+    (("sqlite", "sql", "parse", "ast", "yaml", "json", "code", "script"), "code"),
+    (("queue", "cron", "batch", "pipeline", "nightly", "auto_", "automation", "sync", "bridge"), "automation"),
+    (("memory", "dream", "obsidian", "note", "wiki"), "memory"),
+    (("monitor", "health", "metric", "benchmark"), "monitoring"),
+    (("dashboard", "html", "template"), "ui"),
 )
 
-HIGH_RISK_MARKERS = {"subprocess", "os", "shutil", "requests", "socket"}
-IO_MARKERS = {"pathlib", "open", "json", "csv", "sqlite3"}
-NETWORK_MARKERS = {"requests", "urllib", "http", "socket", "telegram"}
+SKIP_DIR_NAMES = frozenset(
+    {
+        ".git",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "node_modules",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".tox",
+        "dist",
+        "build",
+    }
+)
 
 
-@dataclass
-class ToolProfile:
+@dataclass(frozen=True)
+class RegistryEntry:
     name: str
-    path: Path
     description: str
-    imports: set[str] = field(default_factory=set)
-    functions: list[str] = field(default_factory=list)
-    commands: list[str] = field(default_factory=list)
-    capabilities: list[str] = field(default_factory=list)
-    risk_level: str = "low"
-    io_profile: list[str] = field(default_factory=list)
-    dependencies: list[str] = field(default_factory=list)
-    examples: list[str] = field(default_factory=list)
+    path: str
+    tags: tuple[str, ...]
+    last_modified: str
+    kind: str
 
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "name": self.name,
-            "path": str(self.path),
-            "description": self.description,
-            "imports": sorted(self.imports),
-            "functions": self.functions,
-            "commands": self.commands,
-            "capabilities": self.capabilities,
-            "risk_level": self.risk_level,
-            "io_profile": self.io_profile,
-            "dependencies": self.dependencies,
-            "examples": self.examples,
-        }
+    def to_json_dict(self) -> dict[str, Any]:
+        d = asdict(self)
+        d["tags"] = list(self.tags)
+        return d
 
 
-def discover_script_paths(root: Path) -> list[Path]:
-    scripts_dir = root / "scripts"
-    if not scripts_dir.exists():
-        return []
-    return sorted(path for path in scripts_dir.glob("*.py") if path.name != "__init__.py")
+def _utc_iso_from_mtime(mtime: float) -> str:
+    return datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
 
 
-def _literal_string(node: ast.AST) -> str | None:
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return node.value
-    return None
+def _should_skip_dir(path: Path) -> bool:
+    return any(part in SKIP_DIR_NAMES for part in path.parts)
 
 
-def extract_cli_commands(tree: ast.AST) -> list[str]:
-    commands: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
+def _infer_tags(name: str, description: str, rel_hint: str, extra: Sequence[str] = ()) -> list[str]:
+    corpus = f"{name} {description} {rel_hint}".lower()
+    for fragment in extra:
+        corpus += f" {str(fragment).lower()}"
+    tags: list[str] = []
+    for keywords, tag in TAG_RULES:
+        if any(k in corpus for k in keywords) and tag not in tags:
+            tags.append(tag)
+    if not tags:
+        tags.append("general")
+    return sorted(set(tags))
+
+
+def _extract_py_description(path: Path) -> str:
+    try:
+        source = path.read_text(encoding="utf-8", errors="replace")
+        tree = ast.parse(source, filename=str(path))
+    except (OSError, SyntaxError, UnicodeError):
+        return "Could not parse Python module."
+    doc = ast.get_docstring(tree)
+    if doc:
+        return doc.strip().splitlines()[0].strip()
+    return f"Python script `{path.name}`."
+
+
+def _extract_shell_description(path: Path) -> str:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[:40]
+    except OSError:
+        return f"Shell script `{path.name}`."
+    comments: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#!"):
             continue
-        if isinstance(node.func, ast.Attribute) and node.func.attr == "add_parser" and node.args:
-            maybe_command = _literal_string(node.args[0])
-            if maybe_command:
-                commands.add(maybe_command)
-    return sorted(commands)
+        if stripped.startswith("#"):
+            text = stripped.lstrip("#").strip()
+            if text:
+                comments.append(text)
+        elif stripped:
+            break
+    if comments:
+        return comments[0][:500]
+    return f"Shell script `{path.name}`."
 
 
-def extract_imports(tree: ast.AST) -> set[str]:
-    imports: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                imports.add(alias.name.split(".")[0])
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imports.add(node.module.split(".")[0])
-    return imports
+def _parse_frontmatter_block(raw: str) -> tuple[dict[str, Any], str]:
+    text = raw.lstrip("\ufeff")
+    if not text.startswith("---"):
+        return {}, text
+    lines = text.splitlines()
+    if len(lines) < 2 or lines[0].strip() != "---":
+        return {}, text
+    fm_lines: list[str] = []
+    i = 1
+    while i < len(lines):
+        if lines[i].strip() == "---":
+            break
+        fm_lines.append(lines[i])
+        i += 1
+    if i >= len(lines):
+        return {}, text
+    body = "\n".join(lines[i + 1 :]).lstrip("\n")
+    meta: dict[str, Any] = {}
+    key_re = re.compile(r"^([A-Za-z0-9_+-]+):\s*(.*)$")
+    j = 0
+    blines = fm_lines
+    while j < len(blines):
+        raw_line = blines[j]
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            j += 1
+            continue
+        match = key_re.match(raw_line.rstrip())
+        if not match:
+            j += 1
+            continue
+        key, rest = match.group(1), match.group(2).strip()
+        if rest in {"", "|", ">"}:
+            items: list[str] = []
+            k = j + 1
+            while k < len(blines):
+                candidate = blines[k]
+                st = candidate.strip()
+                if st.startswith("- "):
+                    items.append(st[2:].strip().strip('"').strip("'"))
+                    k += 1
+                    continue
+                if not st:
+                    k += 1
+                    continue
+                if candidate[0] in " \t" and not st.startswith("- "):
+                    k += 1
+                    continue
+                break
+            if items:
+                meta[key] = items
+                j = k
+                continue
+        if rest.startswith("[") and rest.endswith("]"):
+            inner = rest[1:-1]
+            meta[key] = [p.strip().strip("'\"") for p in inner.split(",") if p.strip()]
+        else:
+            meta[key] = rest.strip('"').strip("'")
+        j += 1
+    return meta, body
 
 
-def extract_functions(tree: ast.AST) -> list[str]:
-    return sorted(
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and not node.name.startswith("_")
+def _skill_description(meta: dict[str, Any], body: str) -> str:
+    desc = str(meta.get("description", "")).strip()
+    if desc:
+        return desc.replace("\n", " ")[:2000]
+    paragraphs = [p.strip() for p in re.split(r"\n{2,}", body) if p.strip()]
+    if paragraphs:
+        return paragraphs[0].replace("\n", " ")[:2000]
+    return "Skill definition (SKILL.md)."
+
+
+def _normalize_tag_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+        if stripped.startswith("["):
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                return [str(x).strip() for x in parsed if str(x).strip()]
+        return [t.strip() for t in re.split(r"[\s,]+", stripped) if t.strip()]
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    return [str(value).strip()]
+
+
+def _iter_skill_markdown_roots(roots: Sequence[Path]) -> Iterator[Path]:
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in root.rglob("SKILL.md"):
+            if _should_skip_dir(path):
+                continue
+            yield path.resolve()
+
+
+def _iter_scripts_in_dir(directory: Path, kinds: tuple[str, ...] = (".py", ".sh")) -> Iterator[Path]:
+    if not directory.is_dir():
+        return
+    for path in sorted(directory.iterdir()):
+        if not path.is_file():
+            continue
+        if path.suffix not in kinds:
+            continue
+        if path.name == "__init__.py":
+            continue
+        yield path.resolve()
+
+
+def _iter_skill_modules(src_skills: Path) -> Iterator[Path]:
+    if not src_skills.is_dir():
+        return
+    for path in sorted(src_skills.glob("*.py")):
+        if path.name == "__init__.py":
+            continue
+        yield path.resolve()
+
+
+def collect_scan_roots(
+    workspace: Path,
+    repo_root: Path,
+    *,
+    include_repo: bool = True,
+    include_global_skills: bool = True,
+) -> list[tuple[str, Path]]:
+    """Return labeled roots: (label, path) for scanning."""
+    roots: list[tuple[str, Path]] = []
+    ws = workspace.resolve()
+    roots.append(("workspace", ws))
+    scripts_ws = ws / "scripts"
+    if scripts_ws.is_dir():
+        roots.append(("workspace_scripts", scripts_ws))
+    tools_ws = ws / "tools"
+    if tools_ws.is_dir():
+        roots.append(("workspace_tools", tools_ws))
+
+    if include_global_skills:
+        global_skills = Path.home() / ".openclaw" / "skills"
+        if global_skills.is_dir():
+            roots.append(("openclaw_home_skills", global_skills))
+
+    if include_repo:
+        rr = repo_root.resolve()
+        roots.append(("repo_scripts", rr / "scripts"))
+        roots.append(("repo_src_skills", rr / "src" / "skills"))
+        repo_skills = rr / "skills"
+        if repo_skills.is_dir():
+            roots.append(("repo_skills", repo_skills))
+
+    return roots
+
+
+def _build_entry_for_script(path: Path, kind: str) -> RegistryEntry:
+    resolved = path.resolve()
+    stat = resolved.stat()
+    last_modified = _utc_iso_from_mtime(stat.st_mtime)
+    if path.suffix == ".py":
+        description = _extract_py_description(resolved)
+        file_kind = "script" if "scripts" in path.parts or "tools" in path.parts else "skill_module"
+    else:
+        description = _extract_shell_description(resolved)
+        file_kind = "shell"
+    name = path.stem
+    tags = tuple(_infer_tags(name, description, path.as_posix()))
+    resolved_kind = file_kind if kind == "script" else kind
+    return RegistryEntry(
+        name=name,
+        description=description,
+        path=str(resolved),
+        tags=tags,
+        last_modified=last_modified,
+        kind=resolved_kind,
     )
 
 
-def extract_description(tree: ast.AST) -> str:
-    doc = ast.get_docstring(tree)
-    if doc:
-        return doc.strip().splitlines()[0]
-    return "No module docstring available."
+def _build_entry_for_skill_md(path: Path) -> RegistryEntry:
+    resolved = path.resolve()
+    stat = resolved.stat()
+    last_modified = _utc_iso_from_mtime(stat.st_mtime)
+    raw = resolved.read_text(encoding="utf-8", errors="replace")
+    meta, body = _parse_frontmatter_block(raw)
+    name_candidate = meta.get("name") or meta.get("title")
+    name = str(name_candidate).strip() if name_candidate else resolved.parent.name or resolved.stem
+    description = _skill_description(meta, body)
+    explicit_tags = _normalize_tag_list(meta.get("tags"))
+    inferred = _infer_tags(name, description, resolved.as_posix(), explicit_tags)
+    merged = sorted(set(explicit_tags) | set(inferred))
+    if not merged:
+        merged = ["general"]
+    return RegistryEntry(
+        name=name,
+        description=description,
+        path=str(resolved),
+        tags=tuple(merged),
+        last_modified=last_modified,
+        kind="skill",
+    )
 
 
-def infer_capabilities(name: str, description: str, commands: list[str], functions: list[str]) -> list[str]:
-    corpus = " ".join([name, description, *commands, *functions]).lower()
-    capabilities = [label for marker, label in KEYWORD_CAPABILITIES if marker in corpus]
-    if "argparse" in corpus and "orchestration" not in corpus:
-        capabilities.append("CLI workflow automation")
-    if not capabilities:
-        capabilities.append("General utility automation")
-    return sorted(set(capabilities))
+def scan_entries(scan_roots: Sequence[tuple[str, Path]]) -> list[RegistryEntry]:
+    entries: list[RegistryEntry] = []
+    seen_paths: set[str] = set()
+
+    for label, root in scan_roots:
+        if label == "workspace":
+            for path in _iter_skill_markdown_roots([root]):
+                key = str(path)
+                if key in seen_paths:
+                    continue
+                seen_paths.add(key)
+                entries.append(_build_entry_for_skill_md(path))
+        elif label in {"workspace_scripts", "repo_scripts"}:
+            for path in _iter_scripts_in_dir(root):
+                key = str(path)
+                if key in seen_paths:
+                    continue
+                seen_paths.add(key)
+                entries.append(_build_entry_for_script(path, "script"))
+        elif label == "workspace_tools":
+            for path in _iter_scripts_in_dir(root, kinds=(".py", ".sh", ".js", ".ts")):
+                key = str(path)
+                if key in seen_paths:
+                    continue
+                seen_paths.add(key)
+                suffix = path.suffix.lower()
+                if suffix in {".py", ".sh"}:
+                    entries.append(_build_entry_for_script(path, "tool"))
+                else:
+                    stat = path.stat()
+                    name = path.stem
+                    description = f"Tool file `{path.name}`."
+                    entries.append(
+                        RegistryEntry(
+                            name=name,
+                            description=description,
+                            path=str(path.resolve()),
+                            tags=tuple(_infer_tags(name, description, path.as_posix())),
+                            last_modified=_utc_iso_from_mtime(stat.st_mtime),
+                            kind="tool",
+                        )
+                    )
+        elif label == "repo_src_skills":
+            for path in _iter_skill_modules(root):
+                key = str(path)
+                if key in seen_paths:
+                    continue
+                seen_paths.add(key)
+                e = _build_entry_for_script(path, "skill_module")
+                entries.append(
+                    RegistryEntry(
+                        name=e.name,
+                        description=e.description,
+                        path=e.path,
+                        tags=tuple(_infer_tags(e.name, e.description, path.as_posix())),
+                        last_modified=e.last_modified,
+                        kind="skill_module",
+                    )
+                )
+        elif label in {"openclaw_home_skills", "repo_skills"}:
+            for path in _iter_skill_markdown_roots([root]):
+                key = str(path)
+                if key in seen_paths:
+                    continue
+                seen_paths.add(key)
+                entries.append(_build_entry_for_skill_md(path))
+
+    return sorted(entries, key=lambda e: (e.name.lower(), e.path))
 
 
-def infer_risk_level(imports: set[str], commands: list[str]) -> str:
-    import_hits = len(imports.intersection(HIGH_RISK_MARKERS))
-    command_hits = len(commands)
-    if import_hits >= 2 or command_hits >= 7:
-        return "high"
-    if import_hits >= 1 or command_hits >= 4:
-        return "medium"
-    return "low"
+def diff_against_previous(
+    current: Sequence[RegistryEntry],
+    previous_tools: Sequence[dict[str, Any]] | None,
+) -> dict[str, list[str]]:
+    prev_by_path = {str(row.get("path", "")): row for row in (previous_tools or []) if row.get("path")}
+    current_paths = {e.path for e in current}
+    prev_paths = set(prev_by_path.keys())
+
+    added = sorted(current_paths - prev_paths)
+    removed = sorted(prev_paths - current_paths)
+    modified: list[str] = []
+    for entry in current:
+        old = prev_by_path.get(entry.path)
+        if not old:
+            continue
+        old_mtime = str(old.get("last_modified", ""))
+        if old_mtime != entry.last_modified:
+            modified.append(entry.path)
+        elif old.get("description") != entry.description:
+            modified.append(entry.path)
+
+    return {"added": added, "removed": removed, "modified": modified}
 
 
-def infer_io_profile(imports: set[str], text: str) -> list[str]:
-    profile: list[str] = []
-    if imports.intersection(IO_MARKERS) or "Path(" in text or "open(" in text:
-        profile.append("filesystem")
-    if imports.intersection(NETWORK_MARKERS) or "http" in text or "https" in text:
-        profile.append("network")
-    if "subprocess" in imports or "subprocess." in text:
-        profile.append("process")
-    if "json" in imports:
-        profile.append("structured-data")
-    return profile or ["in-memory"]
+def build_registry_payload(
+    scan_roots: Sequence[tuple[str, Path]],
+    previous: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    entries = scan_entries(scan_roots)
+    prev_tools = previous.get("tools") if isinstance(previous, dict) else None
+    changes = diff_against_previous(entries, prev_tools if isinstance(prev_tools, list) else None)
+    return {
+        "version": 1,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "scan_roots": [{"path": str(p.resolve()), "label": label} for label, p in scan_roots],
+        "changes_since_previous_run": changes,
+        "tools": [e.to_json_dict() for e in entries],
+    }
 
 
-def analyze_scripts(root: Path) -> list[ToolProfile]:
-    profiles: list[ToolProfile] = []
-    for path in discover_script_paths(root):
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source, filename=str(path))
-        name = path.stem
-        imports = extract_imports(tree)
-        functions = extract_functions(tree)
-        commands = extract_cli_commands(tree)
-        description = extract_description(tree)
-        capabilities = infer_capabilities(name, description, commands, functions)
-        io_profile = infer_io_profile(imports, source)
-        risk_level = infer_risk_level(imports, commands)
-        profiles.append(
-            ToolProfile(
-                name=name,
-                path=path.relative_to(root),
-                description=description,
-                imports=imports,
-                functions=functions,
-                commands=commands,
-                capabilities=capabilities,
-                risk_level=risk_level,
-                io_profile=io_profile,
+def load_registry(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def write_registry(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+
+
+def refresh_registry(
+    workspace: Path,
+    repo_root: Path,
+    registry_path: Path,
+    *,
+    include_repo: bool = True,
+    include_global_skills: bool = True,
+) -> dict[str, Any]:
+    roots = collect_scan_roots(workspace, repo_root, include_repo=include_repo, include_global_skills=include_global_skills)
+    previous = load_registry(registry_path)
+    payload = build_registry_payload(roots, previous)
+    write_registry(registry_path, payload)
+    return payload
+
+
+def _match_search(entry: RegistryEntry, name_pat: str | None, tag: str | None, query: str | None) -> bool:
+    if name_pat:
+        if name_pat.lower() not in entry.name.lower():
+            return False
+    if tag:
+        if tag.lower() not in {t.lower() for t in entry.tags}:
+            return False
+    if query:
+        q = query.lower()
+        blob = f"{entry.name} {entry.description} {' '.join(entry.tags)} {entry.path}".lower()
+        if q not in blob:
+            return False
+    return not (name_pat is None and tag is None and query is None)
+
+
+def filter_entries(
+    entries: Sequence[RegistryEntry],
+    *,
+    name: str | None = None,
+    tag: str | None = None,
+    query: str | None = None,
+) -> list[RegistryEntry]:
+    if name is None and tag is None and query is None:
+        return list(entries)
+    return [e for e in entries if _match_search(e, name, tag, query)]
+
+
+def entries_from_payload(payload: dict[str, Any]) -> list[RegistryEntry]:
+    tools = payload.get("tools")
+    if not isinstance(tools, list):
+        return []
+    out: list[RegistryEntry] = []
+    for row in tools:
+        if not isinstance(row, dict):
+            continue
+        try:
+            tags_raw = row.get("tags") or []
+            tags = tuple(str(t) for t in tags_raw) if isinstance(tags_raw, list) else ()
+            out.append(
+                RegistryEntry(
+                    name=str(row["name"]),
+                    description=str(row.get("description", "")),
+                    path=str(row["path"]),
+                    tags=tags,
+                    last_modified=str(row.get("last_modified", "")),
+                    kind=str(row.get("kind", "unknown")),
+                )
             )
-        )
-    enrich_dependency_graph(profiles)
-    for profile in profiles:
-        profile.examples = build_examples(profile)
-    return profiles
+        except KeyError:
+            continue
+    return out
 
 
-def enrich_dependency_graph(profiles: list[ToolProfile]) -> None:
-    by_name = {profile.name: profile for profile in profiles}
-    for profile in profiles:
-        deps: set[str] = set()
-        for imported in profile.imports:
-            if imported in by_name and imported != profile.name:
-                deps.add(imported)
-        for peer in profiles:
-            if peer.name == profile.name:
-                continue
-            shared_imports = profile.imports.intersection(peer.imports)
-            shared_caps = set(profile.capabilities).intersection(peer.capabilities)
-            if len(shared_imports) >= 2 or len(shared_caps) >= 2:
-                deps.add(peer.name)
-        profile.dependencies = sorted(deps)
-
-
-def build_examples(profile: ToolProfile) -> list[str]:
-    base = f"python -m scripts.{profile.name}"
-    examples: list[str] = []
-    if profile.commands:
-        for command in profile.commands[:3]:
-            examples.append(f"{base} {command}")
-    else:
-        examples.append(base)
-    if "network" in profile.io_profile:
-        examples.append(f"# Network-aware run\n{base} --help")
-    if "filesystem" in profile.io_profile:
-        examples.append(f"# Filesystem workflow\n{base} --help")
-    return examples
-
-
-def generate_markdown(profiles: list[ToolProfile]) -> str:
+def format_entry_detail(entry: RegistryEntry) -> str:
     lines = [
-        "# Tool Discovery Report",
-        "",
-        "Auto-generated capability and dependency analysis for scripts/ tools.",
-        "",
-        "## Summary",
-        "",
-        f"- Total tools discovered: **{len(profiles)}**",
-        f"- High-risk tools: **{sum(1 for p in profiles if p.risk_level == 'high')}**",
-        "",
+        f"name:        {entry.name}",
+        f"kind:        {entry.kind}",
+        f"path:        {entry.path}",
+        f"last_modified: {entry.last_modified}",
+        f"tags:        {', '.join(entry.tags)}",
+        f"description: {entry.description}",
     ]
-    for profile in profiles:
-        lines.extend(
-            [
-                f"## `{profile.name}`",
-                "",
-                f"- Path: `{profile.path}`",
-                f"- Description: {profile.description}",
-                f"- Risk level: **{profile.risk_level}**",
-                f"- Capabilities: {', '.join(profile.capabilities)}",
-                f"- I/O profile: {', '.join(profile.io_profile)}",
-                f"- Dependencies: {', '.join(profile.dependencies) if profile.dependencies else 'none'}",
-                "",
-                "### Commands",
-                "",
-            ]
-        )
-        if profile.commands:
-            lines.extend(f"- `{cmd}`" for cmd in profile.commands)
-        else:
-            lines.append("- _No subcommands discovered_")
-        lines.extend(["", "### Example usage", ""])
-        lines.extend(f"```bash\n{example}\n```" for example in profile.examples)
-        lines.append("")
     return "\n".join(lines)
 
 
-def score_tool_for_goal(profile: ToolProfile, goal: str, context: str) -> tuple[int, list[str]]:
-    goal_lower = goal.lower()
-    context_lower = context.lower()
-    reasons: list[str] = []
-    score = 0
-
-    for capability in profile.capabilities:
-        cap_words = capability.lower().split()
-        if any(word in goal_lower for word in cap_words):
-            score += 3
-            reasons.append(f"Capability match: {capability}")
-    for command in profile.commands:
-        if command in goal_lower or command in context_lower:
-            score += 2
-            reasons.append(f"Command match: {command}")
-    combined_text = f"{goal_lower} {context_lower}"
-    if "network" in profile.io_profile and any(word in combined_text for word in ("send", "sync", "notify", "api")):
-        score += 2
-        reasons.append("I/O fit: network workflow expected")
-    if "filesystem" in profile.io_profile and any(word in combined_text for word in ("file", "context", "split", "log")):
-        score += 2
-        reasons.append("I/O fit: filesystem workflow expected")
-    if profile.dependencies:
-        score += 1
-        reasons.append(f"Integrates with {len(profile.dependencies)} related tools")
-    if profile.risk_level == "high" and "safe" in context_lower:
-        score -= 2
-        reasons.append("Context warns for safety; high-risk tool penalized")
-    return score, reasons
+def find_entry_by_identifier(entries: Sequence[RegistryEntry], identifier: str) -> RegistryEntry | None:
+    needle = identifier.strip()
+    if not needle:
+        return None
+    lowered = needle.lower()
+    for e in entries:
+        if e.name.lower() == lowered:
+            return e
+    for e in entries:
+        if e.path.lower() == lowered or e.path.lower().endswith(lowered):
+            return e
+    for e in entries:
+        if lowered in e.path.lower():
+            return e
+    for e in entries:
+        if lowered in e.name.lower():
+            return e
+    return None
 
 
-def suggest_tools(profiles: list[ToolProfile], goal: str, context: str, top_n: int = 5) -> list[dict[str, object]]:
-    ranked: list[tuple[int, ToolProfile, list[str]]] = []
-    for profile in profiles:
-        score, reasons = score_tool_for_goal(profile, goal, context)
-        ranked.append((score, profile, reasons))
-    ranked.sort(key=lambda row: (row[0], len(row[2]), row[1].name), reverse=True)
+def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Discover tools, skills, and scripts; refresh data/tool_registry.json; search and list.",
+    )
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        default=None,
+        help="OpenClaw workspace root (default: OPENCLAW_WORKSPACE or ~/.openclaw/workspace).",
+    )
+    parser.add_argument(
+        "--repo",
+        type=Path,
+        default=REPO_ROOT,
+        help="openclaw-cursor repository root (default: parent of scripts/).",
+    )
+    parser.add_argument(
+        "--registry",
+        type=Path,
+        default=DEFAULT_REGISTRY_PATH,
+        help=f"Registry JSON path (default: {DEFAULT_REGISTRY_PATH}).",
+    )
+    parser.add_argument(
+        "--no-repo",
+        action="store_true",
+        help="Do not scan repository scripts/skills (workspace and global skills only).",
+    )
+    parser.add_argument(
+        "--no-global-skills",
+        action="store_true",
+        help="Do not scan ~/.openclaw/skills.",
+    )
+    parser.add_argument("--json", action="store_true", help="Output JSON instead of plain text.")
 
-    suggestions: list[dict[str, object]] = []
-    for score, profile, reasons in ranked[:top_n]:
-        suggestions.append(
-            {
-                "tool": profile.name,
-                "score": score,
-                "reasoning": reasons or ["General fallback candidate"],
-                "commands": profile.commands[:4],
-                "dependencies": profile.dependencies,
-                "suggested_chain": [profile.name, *profile.dependencies[:2]],
-            }
-        )
-    return suggestions
+    sub = parser.add_subparsers(dest="command", metavar="command")
 
+    sub.add_parser("refresh", help="Rebuild the registry file only.")
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Discover and suggest utility scripts by capability.")
-    parser.add_argument("--root", default=".", help="Repository root path")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    p_list = sub.add_parser("list", help="List all tools (refreshes registry first).")
+    p_list.add_argument("--kind", help="Filter by kind (script, skill, shell, ...).")
 
-    analyze = subparsers.add_parser("analyze", help="Run deep tool capability analysis")
-    analyze.add_argument("--format", choices=("json", "text"), default="json")
+    p_search = sub.add_parser("search", help="Search tools by name substring, tag, and/or free-text query.")
+    p_search.add_argument("--name", help="Substring match on tool name.")
+    p_search.add_argument("--tag", help="Match a category tag (e.g. image, audio, code, automation).")
+    p_search.add_argument("query", nargs="?", help="Free-text substring match.")
 
-    docs = subparsers.add_parser("docs", help="Generate Markdown tool documentation")
-    docs.add_argument("--output", help="Write docs to this path instead of stdout")
+    p_show = sub.add_parser("show", help="Show one tool by name or path fragment.")
+    p_show.add_argument("identifier", help="Tool name, path, or unique path suffix.")
 
-    suggest = subparsers.add_parser("suggest", help="Suggest tools with contextual reasoning")
-    suggest.add_argument("goal", help="User goal, e.g. 'monitor queue latency'")
-    suggest.add_argument("--context", default="", help="Additional operational context")
-    suggest.add_argument("--top", type=int, default=5, help="Number of tools to suggest")
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    root = Path(args.root).resolve()
-    profiles = analyze_scripts(root)
+    workspace = Path(args.workspace).expanduser().resolve() if args.workspace else resolve_openclaw_workspace()
+    repo_root = Path(args.repo).expanduser().resolve()
+    registry_path = Path(args.registry).expanduser().resolve()
 
-    if args.command == "analyze":
-        if args.format == "json":
-            print(json.dumps([profile.to_dict() for profile in profiles], indent=2))
+    include_repo = not args.no_repo
+    include_global = not args.no_global_skills
+
+    if args.command is None:
+        payload = refresh_registry(
+            workspace,
+            repo_root,
+            registry_path,
+            include_repo=include_repo,
+            include_global_skills=include_global,
+        )
+        if args.json:
+            print(json.dumps(payload, indent=2))
         else:
-            for profile in profiles:
-                print(f"{profile.name}: {', '.join(profile.capabilities)} | deps={profile.dependencies}")
+            ch = payload.get("changes_since_previous_run", {})
+            print(f"Registry updated: {registry_path}", file=sys.stderr)
+            print(f"Tools indexed: {len(payload.get('tools', []))}", file=sys.stderr)
+            if isinstance(ch, dict):
+                for key in ("added", "modified", "removed"):
+                    items = ch.get(key) or []
+                    if items:
+                        print(f"  {key}: {len(items)}", file=sys.stderr)
         return 0
 
-    if args.command == "docs":
-        markdown = generate_markdown(profiles)
-        if args.output:
-            output = Path(args.output)
-            output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(markdown, encoding="utf-8")
+    payload = refresh_registry(
+        workspace,
+        repo_root,
+        registry_path,
+        include_repo=include_repo,
+        include_global_skills=include_global,
+    )
+    entries = entries_from_payload(payload)
+
+    if args.command == "refresh":
+        if args.json:
+            print(json.dumps({"registry": str(registry_path), "count": len(entries)}, indent=2))
         else:
-            print(markdown)
+            print(f"Refreshed {len(entries)} tools → {registry_path}")
         return 0
 
-    if args.command == "suggest":
-        payload = {
-            "goal": args.goal,
-            "context": args.context,
-            "suggestions": suggest_tools(profiles, goal=args.goal, context=args.context, top_n=max(1, args.top)),
-        }
-        print(json.dumps(payload, indent=2))
+    if args.command == "list":
+        if getattr(args, "kind", None):
+            k = args.kind.lower()
+            entries = [e for e in entries if e.kind.lower() == k]
+        if args.json:
+            print(json.dumps([e.to_json_dict() for e in entries], indent=2))
+        else:
+            for e in entries:
+                tag_str = ",".join(e.tags)
+                print(f"{e.name:32} [{e.kind:12}] tags={tag_str}")
+                print(f"    {e.path}")
+        return 0
+
+    if args.command == "search":
+        matched = filter_entries(entries, name=args.name, tag=args.tag, query=args.query)
+        if args.json:
+            print(json.dumps([e.to_json_dict() for e in matched], indent=2))
+        else:
+            if not matched:
+                print("No matches.")
+            for e in matched:
+                print(f"- {e.name} ({', '.join(e.tags)}) → {e.path}")
+        return 0
+
+    if args.command == "show":
+        entry = find_entry_by_identifier(entries, args.identifier)
+        if entry is None:
+            if args.json:
+                print(json.dumps({"error": "not_found", "identifier": args.identifier}, indent=2))
+            else:
+                print(f"No tool matched {args.identifier!r}.", file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps(entry.to_json_dict(), indent=2))
+        else:
+            print(format_entry_detail(entry))
         return 0
 
     return 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
