@@ -1,0 +1,63 @@
+{
+  "id": "refactoring",
+  "name": "Refactoring task",
+  "description": "Plan and execute a safe refactor with behavior preservation and incremental steps.",
+  "tags": ["refactor", "architecture"],
+  "placeholders": [
+    {
+      "name": "goal",
+      "description": "What should improve (readability, performance, layering, duplication).",
+      "required": true
+    },
+    {
+      "name": "constraints",
+      "description": "Non-negotiables: deadlines, public API, performance budgets, no new deps, etc.",
+      "required": true
+    },
+    {
+      "name": "codebase_summary",
+      "description": "Relevant modules, patterns, or links to key files.",
+      "required": true
+    },
+    {
+      "name": "target_code",
+      "description": "Current code or interface to refactor.",
+      "required": true
+    }
+  ],
+  "body": "You are planning a refactoring change with minimal risk.\n\n**Goal:**\n{{goal}}\n\n**Constraints:**\n{{constraints}}\n\n**Relevant context:**\n{{codebase_summary}}\n\n**Current code:**\n```\n{{target_code}}\n```\n\nPropose a refactor that preserves observable behavior unless you explicitly call out an intentional behavior change.\n",
+  "expected_output_format": {
+    "description": "Output should be safe to hand to another developer as an implementation brief.",
+    "sections": [
+      "Current design (short)",
+      "Problems with the current design",
+      "Target design",
+      "Step-by-step migration plan",
+      "Risks and mitigations",
+      "Testing strategy",
+      "Rollback plan"
+    ]
+  },
+  "examples": [
+    {
+      "title": "Extract duplicated validation",
+      "placeholder_values": {
+        "goal": "Remove duplicated email validation across three HTTP handlers without changing API responses.",
+        "constraints": "No new third-party dependencies; must ship behind existing routes; two-week window.",
+        "codebase_summary": "Flask app in `app/handlers/`; similar regex checks in `users.py`, `auth.py`, `admin.py`.",
+        "target_code": "# users.py\ndef _valid_email(s):\n    return re.match(r'^[\\\\w.-]+@[\\\\w.-]+$', s) is not None\n\n# auth.py — same regex copied\n# admin.py — same regex copied with different error string"
+      },
+      "sample_response": "## Current design (short)\nEach handler owns a private regex helper; strings differ slightly.\n\n## Problems with the current design\nDuplication invites drift; fixing a bug requires three edits.\n\n## Target design\nSingle `app/validation/email.py` with `normalize_email` + `validate_email` returning structured errors matching existing JSON bodies.\n\n## Step-by-step migration plan\n1. Add shared module with tests ported from one handler.\n2. Replace `users.py` import; run handler tests.\n3. Replace `auth.py`, then `admin.py`.\n4. Delete dead private helpers.\n\n## Risks and mitigations\nRisk: subtle regex differences. Mitigation: golden tests capturing current accepted/rejected samples per route.\n\n## Testing strategy\nUnit tests for validator; existing integration tests for each route; add matrix test for legacy edge emails.\n\n## Rollback plan\nEach step is a small commit; revert the last swap if CI fails."
+    },
+    {
+      "title": "Introduce interface for storage",
+      "placeholder_values": {
+        "goal": "Allow swapping filesystem storage for S3 without touching business logic.",
+        "constraints": "Keep synchronous API for now; no asyncio rewrite.",
+        "codebase_summary": "`ReportWriter` in `reports/writer.py` calls `open()` directly; used by CLI and cron job.",
+        "target_code": "class ReportWriter:\n    def save(self, path: str, data: bytes) -> None:\n        with open(path, 'wb') as f:\n            f.write(data)\n"
+      },
+      "sample_response": "## Current design (short)\n`ReportWriter` is coupled to the local filesystem.\n\n## Problems with the current design\nCannot test in-memory easily; cannot deploy to environments without shared disk.\n\n## Target design\nIntroduce `BlobStore` protocol with `write(key: str, data: bytes) -> None` and a `LocalBlobStore` implementation wrapping current behavior.\n\n## Step-by-step migration plan\n1. Add protocol + local adapter + constructor injection on `ReportWriter`.\n2. Update call sites to pass `LocalBlobStore(base_dir)`.\n3. Add `S3BlobStore` behind feature flag in a follow-up PR.\n\n## Risks and mitigations\nRisk: path semantics vs object keys. Mitigation: define key mapping helper with tests.\n\n## Testing strategy\nUnit tests with fake store; tempdir integration for local adapter.\n\n## Rollback plan\nRevert injection commit; default construction can temporarily build `LocalBlobStore` internally for compatibility."
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "id": "code_review",
+  "name": "Code review request",
+  "description": "Structured review of a change or snippet for correctness, security, and maintainability.",
+  "tags": ["review", "quality"],
+  "placeholders": [
+    {
+      "name": "language",
+      "description": "Primary language or stack (e.g. Python, TypeScript, Go).",
+      "required": true
+    },
+    {
+      "name": "context",
+      "description": "What this code does, constraints, or ticket summary.",
+      "required": true
+    },
+    {
+      "name": "code",
+      "description": "The code, diff, or file contents to review.",
+      "required": true
+    },
+    {
+      "name": "focus_areas",
+      "description": "Optional emphasis: performance, API design, accessibility, etc.",
+      "required": false
+    }
+  ],
+  "body": "You are a senior engineer performing a code review.\n\n**Language / stack:** {{language}}\n\n**Context:**\n{{context}}\n\n**Code or diff:**\n```\n{{code}}\n```\n\n**Focus (if relevant):** {{focus_areas}}\n\nReview the code. Be specific and actionable. If something is unclear, state your assumptions.\n",
+  "expected_output_format": {
+    "description": "Use clear markdown headings so the result can be pasted into a PR or issue.",
+    "sections": [
+      "Summary",
+      "Strengths",
+      "Issues and risks (severity: blocker / major / minor / nit)",
+      "Suggestions",
+      "Questions or assumptions",
+      "Suggested tests or follow-ups"
+    ]
+  },
+  "examples": [
+    {
+      "title": "Python service handler",
+      "placeholder_values": {
+        "language": "Python 3.12",
+        "context": "HTTP handler that accepts JSON and updates a user profile in SQLite.",
+        "code": "def update_profile(user_id: str, body: dict) -> dict:\n    conn = sqlite3.connect(DB_PATH)\n    conn.execute(\n        f\"UPDATE users SET name='{body['name']}' WHERE id={user_id}\"\n    )\n    conn.commit()\n    return {\"ok\": True}\n",
+        "focus_areas": "SQL injection, error handling, typing."
+      },
+      "sample_response": "## Summary\nThe handler builds SQL with string interpolation, which is unsafe and can corrupt data.\n\n## Strengths\nSimple control flow; easy to read at a glance.\n\n## Issues and risks\n- **Blocker:** SQL injection via `body['name']` and `user_id` because values are interpolated into the query.\n- **Major:** No validation of `user_id` or `body` shape; failures will surface as opaque DB errors.\n\n## Suggestions\nUse parameterized queries (`?` placeholders) and validate inputs with a schema (e.g. pydantic).\n\n## Questions or assumptions\nAssumes `DB_PATH` is module-level and shared; consider connection lifecycle per request.\n\n## Suggested tests or follow-ups\nAdd tests that assert malicious input cannot alter other rows; add integration test for happy path."
+    },
+    {
+      "title": "Minimal review",
+      "placeholder_values": {
+        "language": "Rust",
+        "context": "New helper for parsing a config flag.",
+        "code": "pub fn parse_flag(s: &str) -> bool {\n    s == \"true\" || s == \"1\"\n}\n",
+        "focus_areas": "API clarity only."
+      },
+      "sample_response": "## Summary\nSmall helper; behavior is clear but may be too narrow for real configs.\n\n## Strengths\nStraightforward, branchless style is easy to test.\n\n## Issues and risks\n- **Minor:** Case sensitivity may surprise users (`TRUE` not accepted).\n\n## Suggestions\nDocument accepted literals or normalize input (`s.to_lowercase()`).\n\n## Questions or assumptions\nAssumes callers trim whitespace before calling.\n\n## Suggested tests or follow-ups\nTable-driven tests for accepted and rejected strings."
+    }
+  ]
+}
