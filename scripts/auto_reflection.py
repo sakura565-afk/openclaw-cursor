@@ -14,6 +14,7 @@ Environment (all optional unless posting):
 
 - AUTO_REFLECTION_ROOT — workspace root (default: current working directory)
 - AUTO_REFLECTION_SESSION_GLOBS — extra comma-separated glob patterns relative to root
+- CLI ``--overlap-minutes`` — widens the incremental scan window after the first run (default 90)
 - TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID — post summary via Telegram sendMessage
 - REFLECTION_WEBHOOK_URL — POST JSON {\"text\": \"...\", \"meta\": {...}} to this URL
 """
@@ -23,6 +24,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import os
 import re
 import sys
@@ -34,6 +36,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Sequence
 
+logger = logging.getLogger(__name__)
 
 LEARNINGS_DIR = ".learnings"
 INSIGHTS_SUBDIR = "insights"
@@ -58,6 +61,13 @@ LESSON_HINTS = re.compile(
 )
 MAX_FILE_BYTES = 2 * 1024 * 1024
 TELEGRAM_TEXT_LIMIT = 4000
+
+# When merging duplicate insight fingerprints, keep the richer category label.
+_CATEGORY_RANK = {"lesson": 5, "testing": 4, "git": 3, "integration": 2, "general": 1}
+
+_JSON_ERROR_KEY = re.compile(
+    r"(?i)\b(error|stderr|stdout|message|detail|output|traceback|stack|trace|body|exception)\b"
+)
 
 
 @dataclass
@@ -104,12 +114,15 @@ def load_state(root: Path) -> dict[str, Any]:
 def save_state(root: Path, data: dict[str, Any]) -> None:
     path = _state_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    payload = json.dumps(data, indent=2, sort_keys=True) + "\n"
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    tmp.replace(path)
 
 
 def iter_session_files(root: Path, globs: Sequence[str], cutoff: datetime) -> list[Path]:
     seen: set[Path] = set()
-    out: list[Path] = []
+    scored: list[tuple[float, Path]] = []
     for pattern in globs:
         for path in root.glob(pattern):
             if not path.is_file():
@@ -118,7 +131,8 @@ def iter_session_files(root: Path, globs: Sequence[str], cutoff: datetime) -> li
                 st = path.stat()
             except OSError:
                 continue
-            if datetime.fromtimestamp(st.st_mtime, tz=timezone.utc) < cutoff:
+            mtime = st.st_mtime
+            if datetime.fromtimestamp(mtime, tz=timezone.utc) < cutoff:
                 continue
             if st.st_size > MAX_FILE_BYTES:
                 continue
@@ -126,9 +140,9 @@ def iter_session_files(root: Path, globs: Sequence[str], cutoff: datetime) -> li
             if rp in seen:
                 continue
             seen.add(rp)
-            out.append(path)
-    out.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return out
+            scored.append((mtime, path))
+    scored.sort(key=lambda t: t[0], reverse=True)
+    return [p for _, p in scored]
 
 
 def _severity_for_line(line: str) -> str:
@@ -161,8 +175,15 @@ def insight_fingerprint(text: str) -> str:
     return hashlib.sha256(text.lower().encode("utf-8")).hexdigest()[:16]
 
 
+def _relative_session_path(path: Path, root: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 def extract_insights_from_text(path: Path, root: Path, raw: str) -> Iterator[Insight]:
-    rel = path.relative_to(root).as_posix()
+    rel = _relative_session_path(path, root)
     for line in raw.splitlines():
         stripped = line.strip()
         if len(stripped) < 12:
@@ -180,7 +201,7 @@ def extract_insights_from_text(path: Path, root: Path, raw: str) -> Iterator[Ins
 
 
 def extract_insights_from_json(path: Path, root: Path, raw: str) -> Iterator[Insight]:
-    rel = path.relative_to(root).as_posix()
+    rel = _relative_session_path(path, root)
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
@@ -192,10 +213,13 @@ def extract_insights_from_json(path: Path, root: Path, raw: str) -> Iterator[Ins
     def walk(obj: Any) -> None:
         if isinstance(obj, dict):
             for k, v in obj.items():
-                if isinstance(k, str) and re.search(r"(?i)\b(error|stderr|message|detail)\b", k):
+                if isinstance(k, str) and _JSON_ERROR_KEY.search(k):
                     if isinstance(v, str) and v.strip():
                         strings.append(v.strip())
-                walk(v)
+                    elif isinstance(v, (dict, list)):
+                        walk(v)
+                else:
+                    walk(v)
         elif isinstance(obj, list):
             for item in obj:
                 walk(item)
@@ -239,6 +263,8 @@ def dedupe_insights(insights: Iterable[Insight]) -> list[Insight]:
             sev_rank = {"error": 3, "warning": 2, "info": 1}
             if sev_rank.get(ins.severity, 0) > sev_rank.get(existing.severity, 0):
                 existing.severity = ins.severity
+            if _CATEGORY_RANK.get(ins.category, 0) > _CATEGORY_RANK.get(existing.category, 0):
+                existing.category = ins.category
     return list(buckets.values())
 
 
@@ -296,6 +322,11 @@ def weekly_report_path(root: Path, dt: datetime) -> Path:
     return root / LEARNINGS_DIR / SUMMARIES_SUBDIR / f"weekly_{week}.md"
 
 
+def _weekly_day_heading_pattern(run_at: datetime) -> re.Pattern[str]:
+    day = re.escape(run_at.date().isoformat())
+    return re.compile(rf"(?m)^## {day} \(UTC\)\s*$")
+
+
 def update_weekly_summary(root: Path, run_at: datetime, body: str) -> Path:
     """Append this run into the ISO-week summary file (idempotent headings per day)."""
 
@@ -303,9 +334,10 @@ def update_weekly_summary(root: Path, run_at: datetime, body: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     day_heading = f"\n## {run_at.date().isoformat()} (UTC)\n\n"
     chunk = day_heading + body + "\n"
+    day_pat = _weekly_day_heading_pattern(run_at)
     if path.exists():
         existing = path.read_text(encoding="utf-8")
-        if run_at.date().isoformat() in existing:
+        if day_pat.search(existing):
             return path
         path.write_text(existing.rstrip() + "\n" + chunk, encoding="utf-8")
     else:
@@ -402,6 +434,20 @@ def post_telegram_summary(token: str, chat_id: str, text: str) -> tuple[bool, st
     return True, last_msg or "ok"
 
 
+def _arg_positive_float(value: str) -> float:
+    x = float(value)
+    if x <= 0:
+        raise argparse.ArgumentTypeError("must be positive")
+    return x
+
+
+def _arg_non_negative_int(value: str) -> int:
+    x = int(value)
+    if x < 0:
+        raise argparse.ArgumentTypeError("must be >= 0")
+    return x
+
+
 def collect_globs(extra: Sequence[str]) -> tuple[str, ...]:
     merged = list(DEFAULT_SESSION_GLOBS)
     env_extra = os.environ.get("AUTO_REFLECTION_SESSION_GLOBS", "")
@@ -419,6 +465,10 @@ def run_reflection(
     overlap_minutes: int = 90,
     dry_run: bool = False,
 ) -> ReflectionRun:
+    if since_hours <= 0:
+        raise ValueError("since_hours must be positive")
+    if overlap_minutes < 0:
+        raise ValueError("overlap_minutes must be non-negative")
     started = utc_now()
     state = load_state(root)
     last_run_s = state.get("last_run_utc")
@@ -443,18 +493,18 @@ def run_reflection(
     insights = dedupe_insights(insights)
     insights.sort(key=lambda x: (x.category, x.severity, x.text))
 
-    top_sessions = [p.relative_to(root).as_posix() for p in session_files[:20]]
+    top_sessions = [_relative_session_path(p, root) for p in session_files[:20]]
     summary = build_summary_markdown(started, len(session_files), insights, top_sessions)
 
     finished = utc_now()
-    run_id = started.strftime("%Y%m%d_%H%M%S")
+    run_id = started.strftime("%Y%m%d_%H%M%S_%f")
 
     run = ReflectionRun(
         run_id=run_id,
         started_at_utc=started.replace(microsecond=0).isoformat(),
         finished_at_utc=finished.replace(microsecond=0).isoformat(),
         files_scanned=len(session_files),
-        session_files=[p.relative_to(root).as_posix() for p in session_files],
+        session_files=[_relative_session_path(p, root) for p in session_files],
         insights=insights,
         summary_markdown=summary,
     )
@@ -484,7 +534,7 @@ def run_reflection(
             },
         )
     except Exception:
-        pass
+        logger.debug("notify_kara_from_iskra unavailable or failed", exc_info=True)
 
     return run
 
@@ -538,9 +588,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--since-hours",
-        type=float,
+        type=_arg_positive_float,
         default=DEFAULT_SINCE_HOURS,
         help=f"Hours of history to include when no prior state exists (default: {DEFAULT_SINCE_HOURS}).",
+    )
+    parser.add_argument(
+        "--overlap-minutes",
+        type=_arg_non_negative_int,
+        default=90,
+        help="When resuming from last run, include files up to this many minutes before last_run_utc (default: 90).",
     )
     parser.add_argument(
         "--glob",
@@ -573,6 +629,7 @@ def main(argv: list[str] | None = None) -> int:
         root,
         since_hours=args.since_hours,
         extra_globs=args.glob,
+        overlap_minutes=args.overlap_minutes,
         dry_run=args.dry_run,
     )
 
