@@ -1,6 +1,7 @@
 logs/sync_obsidian_*.json
 logs/nightly_pipeline.log
-.learnings/
+.learnings/*
+!.learnings/error_learning.py
 __pycache__/
 *.py[cod]
 tool_discovery_report.md
