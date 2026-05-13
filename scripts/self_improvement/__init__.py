@@ -1,0 +1,1 @@
+"""Self-improvement automation scripts."""
