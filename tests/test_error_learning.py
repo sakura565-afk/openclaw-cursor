@@ -4,11 +4,9 @@ import io
 import json
 import os
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
-
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -16,17 +14,21 @@ sys.path.insert(0, str(ROOT))
 from scripts import error_learning  # noqa: E402
 
 
+SCRIPT_KEY = "scripts/example_tool.py"
+
+
 class ErrorLearningTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tempdir = tempfile.TemporaryDirectory()
-        self.root = Path(self.tempdir.name)
-        self.log_path = self.root / ".learnings" / "error_log.json"
+        self.db_path = Path(os.environ.get("TMPDIR", "/tmp")) / f"err_hist_{os.getpid()}_test.json"
+        if self.db_path.exists():
+            self.db_path.unlink()
 
     def tearDown(self) -> None:
-        self.tempdir.cleanup()
+        if self.db_path.exists():
+            self.db_path.unlink()
 
     def read_store(self) -> dict[str, object]:
-        return json.loads(self.log_path.read_text(encoding="utf-8"))
+        return json.loads(self.db_path.read_text(encoding="utf-8"))
 
     def run_cli(self, *args: str) -> tuple[int, str, str]:
         stdout = io.StringIO()
@@ -36,102 +38,104 @@ class ErrorLearningTests(unittest.TestCase):
         with mock.patch.dict(os.environ, env, clear=True), mock.patch("sys.stdout", stdout), mock.patch(
             "sys.stderr", stderr
         ):
-            exit_code = error_learning.main(["--log-path", str(self.log_path), *args])
+            exit_code = error_learning.main(["--db", str(self.db_path), *args])
         return exit_code, stdout.getvalue(), stderr.getvalue()
 
-    def test_add_command_persists_schema_and_deduplicates(self) -> None:
-        exit_code, first_stdout, first_stderr = self.run_cli(
-            "add",
-            "runtime_error",
-            "OpenClaw session crashed after a timeout",
-            "Retry with a smaller prompt and checkpoint intermediate state",
-        )
+    def test_record_exception_persists_context(self) -> None:
+        try:
+            raise ValueError("bad value")
+        except ValueError as exc:
+            rec = error_learning.record_exception(exc, SCRIPT_KEY, db_path=self.db_path)
 
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(first_stderr, "")
-        self.assertIn("Saved error learning entry.", first_stdout)
+        self.assertEqual(rec["script"], SCRIPT_KEY)
+        self.assertEqual(rec["error_type"], "ValueError")
+        self.assertIn("bad value", rec["message"])
+        self.assertIn("ValueError: bad value", rec["traceback"])
+        self.assertEqual(rec["occurrence_count"], 1)
+        store = self.read_store()
+        self.assertEqual(store["schema_version"], error_learning.SCHEMA_VERSION)
+        self.assertEqual(len(store["records"]), 1)
 
-        exit_code, second_stdout, second_stderr = self.run_cli(
-            "add",
-            "runtime_error",
-            "OpenClaw session crashed after a timeout",
-            "Retry with a smaller prompt and checkpoint intermediate state",
-        )
+    def test_repeat_exception_merges_by_fingerprint(self) -> None:
+        for _ in range(2):
+            try:
+                raise RuntimeError("same")
+            except RuntimeError as exc:
+                error_learning.record_exception(exc, SCRIPT_KEY, db_path=self.db_path)
+        store = self.read_store()
+        self.assertEqual(len(store["records"]), 1)
+        self.assertEqual(store["records"][0]["occurrence_count"], 2)
 
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(second_stderr, "")
-        self.assertIn("Duplicate entry detected", second_stdout)
+    def test_preflight_surfaces_prior_failure(self) -> None:
+        try:
+            raise OSError("disk full")
+        except OSError as exc:
+            error_learning.record_exception(exc, SCRIPT_KEY, db_path=self.db_path)
+        warns = error_learning.preflight_warnings(SCRIPT_KEY, db_path=self.db_path)
+        self.assertEqual(len(warns), 1)
+        self.assertIn("OSError", warns[0].format(stream=sys.stderr))
+
+    def test_capture_errors_context_reraises(self) -> None:
+        with self.assertRaises(KeyError):
+            with error_learning.capture_errors(SCRIPT_KEY, db_path=self.db_path):
+                raise KeyError("missing")
 
         store = self.read_store()
-        self.assertEqual(store["schema_version"], 1)
-        self.assertEqual(len(store["entries"]), 1)
+        self.assertEqual(len(store["records"]), 1)
 
-        entry = store["entries"][0]
-        self.assertEqual(
-            set(entry.keys()),
-            {"id", "timestamp", "category", "error", "lesson", "resolved"},
-        )
-        self.assertEqual(entry["category"], "runtime_error")
-        self.assertTrue(entry["resolved"])
+    def test_guard_main_logs_and_preflights(self) -> None:
+        try:
+            raise TypeError("t")
+        except TypeError as exc:
+            error_learning.record_exception(exc, SCRIPT_KEY, db_path=self.db_path)
 
-    def test_list_command_outputs_colorized_entries_and_status(self) -> None:
-        error_learning.add_entry(
-            self.log_path,
-            "warning",
-            "Disk space dropped below the safe threshold",
-            "Purge stale artifacts before retrying long sessions",
-            resolved=False,
-        )
-        error_learning.add_entry(
-            self.log_path,
-            "parser_error",
-            "Structured output parser rejected an unterminated block",
-            "Validate fenced blocks before handing them to the parser",
-            resolved=True,
-        )
+        buf_out = io.StringIO()
+        buf_err = io.StringIO()
 
-        exit_code, stdout, stderr = self.run_cli("list")
+        @error_learning.guard_main(script_key=SCRIPT_KEY, db_path=self.db_path)
+        def boom() -> None:
+            raise ValueError("second")
 
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(stderr, "")
-        self.assertIn("\033[", stdout)
-        self.assertIn("warning", stdout)
-        self.assertIn("[open]", stdout)
-        self.assertIn("Lesson:", stdout)
-        self.assertIn("Error:", stdout)
+        with mock.patch("sys.stdout", buf_out), mock.patch("sys.stderr", buf_err):
+            with self.assertRaises(ValueError):
+                boom()
 
-    def test_stats_and_search_surface_relevant_entries(self) -> None:
-        error_learning.add_entry(
-            self.log_path,
-            "parser_error",
-            "JSON payload was truncated before the closing brace",
-            "Chunk large responses and validate JSON before parsing",
-        )
-        error_learning.add_entry(
-            self.log_path,
-            "parser_error",
-            "Assistant returned invalid YAML front matter",
-            "Require fenced output and normalize indentation first",
-        )
-        error_learning.add_entry(
-            self.log_path,
-            "warning",
-            "Model warmed up slowly after a cold restart",
-            "Keep a lightweight health check running between batches",
-        )
+        self.assertIn("Prior errors", buf_err.getvalue())
+        store = self.read_store()
+        self.assertEqual(len(store["records"]), 2)
 
-        stats_code, stats_stdout, stats_stderr = self.run_cli("stats")
-        self.assertEqual(stats_code, 0)
-        self.assertEqual(stats_stderr, "")
-        self.assertIn("parser_error", stats_stdout)
-        self.assertIn("2", stats_stdout)
+    def test_cli_show_clear_export(self) -> None:
+        try:
+            raise json.JSONDecodeError("msg", "doc", 0)
+        except json.JSONDecodeError as exc:
+            error_learning.record_exception(exc, SCRIPT_KEY, db_path=self.db_path)
 
-        search_code, search_stdout, search_stderr = self.run_cli("search", "json parsing")
-        self.assertEqual(search_code, 0)
-        self.assertEqual(search_stderr, "")
-        self.assertIn("JSON payload was truncated", search_stdout)
-        self.assertNotIn("cold restart", search_stdout)
+        code, out, err = self.run_cli("show", "--limit", "5")
+        self.assertEqual(code, 0)
+        self.assertEqual(err, "")
+        self.assertIn("JSONDecodeError", out)
+        self.assertIn("Traceback (tail):", out)
 
+        export_path = self.db_path.with_suffix(".export.json")
+        try:
+            code, out, err = self.run_cli("export", "-o", str(export_path))
+            self.assertEqual(code, 0)
+            self.assertIn("Exported", out)
+            exported = json.loads(export_path.read_text(encoding="utf-8"))
+            self.assertIn("exported_at", exported)
+            self.assertEqual(len(exported["records"]), 1)
 
-if __name__ == "__main__":
-    unittest.main()
+            code, out, err = self.run_cli("clear")
+            self.assertEqual(code, 0)
+            self.assertIn("Cleared 1", out)
+            cleared = json.loads(self.db_path.read_text(encoding="utf-8"))
+            self.assertEqual(cleared["records"], [])
+        finally:
+            export_path.unlink(missing_ok=True)
+
+    def test_cli_list_alias(self) -> None:
+        for cmd in ("show", "list"):
+            with self.subTest(cmd=cmd):
+                code, _out, err = self.run_cli(cmd)
+                self.assertEqual(code, 0)
+                self.assertEqual(err, "")

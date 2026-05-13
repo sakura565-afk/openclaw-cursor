@@ -1,3 +1,4 @@
+data/error_history.json
 logs/sync_obsidian_*.json
 logs/nightly_pipeline.log
 .learnings/
