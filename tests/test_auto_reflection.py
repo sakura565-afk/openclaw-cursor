@@ -101,6 +101,46 @@ class AutoReflectionTests(unittest.TestCase):
             body = md_files[0].read_text(encoding="utf-8")
             self.assertIn("Lesson learned:", body)
 
+    def test_openclaw_session_json_extracts_wins_losses_and_writes_wins_losses_md(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            sess = root / "memory" / "sess1" / "session.json"
+            sess.parent.mkdir(parents=True)
+            sess.write_text(
+                json.dumps(
+                    {
+                        "messages": [
+                            {
+                                "role": "assistant",
+                                "content": "Decision: use PostgreSQL for the queue.",
+                            },
+                            {
+                                "role": "assistant",
+                                "content": "Traceback (most recent call last): connection refused",
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            run = auto_reflection.run_reflection(
+                root,
+                since_hours=1,
+                extra_globs=[],
+                dry_run=False,
+            )
+            cats = {i.category for i in run.insights}
+            self.assertIn("win", cats)
+            self.assertIn("loss", cats)
+            wl = list((root / ".learnings" / "wins_losses").glob("run_*.md"))
+            self.assertEqual(len(wl), 1)
+            body = wl[0].read_text(encoding="utf-8")
+            self.assertIn("## Wins", body)
+            self.assertIn("## Losses", body)
+            latest = json.loads((root / ".learnings" / "latest.json").read_text(encoding="utf-8"))
+            self.assertIn("wins_losses_md", latest)
+
     def test_post_webhook_uses_json_post(self):
         captured: dict[str, object] = {}
 
