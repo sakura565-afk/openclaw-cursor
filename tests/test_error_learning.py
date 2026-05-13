@@ -23,6 +23,7 @@ class ErrorLearningTests(unittest.TestCase):
         self.log_path = self.root / ".learnings" / "error_log.json"
 
     def tearDown(self) -> None:
+        error_learning._COLORS_DISABLED = False
         self.tempdir.cleanup()
 
     def read_store(self) -> dict[str, object]:
@@ -131,6 +132,89 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertEqual(search_stderr, "")
         self.assertIn("JSON payload was truncated", search_stdout)
         self.assertNotIn("cold restart", search_stdout)
+
+    def test_list_json_outputs_valid_document(self) -> None:
+        error_learning.add_entry(
+            self.log_path,
+            "network",
+            "Connection reset by peer",
+            "Retry with exponential backoff",
+        )
+        exit_code, stdout, stderr = self.run_cli("list", "--json")
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        self.assertNotIn("\033[", stdout)
+        doc = json.loads(stdout)
+        self.assertEqual(doc["schema_version"], 1)
+        self.assertEqual(len(doc["entries"]), 1)
+        self.assertEqual(doc["entries"][0]["category"], "network")
+
+    def test_search_blank_query_returns_recent_entries(self) -> None:
+        old = error_learning.build_entry(
+            "c",
+            "old",
+            "l",
+            timestamp="2020-01-01T00:00:00Z",
+        )
+        newer = error_learning.build_entry(
+            "c",
+            "newer",
+            "l",
+            timestamp="2026-01-02T00:00:00Z",
+        )
+        error_learning.save_store(
+            self.log_path,
+            {"schema_version": 1, "entries": [old, newer]},
+        )
+        exit_code, stdout, stderr = self.run_cli("search", "   ", "--limit", "1", "--json")
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        doc = json.loads(stdout)
+        self.assertEqual(len(doc["entries"]), 1)
+        self.assertEqual(doc["entries"][0]["error"], "newer")
+
+    def test_remove_and_set_resolved_mutate_store(self) -> None:
+        error_learning.add_entry(self.log_path, "x", "e1", "l1")
+        store = self.read_store()
+        entry_id = str(store["entries"][0]["id"])
+
+        removed, ok = error_learning.remove_entry(self.log_path, entry_id)
+        self.assertTrue(ok)
+        self.assertEqual(removed["error"], "e1")
+        self.assertEqual(len(self.read_store()["entries"]), 0)
+
+        error_learning.add_entry(self.log_path, "y", "e2", "l2", resolved=False)
+        store2 = self.read_store()
+        eid2 = str(store2["entries"][0]["id"])
+        entry, changed = error_learning.set_entry_resolved(self.log_path, eid2, resolved=True)
+        self.assertTrue(changed)
+        self.assertTrue(entry["resolved"])
+        self.assertEqual(entry["id"], eid2)
+
+        entry2, changed2 = error_learning.set_entry_resolved(self.log_path, eid2, resolved=True)
+        self.assertFalse(changed2)
+        self.assertTrue(entry2["resolved"])
+
+    def test_remove_cli_unknown_id_exits_nonzero(self) -> None:
+        exit_code, _stdout, stderr = self.run_cli("remove", "nonexistent")
+        self.assertEqual(exit_code, 1)
+        self.assertIn("No entry found", stderr)
+
+    def test_invalid_schema_version_raises(self) -> None:
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.log_path.write_text(
+            '{"schema_version": "nope", "entries": []}', encoding="utf-8"
+        )
+        with self.assertRaises(error_learning.ErrorLearningError):
+            error_learning.load_store(self.log_path)
+
+    def test_no_color_flag_disables_ansi(self) -> None:
+        error_learning.add_entry(self.log_path, "c", "err", "les")
+        exit_code, stdout, stderr = self.run_cli("--no-color", "list")
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        self.assertNotIn("\033[", stdout)
+        self.assertIn("err", stdout)
 
 
 if __name__ == "__main__":
