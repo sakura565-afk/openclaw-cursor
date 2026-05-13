@@ -63,16 +63,38 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertIn("Duplicate entry detected", second_stdout)
 
         store = self.read_store()
-        self.assertEqual(store["schema_version"], 1)
+        self.assertEqual(store["schema_version"], 2)
         self.assertEqual(len(store["entries"]), 1)
 
         entry = store["entries"][0]
         self.assertEqual(
             set(entry.keys()),
-            {"id", "timestamp", "category", "error", "lesson", "resolved"},
+            {"id", "timestamp", "category", "error", "lesson", "resolved", "recurrence_count", "last_seen"},
         )
         self.assertEqual(entry["category"], "runtime_error")
         self.assertTrue(entry["resolved"])
+        self.assertEqual(entry["recurrence_count"], 2)
+
+        md_path = self.root / ".learnings" / "ERRORS.md"
+        self.assertTrue(md_path.exists())
+        md_text = md_path.read_text(encoding="utf-8")
+        self.assertIn("<!-- error-learning:auto-begin -->", md_text)
+        self.assertIn("OpenClaw session crashed", md_text)
+
+        exit_code, third_stdout, third_stderr = self.run_cli(
+            "add",
+            "runtime_error",
+            "OpenClaw session crashed after a timeout",
+            "Retry with a smaller prompt and checkpoint intermediate state",
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(third_stderr, "")
+        self.assertIn("Pattern flag", third_stdout)
+        store_after = self.read_store()
+        self.assertEqual(store_after["entries"][0]["recurrence_count"], 3)
+        md_after = md_path.read_text(encoding="utf-8")
+        self.assertIn("Recurring patterns (auto-detected)", md_after)
+        self.assertIn("runtime_error", md_after)
 
     def test_list_command_outputs_colorized_entries_and_status(self) -> None:
         error_learning.add_entry(
