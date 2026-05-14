@@ -197,6 +197,160 @@ class ToolDiscoveryTests(unittest.TestCase):
         self.assertEqual(payload["goal"], "send notification")
         self.assertEqual(len(payload["suggestions"]), 1)
 
+    def test_scan_populates_registry_and_markdown(self) -> None:
+        root = self._build_repo()
+        (root / "src").mkdir(parents=True)
+        (root / "src" / "alpha_client.py").write_text(
+            textwrap.dedent(
+                '''
+                """HTTP helper for the Alpha observability API."""
+
+                import argparse
+                import requests
+
+                class AlphaClient:
+                    """Thin wrapper around the Alpha REST API."""
+
+                    def get(self, path: str) -> str:
+                        return requests.get(path).text
+
+                def run_cli():
+                    """Run the Alpha CLI entrypoint with argparse-backed flags."""
+                    parser = argparse.ArgumentParser()
+                    parser.parse_args()
+
+                if __name__ == "__main__":
+                    run_cli()
+                '''
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        reg = root / "tools_inventory.json"
+        md = root / "TOOLS_INVENTORY.md"
+        exit_code = tool_discovery.main(
+            [
+                "--root",
+                str(root),
+                "--registry",
+                str(reg),
+                "scan",
+                "--no-markdown",
+            ]
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(reg.exists())
+        _, tools = tool_discovery.load_registry(reg)
+        kinds = {t.kind for t in tools}
+        self.assertIn("module", kinds)
+        self.assertIn("class", kinds)
+        self.assertIn("function", kinds)
+
+        exit_code = tool_discovery.main(
+            ["--root", str(root), "--registry", str(reg), "scan", "--markdown-output", str(md)]
+        )
+        self.assertEqual(exit_code, 0)
+        text = md.read_text(encoding="utf-8")
+        self.assertIn("AlphaClient", text)
+        self.assertIn("## Index", text)
+
+    def test_add_tool_and_search(self) -> None:
+        root = self._build_repo()
+        reg = root / "tools_inventory.json"
+        (root / "scripts" / "stub.py").write_text('"""stub"""\n', encoding="utf-8")
+        tool_discovery.main(["--root", str(root), "--registry", str(reg), "scan", "--no-markdown"])
+        code = tool_discovery.main(
+            [
+                "--root",
+                str(root),
+                "--registry",
+                str(reg),
+                "add-tool",
+                "--name",
+                "Custom helper",
+                "--description",
+                "Does custom analytics for queue dashboards",
+                "--path",
+                "scripts/stub.py",
+                "--example",
+                "python -m scripts.stub --help",
+            ]
+        )
+        self.assertEqual(code, 0)
+        buf = io.StringIO()
+        prev = sys.stdout
+        try:
+            sys.stdout = buf
+            tool_discovery.main(
+                ["--root", str(root), "--registry", str(reg), "search-tools", "analytics"]
+            )
+        finally:
+            sys.stdout = prev
+        self.assertIn("Custom helper", buf.getvalue())
+
+    def test_match_skills_links_inventory_to_skill_files(self) -> None:
+        root = self._build_repo()
+        skill_dir = root / "skills" / "demo"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "# Queue analytics playbook\n\nUse queue dashboards and analytics exports.\n",
+            encoding="utf-8",
+        )
+        (root / "scripts" / "queue_board.py").write_text(
+            textwrap.dedent(
+                '''
+                """Dashboards for queue analytics."""
+
+                import argparse
+
+                if __name__ == "__main__":
+                    argparse.ArgumentParser().parse_args()
+                '''
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        reg = root / "tools_inventory.json"
+        tool_discovery.main(["--root", str(root), "--registry", str(reg), "scan", "--no-markdown"])
+        _, tools = tool_discovery.load_registry(reg)
+        tool_discovery.attach_skill_hints(root, tools)
+        board = next(t for t in tools if t.name == "queue_board")
+        self.assertTrue(any("SKILL.md" in h["path"] for h in board.suggested_skills))
+
+    def test_docs_from_registry_writes_markdown(self) -> None:
+        root = self._build_repo()
+        (root / "scripts" / "solo.py").write_text(
+            textwrap.dedent(
+                '''
+                """Solo runner."""
+                import argparse
+                if __name__ == "__main__":
+                    argparse.ArgumentParser().parse_args()
+                '''
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        reg = root / "tools_inventory.json"
+        tool_discovery.main(["--root", str(root), "--registry", str(reg), "scan", "--no-markdown"])
+        out = root / "registry_docs.md"
+        code = tool_discovery.main(
+            [
+                "--root",
+                str(root),
+                "--registry",
+                str(reg),
+                "docs",
+                "--from-registry",
+                "--output",
+                str(out),
+            ]
+        )
+        self.assertEqual(code, 0)
+        body = out.read_text(encoding="utf-8")
+        self.assertIn("Discovered tools documentation", body)
+        self.assertIn("solo", body)
+
 
 if __name__ == "__main__":
     unittest.main()
