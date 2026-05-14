@@ -197,6 +197,50 @@ class ToolDiscoveryTests(unittest.TestCase):
         self.assertEqual(payload["goal"], "send notification")
         self.assertEqual(len(payload["suggestions"]), 1)
 
+    def test_scan_writes_index_and_report_outputs_table(self) -> None:
+        root = self._build_repo()
+        (root / "data").mkdir(parents=True, exist_ok=True)
+        (root / "docs").mkdir(parents=True, exist_ok=True)
+        (root / "docs" / "README.md").write_text(
+            "<!-- doc-generator:start -->\n<!-- doc-generator:end -->\n",
+            encoding="utf-8",
+        )
+        (root / "README.md").write_text("# test\n", encoding="utf-8")
+        (root / "scripts" / "indexed_tool.py").write_text(
+            textwrap.dedent(
+                '''
+                """Sample indexed tool."""
+
+                def run(name: str, count: int = 1) -> str:
+                    """Execute the tool."""
+                    return name
+                '''
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+
+        exit_code = tool_discovery.main(["--root", str(root), "scan"])
+        self.assertEqual(exit_code, 0)
+        index_path = root / "data" / "tools_index.json"
+        self.assertTrue(index_path.is_file())
+        loaded = tool_discovery.load_tools_index(index_path)
+        self.assertEqual(len(loaded.tools), 1)
+        self.assertEqual(loaded.tools[0].path, "scripts/indexed_tool.py")
+        self.assertIn("run", loaded.tools[0].public_functions[0]["name"])
+
+        buf = io.StringIO()
+        prev = sys.stdout
+        try:
+            sys.stdout = buf
+            code = tool_discovery.main(["--root", str(root), "report", "--format", "md"])
+        finally:
+            sys.stdout = prev
+        self.assertEqual(code, 0)
+        out = buf.getvalue()
+        self.assertIn("| Tool | Path | Purpose | Last Updated |", out)
+        self.assertIn("scripts/indexed_tool.py", out)
+
 
 if __name__ == "__main__":
     unittest.main()
