@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""Extract key decisions, lessons, reusable patterns, and tool usage from chat transcripts for memory pipelines."""
+"""Extract categorized Q&A and signal-rich exchanges from OpenClaw session logs.
+
+Reads transcript-style text logs or JSON message exports (typically under
+``sessions/``), classifies exchanges for self-improvement pipelines, and writes
+structured Markdown under ``.learnings/conversations/``. Includes deduplication
+against previously extracted files and a small CLI (extract / list / search).
+"""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -11,9 +18,33 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from scripts.optimize_context import TURN_PATTERN, read_text, repo_root
+
+# -----------------------------------------------------------------------------
+# Conversation taxonomy (stored in front matter and filenames)
+# -----------------------------------------------------------------------------
+
+ConversationType = Literal[
+    "error_corrections",
+    "decisions",
+    "tool_usages",
+    "insights",
+    "questions",
+]
+
+CONVERSATION_TYPES: tuple[ConversationType, ...] = (
+    "error_corrections",
+    "decisions",
+    "tool_usages",
+    "insights",
+    "questions",
+)
 
 # -----------------------------------------------------------------------------
 # Patterns: decisions / commitments / takeaways (English + common mixed usage)
@@ -27,7 +58,7 @@ DECISION_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"(?:we(?:'ve)?\s+(?:decided|agreed|chose)|let'?s\s+go\s+with|final(?:ly)?\s*:\s*)(.+)",
         r"(?:\bapproved\b|\bfinalize[ds]?\b|\bchosen\b\s+(?:approach|option|path))\s*[:\-]?\s*(.+)",
         r"^\s*(?:TL;DR|TDLR|takeaway)s?\s*[:\-—]\s*(.+)",
-        r"\b(?:concluded|conclusion)\s+(?:that\s+)?(.{10,})",  # allow inline
+        r"\b(?:concluded|conclusion)\s+(?:that\s+)?(.{10,})",
         r"\bdecision\s*[:\-—]\s*(.+)",
     )
 )
@@ -41,7 +72,6 @@ LEARNING_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     )
 )
 
-# Reusable workflows, conventions, and “how we do this here” cues
 PATTERN_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     re.compile(p, re.IGNORECASE)
     for p in (
@@ -53,13 +83,31 @@ PATTERN_LINE_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     )
 )
 
+ERROR_CORRECTION_HINT = re.compile(
+    r"(?i)\b("
+    r"actually|correction|corrected|my mistake|i was wrong|sorry[, ]|"
+    r"that was wrong|misread|misunderstood|mis-?stated|"
+    r"instead of|not quite|not correct|erroneous|"
+    r"\bfix(?:ed|ing)?\b.*\b(error|bug)|"
+    r"rollback|revert(?:ed)?|undo that"
+    r")\b"
+)
+
+USER_QUESTIONISH = re.compile(
+    r"(?i)(?:^|\n)\s*(?:"
+    r".*\?|"  # explicit question mark
+    r"(?:how|what|why|when|where|who|which)\b.{6,}|"
+    r"(?:could|can|should|would|is|are|do|does|did)\s+you\b.{6,}|"
+    r"(?:please|pls)\s+(?:explain|clarify|help)"
+    r")"
+)
+
 SCHEMA_VERSION = 1
 ARTIFACT_TYPE = "conversation_knowledge"
 
-# Inline tool/function references in transcripts
 TOOL_REGEXES: tuple[re.Pattern[str], ...] = (
     re.compile(r'\b(?:invoke|calling|called)\s+(?:tool\s+)?[`"]?([\w\-./:]+)[`"]?', re.I),
-    re.compile(r'`(?:functions?\.)?([\w\-]+)', re.I),
+    re.compile(r"`(?:functions?\.)?([\w\-]+)", re.I),
     re.compile(r'"(?:tool|toolName|name|function)"\s*:\s*"([^"]+)"'),
     re.compile(r"\[tool\s*:\s*([\w\-./:]+)\]", re.I),
     re.compile(r"\b(?:mcp|MCP)[_\s:]+([\w\-]+)", re.I),
@@ -79,8 +127,41 @@ STRUCT_TOOL_KEYS = frozenset(
 )
 
 
+MIN_EXCHANGE_CHARS = 24
+
+
 def utc_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
+
+
+def default_conversations_dir(workspace_root: Path) -> Path:
+    """Directory for per-exchange Markdown extracts (gitignored by default)."""
+
+    return (workspace_root / ".learnings" / "conversations").resolve()
+
+
+def fingerprint_for_text(*parts: str) -> str:
+    """Stable SHA-256 hex digest of normalized joined text (full length for YAML)."""
+
+    blob = "\n".join(normalize_ws(p) for p in parts if p)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def load_existing_fingerprints(conversations_dir: Path) -> set[str]:
+    """Collect ``content_fingerprint`` values already stored on disk."""
+
+    found: set[str] = set()
+    if not conversations_dir.is_dir():
+        return found
+    for path in conversations_dir.glob("*.md"):
+        for line in read_text(path).splitlines():
+            stripped = line.strip()
+            if stripped.startswith("content_fingerprint:"):
+                fp = stripped.split(":", 1)[1].strip()
+                if fp:
+                    found.add(fp)
+                break
+    return found
 
 
 def _infer_turn(blob: dict[str, Any], index: int) -> int:
@@ -119,14 +200,13 @@ def _flatten_content_piece(piece: Any) -> tuple[str, list[str]]:
     if isinstance(piece, dict):
         typ = str(piece.get("type") or "").lower()
 
-        # Anthropic/OpenClaw-style tool_use blocks
         if typ in ("tool_use", "tool-use", "toolcall", "function", "tool_invocation"):
             name = _stringify_toolish_dict(piece)
             if name:
                 tools.append(name)
                 return "", tools
 
-        if typ == "tool_result" or typ == "tool-result":
+        if typ in ("tool_result", "tool-result"):
             return "", tools
 
         if isinstance(piece.get("text"), str):
@@ -140,7 +220,6 @@ def _flatten_content_piece(piece: Any) -> tuple[str, list[str]]:
 
         inner = piece.get("input") or piece.get("arguments")
         if isinstance(inner, dict) and txt == "":
-            # sometimes model echoes tool inputs as learning context
             try:
                 snippet = json.dumps(inner, ensure_ascii=False)[:500]
                 if snippet:
@@ -175,7 +254,6 @@ def _tool_names_from_calls(value: Any) -> list[str]:
                 n = fn.get("name")
                 if isinstance(n, str) and n.strip():
                     names.append(n.strip())
-            # OpenAI-ish id + name siblings
             n2 = item.get("name") or item.get("tool_name")
             if isinstance(n2, str) and n2.strip() and n2 not in names:
                 names.append(n2.strip())
@@ -223,7 +301,7 @@ def _segments_from_messages(messages: list[Any]) -> list[tuple[int, str | None, 
                 continue
             seen.add(tn)
             segments.append((turn, "tool", f"{tn}"))
-        # fall back name field on structured tool-only rows
+
         if not text.strip() and not blob_tools:
             maybe = raw.get("name") or raw.get("tool")
             if isinstance(maybe, str) and rl in {"tool", "assistant", "", "assistant_tool"}:
@@ -234,7 +312,6 @@ def _segments_from_messages(messages: list[Any]) -> list[tuple[int, str | None, 
             text = (text + "\n" + rest).strip() if text else rest
 
         if text.strip():
-            # Distinguish tool *invocation* rows (handled above) from provider "tool" role *outputs*.
             eff_role = "tool_output" if rl == "tool" else (rl if rl else None)
             segments.append((turn, eff_role, text.strip()))
 
@@ -360,7 +437,6 @@ def parse_text_session(path: Path) -> list[tuple[int, str | None, str]]:
     )
 
     for line_number, line in enumerate(read_text(path).splitlines(), start=1):
-        stripped = line.rstrip("\n\r")
         m_turn = TURN_PATTERN.search(line)
         if m_turn:
             current_turn = int(m_turn.group(1))
@@ -373,8 +449,8 @@ def parse_text_session(path: Path) -> list[tuple[int, str | None, str]]:
             mapping = {"human": "user"}
             rl = mapping.get(rl, rl)
             segments.append((current_turn, rl, m_role.group("body").strip()))
-        elif stripped.strip():
-            segments.append((current_turn, None, stripped.strip()))
+        elif line.rstrip("\n\r").strip():
+            segments.append((current_turn, None, line.rstrip("\n\r").strip()))
 
     return segments
 
@@ -444,7 +520,7 @@ def extract_tool_signals(text: str) -> Counter[str]:
 
 @dataclass
 class ConversationDigest:
-    """Structured output for markdown + JSON."""
+    """Aggregate session view for JSON summaries and legacy consumers."""
 
     source: str
     generated_at_utc: str
@@ -459,6 +535,31 @@ class ConversationDigest:
         merged: Counter[str] = Counter(self.tool_structured)
         merged.update(self.tool_textual)
         return merged
+
+
+@dataclass
+class ExtractedExchange:
+    """One categorized slice of a session suitable for a standalone Markdown file."""
+
+    conversation_type: ConversationType
+    source: str
+    source_turn: int
+    title: str
+    user_text: str
+    assistant_text: str
+    tools_mentioned: list[str]
+    content_fingerprint: str
+
+    def body_for_fingerprint(self) -> str:
+        tools_line = ", ".join(self.tools_mentioned)
+        return "\n".join(
+            (
+                self.conversation_type,
+                self.user_text,
+                self.assistant_text,
+                tools_line,
+            )
+        )
 
 
 def analyze_segments(segments: list[tuple[int, str | None, str]], source_display: str) -> ConversationDigest:
@@ -480,12 +581,11 @@ def analyze_segments(segments: list[tuple[int, str | None, str]], source_display
             blobs_for_text_tools.append(text)
             continue
 
-        if rl in {"", "assistant", "agent"} or rl is None:
+        if rl in {"", "assistant", "agent"} or role is None:
             decisions_acc.extend(match_patterns(text, DECISION_LINE_PATTERNS))
             learnings_acc.extend(match_patterns(text, LEARNING_LINE_PATTERNS))
             patterns_acc.extend(match_patterns(text, PATTERN_LINE_PATTERNS))
         elif rl == "user":
-            # users sometimes phrase decisions explicitly
             decisions_acc.extend(match_patterns(text, DECISION_LINE_PATTERNS))
             patterns_acc.extend(match_patterns(text, PATTERN_LINE_PATTERNS))
 
@@ -507,7 +607,163 @@ def analyze_segments(segments: list[tuple[int, str | None, str]], source_display
     )
 
 
+def _classify_exchange(
+    user_blob: str,
+    assistant_blob: str,
+    tools: list[str],
+) -> ConversationType:
+    """Pick a single primary label using a fixed priority ladder."""
+
+    combined = f"{user_blob}\n{assistant_blob}"
+    scores: dict[ConversationType, int] = {t: 0 for t in CONVERSATION_TYPES}
+
+    if ERROR_CORRECTION_HINT.search(assistant_blob) or ERROR_CORRECTION_HINT.search(user_blob):
+        scores["error_corrections"] += 6
+    if match_patterns(combined, DECISION_LINE_PATTERNS):
+        scores["decisions"] += 5
+    if match_patterns(assistant_blob, LEARNING_LINE_PATTERNS) or match_patterns(
+        assistant_blob, PATTERN_LINE_PATTERNS
+    ):
+        scores["insights"] += 4
+    if tools or extract_tool_signals(assistant_blob) or extract_tool_signals(user_blob):
+        scores["tool_usages"] += 3
+    if "?" in user_blob or USER_QUESTIONISH.search(user_blob.strip()):
+        scores["questions"] += 2
+
+    best = max(scores, key=lambda k: scores[k])
+    if scores[best] == 0 and len(normalize_ws(assistant_blob)) >= MIN_EXCHANGE_CHARS:
+        return "insights"
+    if scores[best] == 0:
+        return "questions" if user_blob.strip() else "insights"
+    return best
+
+
+def _truncate_title(text: str, limit: int = 72) -> str:
+    one = normalize_ws(text)
+    if len(one) <= limit:
+        return one or "exchange"
+    return one[: limit - 1] + "…"
+
+
+def build_extracted_exchanges(
+    segments: list[tuple[int, str | None, str]],
+    source_display: str,
+) -> list[ExtractedExchange]:
+    """Group segments into user/assistant windows and emit classified exchanges."""
+
+    exchanges: list[ExtractedExchange] = []
+
+    user_buf: list[str] = []
+    asst_buf: list[str] = []
+    tool_buf: list[str] = []
+    block_min_turn = 1
+
+    def note_turn(turn: int) -> None:
+        nonlocal block_min_turn
+        if not (user_buf or asst_buf or tool_buf):
+            block_min_turn = turn
+        else:
+            block_min_turn = min(block_min_turn, turn)
+
+    def flush() -> None:
+        nonlocal user_buf, asst_buf, tool_buf, block_min_turn
+        u = "\n\n".join(x for x in user_buf if x.strip()).strip()
+        a_parts: list[str] = []
+        if tool_buf:
+            a_parts.append("**Tools (structured):** " + ", ".join(f"`{t}`" for t in dict.fromkeys(tool_buf)))
+        if asst_buf:
+            a_parts.append("\n\n".join(x for x in asst_buf if x.strip()))
+        a = "\n\n".join(a_parts).strip()
+        if len(normalize_ws(u + a)) < MIN_EXCHANGE_CHARS and not tool_buf:
+            user_buf, asst_buf, tool_buf = [], [], []
+            return
+        ctype = _classify_exchange(u, "\n".join(asst_buf), tool_buf)
+        title = _truncate_title(u or a or (tool_buf[0] if tool_buf else "exchange"))
+        fp = fingerprint_for_text(ctype, source_display, str(block_min_turn), u, a, ",".join(tool_buf))
+        exchanges.append(
+            ExtractedExchange(
+                conversation_type=ctype,
+                source=source_display,
+                source_turn=block_min_turn,
+                title=title,
+                user_text=u,
+                assistant_text=a,
+                tools_mentioned=list(dict.fromkeys(tool_buf)),
+                content_fingerprint=fp,
+            )
+        )
+        user_buf, asst_buf, tool_buf = [], [], []
+
+    for turn, role, text in segments:
+        rl = (role or "").lower()
+
+        if rl == "user":
+            if user_buf or asst_buf or tool_buf:
+                flush()
+            note_turn(turn)
+            user_buf.append(text)
+            continue
+
+        if rl == "tool":
+            note_turn(turn)
+            tool_buf.append(text.strip())
+            continue
+
+        if rl == "tool_output":
+            note_turn(turn)
+            asst_buf.append(f"_(tool output)_\n{text}")
+            continue
+
+        if rl in {"assistant", "agent", "system"} or role is None:
+            note_turn(turn)
+            asst_buf.append(text)
+            continue
+
+        note_turn(turn)
+        asst_buf.append(text)
+
+    if user_buf or asst_buf or tool_buf:
+        flush()
+
+    return exchanges
+
+
+def render_exchange_markdown(ex: ExtractedExchange, extracted_at_utc: str) -> str:
+    """YAML front matter plus readable sections for human review."""
+
+    lines = [
+        "---",
+        f'conversation_type: "{ex.conversation_type}"',
+        f"content_fingerprint: {ex.content_fingerprint}",
+        f'source: "{ex.source.replace(chr(34), chr(39))}"',
+        f"source_turn: {ex.source_turn}",
+        f'title: "{ex.title.replace(chr(34), chr(39))}"',
+        f"extracted_at_utc: {extracted_at_utc}",
+        "---",
+        "",
+        f"## {ex.title}",
+        "",
+    ]
+    if ex.user_text.strip():
+        lines.extend(["### User", "", ex.user_text.strip(), ""])
+    if ex.assistant_text.strip():
+        lines.extend(["### Assistant", "", ex.assistant_text.strip(), ""])
+    if not ex.user_text.strip() and not ex.assistant_text.strip() and ex.tools_mentioned:
+        lines.extend(["### Tool usage", "", ", ".join(f"`{t}`" for t in ex.tools_mentioned), ""])
+
+    lines.extend(
+        [
+            "---",
+            "*Generated by `scripts/conversation_extractor.py` for self-improvement memory.*",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def render_markdown(d: ConversationDigest) -> str:
+    """Aggregate digest view (session-level summary Markdown)."""
+
     lines = [
         "# Conversation knowledge extract",
         "",
@@ -555,7 +811,13 @@ def render_markdown(d: ConversationDigest) -> str:
     else:
         lines.append("- *(no tool mentions parsed)*")
 
-    lines.extend(["", "---", "*OpenClaw conversation_extractor.py — distill session value into `memory/`.*"])
+    lines.extend(
+        [
+            "",
+            "---",
+            "*OpenClaw `conversation_extractor.py` — distill session value into `.learnings/conversations/`.*",
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -585,7 +847,6 @@ def digest_to_dict(d: ConversationDigest) -> dict[str, Any]:
             "suggested_tags": _suggested_tags(d),
             "summary_one_liners": _summary_one_liners(d),
         },
-        # Backward-compatible field names (older consumers)
         "decisions": d.decisions,
         "learnings": d.learnings,
     }
@@ -605,8 +866,6 @@ def _suggested_tags(d: ConversationDigest) -> list[str]:
 
 
 def _summary_one_liners(d: ConversationDigest) -> list[str]:
-    """Short lines suitable for appending to MEMORY.md or daily notes."""
-
     out: list[str] = []
     if d.decisions:
         out.append(f"Decisions captured: {len(d.decisions)}")
@@ -621,17 +880,55 @@ def _summary_one_liners(d: ConversationDigest) -> list[str]:
     return out
 
 
+def _safe_filename_part(s: str) -> str:
+    return re.sub(r"[^\w\-_.]+", "_", s).strip("_") or "session"
+
+
+def write_exchange_files(
+    exchanges: list[ExtractedExchange],
+    conversations_dir: Path,
+    *,
+    existing_fingerprints: set[str] | None = None,
+) -> tuple[int, list[Path]]:
+    """Write per-exchange Markdown; skip fingerprints already on disk or in ``existing_fingerprints``."""
+
+    conversations_dir.mkdir(parents=True, exist_ok=True)
+    known = set(existing_fingerprints or set())
+    known |= load_existing_fingerprints(conversations_dir)
+
+    written: list[Path] = []
+    skipped = 0
+    extracted_at = datetime.now(timezone.utc).isoformat()
+
+    for ex in exchanges:
+        if ex.content_fingerprint in known:
+            skipped += 1
+            continue
+        short = ex.content_fingerprint[:12]
+        base = f"{ex.conversation_type}__{short}.md"
+        path = conversations_dir / base
+        suffix = 0
+        while path.exists():
+            suffix += 1
+            path = conversations_dir / f"{ex.conversation_type}__{short}_{suffix}.md"
+        path.write_text(render_exchange_markdown(ex, extracted_at), encoding="utf-8")
+        known.add(ex.content_fingerprint)
+        written.append(path)
+
+    return skipped, written
+
+
 def write_digest(
     digest: ConversationDigest,
-    memory_dir: Path,
+    out_dir: Path,
     stem: str,
 ) -> tuple[Path, Path]:
-    memory_dir.mkdir(parents=True, exist_ok=True)
-    safe = re.sub(r"[^\w\-_.]+", "_", stem).strip("_") or "session"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe = _safe_filename_part(stem)
     tag = utc_stamp()
 
-    md_path = memory_dir / f"conversation_extract_{safe}_{tag}.md"
-    js_path = memory_dir / f"conversation_extract_{safe}_{tag}.json"
+    md_path = out_dir / f"conversation_digest_{safe}_{tag}.md"
+    js_path = out_dir / f"conversation_digest_{safe}_{tag}.json"
 
     md_path.write_text(render_markdown(digest), encoding="utf-8")
     js_path.write_text(json.dumps(digest_to_dict(digest), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -639,74 +936,215 @@ def write_digest(
     return md_path, js_path
 
 
-def run_extraction(session_path: Path, memory_dir: Path, workspace_root: Path) -> tuple[Path, Path]:
+def run_extraction(
+    session_path: Path,
+    conversations_dir: Path,
+    workspace_root: Path,
+) -> tuple[Path, Path]:
+    """Parse a session file, write digest JSON/Markdown and categorized exchanges."""
+
     segments = parse_session_log(session_path.resolve())
 
-    digest = analyze_segments(segments, session_path.resolve().as_posix())
-
     stem = session_path.stem
-    # prefer session id from parent folder if standard layout .../sessions/foo/session.json
     parent = session_path.parent.name
     if parent and parent not in {".", ""}:
         stem = f"{parent}__{session_path.stem}"
 
     relative = session_path.resolve().as_posix()
     workspace_posix = workspace_root.resolve().as_posix()
+    source_display = relative
     if relative.startswith(workspace_posix):
-        short = Path(relative[len(workspace_posix) :].lstrip("/")).as_posix()
-        digest.source = short
+        source_display = Path(relative[len(workspace_posix) :].lstrip("/")).as_posix()
 
-    return write_digest(digest, memory_dir, stem)
+    digest = analyze_segments(segments, source_display)
+    exchanges = build_extracted_exchanges(segments, source_display)
+
+    digest_payload = digest_to_dict(digest)
+    digest_payload["exchanges"] = [
+        {
+            "conversation_type": e.conversation_type,
+            "content_fingerprint": e.content_fingerprint,
+            "source_turn": e.source_turn,
+            "title": e.title,
+        }
+        for e in exchanges
+    ]
+
+    conversations_dir.mkdir(parents=True, exist_ok=True)
+    safe = _safe_filename_part(stem)
+    tag = utc_stamp()
+    md_path = conversations_dir / f"conversation_digest_{safe}_{tag}.md"
+    js_path = conversations_dir / f"conversation_digest_{safe}_{tag}.json"
+
+    md_path.write_text(render_markdown(digest), encoding="utf-8")
+    js_path.write_text(json.dumps(digest_payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    skipped, _written = write_exchange_files(exchanges, conversations_dir)
+    digest_payload["exchanges_written"] = len(_written)
+    digest_payload["exchanges_skipped_duplicate"] = skipped
+    js_path.write_text(json.dumps(digest_payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    return md_path, js_path
+
+
+def iter_session_files(sessions_root: Path) -> list[Path]:
+    """Collect likely transcript files under ``sessions/``."""
+
+    if not sessions_root.is_dir():
+        return []
+    out: list[Path] = []
+    for pattern in ("**/*.json", "**/*.txt", "**/*.log", "**/*.md"):
+        out.extend(p for p in sessions_root.glob(pattern) if p.is_file())
+    return sorted(set(out))
+
+
+def list_extracted_conversations(conversations_dir: Path, *, limit: int = 200) -> list[Path]:
+    """Return recent Markdown extracts (newest first by mtime)."""
+
+    if not conversations_dir.is_dir():
+        return []
+    files = [p for p in conversations_dir.glob("*.md") if p.is_file()]
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return files[:limit]
+
+
+def search_extracted_conversations(conversations_dir: Path, keyword: str, *, limit: int = 50) -> list[Path]:
+    """Case-insensitive substring search across Markdown bodies and front matter."""
+
+    if not keyword.strip() or not conversations_dir.is_dir():
+        return []
+    needle = keyword.casefold()
+    hits: list[Path] = []
+    for path in sorted(conversations_dir.glob("*.md")):
+        if not path.is_file():
+            continue
+        blob = read_text(path).casefold()
+        if needle in blob:
+            hits.append(path)
+        if len(hits) >= limit:
+            break
+    return hits
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Parse session logs (JSON or text), extract knowledge, write markdown + JSON into memory/."
-    )
-    p.add_argument(
-        "session_log",
-        type=Path,
-        nargs="?",
-        help="Path to session transcript (.json, .log, or text). Omit with --stdin.",
-    )
-    p.add_argument(
-        "--stdin",
-        action="store_true",
-        help="Read transcript JSON/text from stdin (written to a temp file under memory/).",
-    )
-    p.add_argument(
-        "--memory-dir",
-        type=Path,
-        default=None,
-        help="Destination directory (default: <repo>/memory).",
+        description=(
+            "Parse OpenClaw session transcripts (text or JSON), extract categorized "
+            "exchanges, and store Markdown under .learnings/conversations/."
+        )
     )
     p.add_argument(
         "--workspace-root",
         type=Path,
         default=None,
-        help="Workspace root for relative paths in output (defaults to repo root).",
+        help="Repository root (defaults to parent of scripts/).",
     )
+    p.add_argument(
+        "--conversations-dir",
+        type=Path,
+        default=None,
+        help="Override output directory (default: <repo>/.learnings/conversations).",
+    )
+
+    sub = p.add_subparsers(dest="command", required=False)
+
+    ex = sub.add_parser("extract", help="Extract from one transcript or scan sessions/")
+    ex.add_argument(
+        "session_log",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="Path to session transcript (.json, .log, .txt, .md).",
+    )
+    ex.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read transcript JSON/text from stdin (spooled to a temp file).",
+    )
+    ex.add_argument(
+        "--all-sessions",
+        action="store_true",
+        help="Process every candidate file under <repo>/sessions/.",
+    )
+    ex.add_argument(
+        "--sessions-dir",
+        type=Path,
+        default=None,
+        help="Root folder to scan with --all-sessions (default: <repo>/sessions).",
+    )
+
+    list_p = sub.add_parser("list", help="List extracted Markdown files (most recent first).")
+    list_p.add_argument("--limit", type=int, default=200, help="Max paths to print.")
+
+    sr = sub.add_parser("search", help="Search extracted Markdown by keyword")
+    sr.add_argument("keyword", help="Case-insensitive substring to match.")
+    sr.add_argument("--limit", type=int, default=200, help="Max paths to print.")
+
     return p
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_arg_parser().parse_args(argv)
-    ws = (args.workspace_root or repo_root()).resolve()
-    memory_dir = (args.memory_dir or ws / "memory").resolve()
+def _normalize_argv(argv: list[str] | None) -> list[str] | None:
+    if not argv:
+        return argv
+    first = argv[0]
+    if first in ("-h", "--help", "extract", "list", "search"):
+        return argv
+    if first == "--stdin":
+        return ["extract", *argv]
+    # Legacy positional session path: `conversation_extractor.py path/to/log`
+    if Path(first).exists():
+        return ["extract", *argv]
+    return argv
 
+
+def main(argv: list[str] | None = None) -> int:
+    argv = _normalize_argv(list(sys.argv[1:] if argv is None else argv))
+    args = build_arg_parser().parse_args(argv)
+
+    ws = (args.workspace_root or repo_root()).resolve()
+    conversations_dir = (args.conversations_dir or default_conversations_dir(ws)).resolve()
+
+    if not getattr(args, "command", None):
+        sys.stderr.write(
+            "error: specify a subcommand (extract, list, search) or pass a session file path.\n"
+            "example: python scripts/conversation_extractor.py extract sessions/foo/transcript.json\n"
+        )
+        return 2
+
+    if args.command == "list":
+        paths = list_extracted_conversations(conversations_dir, limit=args.limit)
+        if not paths:
+            print(f"(no markdown files in {conversations_dir})")
+            return 0
+        for p in paths:
+            print(p.as_posix())
+        return 0
+
+    if args.command == "search":
+        paths = search_extracted_conversations(conversations_dir, args.keyword, limit=args.limit)
+        if not paths:
+            print(f"(no matches for {args.keyword!r} under {conversations_dir})")
+            return 0
+        for p in paths:
+            print(p.as_posix())
+        return 0
+
+    # extract
     if args.stdin:
         import tempfile
 
-        memory_dir.mkdir(parents=True, exist_ok=True)
+        conversations_dir.mkdir(parents=True, exist_ok=True)
         payload = sys.stdin.read()
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt", prefix="stdin_session_", dir=memory_dir)
+        tmp = tempfile.NamedTemporaryFile(
+            delete=False, suffix=".txt", prefix="stdin_session_", dir=conversations_dir
+        )
         try:
             path = Path(tmp.name)
             path.write_text(payload, encoding="utf-8")
         finally:
             tmp.close()
 
-        md_path, json_path = run_extraction(path, memory_dir, ws)
+        md_path, json_path = run_extraction(path, conversations_dir, ws)
         try:
             path.unlink(missing_ok=True)  # type: ignore[arg-type]
         except OSError:
@@ -716,8 +1154,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Wrote {json_path.as_posix()}")
         return 0
 
+    if args.all_sessions:
+        sessions_dir = (args.sessions_dir or ws / "sessions").resolve()
+        files = iter_session_files(sessions_dir)
+        if not files:
+            sys.stderr.write(f"error: no session files found under {sessions_dir}\n")
+            return 2
+        for f in files:
+            md_path, json_path = run_extraction(f, conversations_dir, ws)
+            print(f"{f.as_posix()} -> {md_path.name}, {json_path.name}")
+        return 0
+
     if not args.session_log:
-        sys.stderr.write("error: session_log path required unless --stdin is set.\n")
+        sys.stderr.write("error: session_log path required unless --stdin or --all-sessions.\n")
         return 2
 
     sp = args.session_log.resolve()
@@ -725,7 +1174,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"error: file not found: {sp}\n")
         return 2
 
-    md_path, json_path = run_extraction(sp, memory_dir, ws)
+    md_path, json_path = run_extraction(sp, conversations_dir, ws)
     print(f"Wrote {md_path.as_posix()}")
     print(f"Wrote {json_path.as_posix()}")
     return 0
