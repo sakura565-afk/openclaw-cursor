@@ -4,3 +4,4 @@ logs/nightly_pipeline.log
 __pycache__/
 *.py[cod]
 tool_discovery_report.md
+data/tools_index.json
