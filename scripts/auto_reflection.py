@@ -1,31 +1,25 @@
 #!/usr/bin/env python3
 """
-Cron-friendly self-reflection over recent agent-style logs and session artifacts.
+Cron-friendly self-reflection from recent ``memory/`` transcripts and daily logs.
 
-Scans configurable paths for logs and JSON, extracts wins and losses (failures,
-tracebacks, regressions vs fixes, decisions, passing checks), writes structured
-outputs under `.learnings/`, builds a periodic summary, and optionally posts the
-summary (Telegram or generic webhook).
+Scans ``memory/**/*.md`` and ``memory/**/*.json`` modified within a rolling UTC
+window (default: 7 days), extracts heuristic wins, failures, and lessons, then
+writes a single markdown file under ``.learnings/auto/`` with stable section
+headings. New **Insights** and **Action Items** lines are filtered against text
+already present anywhere under ``.learnings/`` so recurring lessons are not
+re-copied verbatim.
 
-Integrates with OpenClaw-style session transcripts the same way as
-`scripts/conversation_extractor.py` (messages / conversation JSON and line logs).
+Manual or cron usage (from repository root)::
 
-Example crontab (daily at 09:00 UTC):
+    python3 scripts/auto_reflection.py
+    python3 -m scripts.auto_reflection --stdout
 
-    0 9 * * * cd /path/to/repo && /usr/bin/python3 -m scripts.auto_reflection
+Environment (optional)::
 
-Standalone (from repo root):
-
-    python3 scripts/auto_reflection.py --stdout-summary
-
-Environment (all optional unless posting):
-
-- AUTO_REFLECTION_ROOT — workspace root (default: current working directory)
-- AUTO_REFLECTION_SESSION_GLOBS — extra comma-separated glob patterns relative to root
-- AUTO_REFLECTION_SESSION_DIRS — comma-separated extra directories (absolute or ~) to
-  scan with the same glob set (e.g. ~/.openclaw/workspace for live session.json trees)
-- TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID — post summary via Telegram sendMessage
-- REFLECTION_WEBHOOK_URL — POST JSON {\"text\": \"...\", \"meta\": {...}} to this URL
+    AUTO_REFLECTION_ROOT   — workspace root (default: current working directory)
+    AUTO_REFLECTION_DAYS   — integer days to look back (default: 7)
+    REFLECTION_WEBHOOK_URL — POST JSON ``{\"text\": \"...\", \"meta\": {...}}``
+    TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID — optional Telegram ``sendMessage``
 """
 
 from __future__ import annotations
@@ -39,27 +33,19 @@ import re
 import sys
 import urllib.error
 import urllib.request
-from collections import Counter
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Sequence
 
-
 LEARNINGS_DIR = ".learnings"
-INSIGHTS_SUBDIR = "insights"
-SUMMARIES_SUBDIR = "summaries"
-WINS_LOSSES_SUBDIR = "wins_losses"
-STATE_NAME = ".state.json"
+AUTO_SUBDIR = "auto"
+LATEST_NAME = "latest.json"
 
-DEFAULT_SINCE_HOURS = 24 * 7
-DEFAULT_SESSION_GLOBS = (
-    "logs/**/*.log",
-    "logs/**/*.json",
-    "memory/**/*_log.md",
+MEMORY_GLOBS_DEFAULT = (
     "memory/**/*.md",
-    "memory/**/conversation_extract_*.json",
-    "**/session.json",
+    "memory/**/*.json",
 )
 
 FAILURE_HINTS = re.compile(
@@ -80,19 +66,22 @@ LOSS_EXTRA = re.compile(
     r"tests?\s+fail|ci\s+fail|build\s+fail|incident|"
     r"root\s+cause\s*:\s*failure)\b)"
 )
+
 MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_SCANNED_FILES = 400
 TELEGRAM_TEXT_LIMIT = 4000
+FUZZY_DUPLICATE_RATIO = 0.88
+MAX_CORPUS_LINES = 2500
 
 
 @dataclass
 class Insight:
-    """One deduplicated insight line derived from logs."""
+    """One deduplicated signal derived from memory files."""
 
     text: str
     source_paths: list[str] = field(default_factory=list)
     severity: str = "info"  # info | warning | error
-    category: str = "general"
+    category: str = "general"  # win | loss | lesson | general
 
 
 @dataclass
@@ -103,82 +92,37 @@ class ReflectionRun:
     started_at_utc: str
     finished_at_utc: str
     files_scanned: int
-    session_files: list[str]
+    memory_files: list[str]
     insights: list[Insight]
-    summary_markdown: str
+    reflection_markdown: str
+    reflection_rel_path: str = ""
 
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _state_path(root: Path) -> Path:
-    return root / LEARNINGS_DIR / STATE_NAME
+def normalize_match_text(text: str) -> str:
+    """Collapse whitespace and lowercase for deduplication keys."""
+
+    return " ".join(text.strip().lower().split())
 
 
-def load_state(root: Path) -> dict[str, Any]:
-    path = _state_path(root)
-    if not path.exists():
-        return {}
+def insight_fingerprint(text: str) -> str:
+    return hashlib.sha256(normalize_match_text(text).encode("utf-8")).hexdigest()[:16]
+
+
+def normalize_insight_text(line: str) -> str:
+    line = line.strip()
+    line = re.sub(r"\s+", " ", line)
+    return line[:500]
+
+
+def rel_under_root(path: Path, root: Path) -> str:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def save_state(root: Path, data: dict[str, Any]) -> None:
-    path = _state_path(root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def session_dirs_from_env() -> tuple[Path, ...]:
-    """Optional extra directories (e.g. ~/.openclaw/workspace) scanned with the same globs."""
-
-    raw = os.environ.get("AUTO_REFLECTION_SESSION_DIRS", "")
-    roots: list[Path] = []
-    for part in raw.split(","):
-        p = Path(part.strip()).expanduser()
-        if p.is_dir():
-            roots.append(p.resolve())
-    return tuple(dict.fromkeys(roots))
-
-
-def iter_session_files(
-    root: Path,
-    globs: Sequence[str],
-    cutoff: datetime,
-    *,
-    extra_roots: Sequence[Path] | None = None,
-) -> list[Path]:
-    seen: set[Path] = set()
-    out: list[Path] = []
-    bases = [root]
-    if extra_roots:
-        bases.extend(Path(p).resolve() for p in extra_roots if p.is_dir())
-
-    for base in bases:
-        for pattern in globs:
-            for path in base.glob(pattern):
-                if not path.is_file():
-                    continue
-                try:
-                    st = path.stat()
-                except OSError:
-                    continue
-                if datetime.fromtimestamp(st.st_mtime, tz=timezone.utc) < cutoff:
-                    continue
-                if st.st_size > MAX_FILE_BYTES:
-                    continue
-                rp = path.resolve()
-                if rp in seen:
-                    continue
-                seen.add(rp)
-                out.append(path)
-    out.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    if len(out) > MAX_SCANNED_FILES:
-        return out[:MAX_SCANNED_FILES]
-    return out
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def _severity_for_line(line: str) -> str:
@@ -207,17 +151,8 @@ def _category_for_line(line: str) -> str:
     return "general"
 
 
-def rel_under_root(path: Path, root: Path) -> str:
-    try:
-        return path.relative_to(root).as_posix()
-    except ValueError:
-        return path.as_posix()
-
-
 @functools.lru_cache(maxsize=1)
 def _session_parser_pair() -> tuple[Any, Any] | None:
-    """OpenClaw transcript parsers from conversation_extractor (optional)."""
-
     try:
         from scripts.conversation_extractor import analyze_segments, parse_session_log
 
@@ -232,8 +167,6 @@ def _session_parser_pair() -> tuple[Any, Any] | None:
 
 
 def extract_insights_from_openclaw_session(path: Path, root: Path) -> list[Insight] | None:
-    """Use the same transcript model as conversation_extractor when JSON is a session."""
-
     pair = _session_parser_pair()
     if pair is None:
         return None
@@ -249,16 +182,12 @@ def extract_insights_from_openclaw_session(path: Path, root: Path) -> list[Insig
     for d in digest.decisions:
         text = normalize_insight_text(d)
         if text:
-            out.append(
-                Insight(text=text, source_paths=[rel], severity="info", category="win"),
-            )
+            out.append(Insight(text=text, source_paths=[rel], severity="info", category="win"))
 
     for item in digest.learnings:
         text = normalize_insight_text(item)
         if text:
-            out.append(
-                Insight(text=text, source_paths=[rel], severity="info", category="lesson"),
-            )
+            out.append(Insight(text=text, source_paths=[rel], severity="info", category="lesson"))
 
     for _turn, _role, text in segments:
         out.extend(_insights_from_raw_text(rel, text))
@@ -295,20 +224,9 @@ def _insights_from_raw_text(rel: str, raw: str) -> list[Insight]:
     return found
 
 
-def normalize_insight_text(line: str) -> str:
-    line = line.strip()
-    line = re.sub(r"\s+", " ", line)
-    return line[:500]
-
-
-def insight_fingerprint(text: str) -> str:
-    return hashlib.sha256(text.lower().encode("utf-8")).hexdigest()[:16]
-
-
 def extract_insights_from_text(path: Path, root: Path, raw: str) -> Iterator[Insight]:
     rel = rel_under_root(path, root)
-    for ins in _insights_from_raw_text(rel, raw):
-        yield ins
+    yield from _insights_from_raw_text(rel, raw)
 
 
 def extract_insights_from_json(path: Path, root: Path, raw: str) -> Iterator[Insight]:
@@ -388,165 +306,185 @@ def dedupe_insights(insights: Iterable[Insight]) -> list[Insight]:
     return list(buckets.values())
 
 
-def build_summary_markdown(
-    run_at: datetime,
-    files_scanned: int,
-    insights: Sequence[Insight],
-    top_sessions: Sequence[str],
-) -> str:
-    lines = [
-        f"# Reflection summary ({run_at.date().isoformat()} UTC)",
-        "",
-        f"- Session files scanned: **{files_scanned}**",
-        f"- Distinct insights: **{len(insights)}**",
-        "",
-    ]
-    if top_sessions:
-        lines.append("## Recently touched logs")
-        for p in top_sessions[:15]:
-            lines.append(f"- `{p}`")
-        lines.append("")
-    if not insights:
-        lines.append("_No notable patterns in the scanned window._")
-        return "\n".join(lines)
-
-    wins = [i for i in insights if i.category == "win"]
-    losses = [i for i in insights if i.category == "loss"]
-    if wins or losses:
-        rank = {"error": 0, "warning": 1, "info": 2}
-        if wins:
-            lines.append("## Wins")
-            for ins in sorted(wins, key=lambda i: (rank.get(i.severity, 9), i.text.lower()))[:30]:
-                src = ", ".join(f"`{s}`" for s in ins.source_paths[:2])
-                if len(ins.source_paths) > 2:
-                    src += ", …"
-                lines.append(f"- {ins.text} _(sources: {src})_")
-            lines.append("")
-        if losses:
-            lines.append("## Losses")
-            for ins in sorted(losses, key=lambda i: (rank.get(i.severity, 9), i.text.lower()))[:30]:
-                src = ", ".join(f"`{s}`" for s in ins.source_paths[:2])
-                if len(ins.source_paths) > 2:
-                    src += ", …"
-                lines.append(f"- **[{ins.severity.upper()}]** {ins.text} _(sources: {src})_")
-            lines.append("")
-
-    lines.append("## Insights")
-    by_cat: dict[str, list[Insight]] = {}
-    for ins in insights:
-        by_cat.setdefault(ins.category, []).append(ins)
-
-    for cat in sorted(by_cat.keys()):
-        lines.append(f"### {cat}")
-        rank = {"error": 0, "warning": 1, "info": 2}
-        for ins in sorted(
-            by_cat[cat],
-            key=lambda i: (rank.get(i.severity, 9), i.text.lower()),
-        ):
-            badge = ins.severity.upper()
-            sources = ", ".join(f"`{s}`" for s in ins.source_paths[:3])
-            if len(ins.source_paths) > 3:
-                sources += ", …"
-            lines.append(f"- **[{badge}]** {ins.text} _(sources: {sources})_")
-        lines.append("")
-
-    ctr = Counter(i.category for i in insights)
-    lines.append("## Category counts")
-    for cat, n in ctr.most_common():
-        lines.append(f"- **{cat}**: {n}")
-    return "\n".join(lines).rstrip() + "\n"
+def collect_memory_globs(extra: Sequence[str]) -> tuple[str, ...]:
+    merged = list(MEMORY_GLOBS_DEFAULT)
+    merged.extend(extra)
+    return tuple(dict.fromkeys(merged))
 
 
-def weekly_report_path(root: Path, dt: datetime) -> Path:
-    iso = dt.isocalendar()
-    week = f"{iso.year}-W{iso.week:02d}"
-    return root / LEARNINGS_DIR / SUMMARIES_SUBDIR / f"weekly_{week}.md"
-
-
-def update_weekly_summary(root: Path, run_at: datetime, body: str) -> Path:
-    """Append this run into the ISO-week summary file (idempotent headings per day)."""
-
-    path = weekly_report_path(root, run_at)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    day_heading = f"\n## {run_at.date().isoformat()} (UTC)\n\n"
-    chunk = day_heading + body + "\n"
-    if path.exists():
-        existing = path.read_text(encoding="utf-8")
-        if run_at.date().isoformat() in existing:
-            return path
-        path.write_text(existing.rstrip() + "\n" + chunk, encoding="utf-8")
-    else:
-        path.write_text(f"# Weekly reflection — {run_at.isocalendar().year} W{run_at.isocalendar().week:02d}\n" + chunk)
-    return path
-
-
-def write_insight_artifacts(root: Path, run: ReflectionRun) -> tuple[Path, Path]:
-    insights_dir = root / LEARNINGS_DIR / INSIGHTS_SUBDIR
-    insights_dir.mkdir(parents=True, exist_ok=True)
-    base = insights_dir / f"run_{run.run_id}"
-    md_path = base.with_suffix(".md")
-    json_path = base.with_suffix(".json")
-
-    md_lines = [
-        f"# Run {run.run_id}",
-        f"- Started: {run.started_at_utc}",
-        f"- Finished: {run.finished_at_utc}",
-        f"- Files scanned: {run.files_scanned}",
-        "",
-        run.summary_markdown,
-    ]
-    md_path.write_text("\n".join(md_lines), encoding="utf-8")
-
-    json_path.write_text(json.dumps(asdict(run), indent=2) + "\n", encoding="utf-8")
-    return md_path, json_path
-
-
-def write_wins_losses_markdown(root: Path, run: ReflectionRun) -> Path | None:
-    wins = [i for i in run.insights if i.category == "win"]
-    losses = [i for i in run.insights if i.category == "loss"]
-    if not wins and not losses:
-        return None
-    out_dir = root / LEARNINGS_DIR / WINS_LOSSES_SUBDIR
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"run_{run.run_id}.md"
-    lines = [
-        f"# Wins and losses ({run.run_id})",
-        "",
-        f"- UTC window: {run.started_at_utc} → {run.finished_at_utc}",
-        f"- Files scanned: {run.files_scanned}",
-        "",
-    ]
-    if wins:
-        lines.append("## Wins")
-        for ins in sorted(wins, key=lambda i: i.text.lower())[:50]:
-            lines.append(f"- {ins.text}")
-        lines.append("")
-    if losses:
-        lines.append("## Losses")
-        for ins in sorted(losses, key=lambda i: (i.severity, i.text.lower()))[:50]:
-            lines.append(f"- [{ins.severity}] {ins.text}")
-        lines.append("")
-    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-    return path
-
-
-def write_latest_pointers(
+def iter_recent_memory_files(
     root: Path,
-    md_path: Path,
-    weekly_path: Path,
-    wins_losses_md: Path | None = None,
-) -> None:
-    """Small files for automation consumers."""
+    globs: Sequence[str],
+    cutoff: datetime,
+) -> list[Path]:
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for pattern in globs:
+        for path in root.glob(pattern):
+            if not path.is_file():
+                continue
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            if datetime.fromtimestamp(st.st_mtime, tz=timezone.utc) < cutoff:
+                continue
+            if st.st_size > MAX_FILE_BYTES:
+                continue
+            rp = path.resolve()
+            if rp in seen:
+                continue
+            seen.add(rp)
+            out.append(path)
+    out.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    if len(out) > MAX_SCANNED_FILES:
+        return out[:MAX_SCANNED_FILES]
+    return out
 
-    ptr = root / LEARNINGS_DIR / "latest.json"
+
+def _iter_markdown_bodies(line: str) -> str | None:
+    s = line.strip()
+    if len(s) < 8:
+        return None
+    for prefix in ("- ", "* ", "• "):
+        if s.startswith(prefix):
+            return s[len(prefix) :].strip()
+    return None
+
+
+def load_learning_corpus(root: Path, exclude_paths: set[Path]) -> tuple[set[str], list[str]]:
+    """Fingerprints and sample lines from existing ``.learnings`` markdown."""
+
+    learnings = root / LEARNINGS_DIR
+    if not learnings.is_dir():
+        return set(), []
+
+    fps: set[str] = set()
+    samples: list[str] = []
+    exclude_resolved = {p.resolve() for p in exclude_paths}
+
+    for path in sorted(learnings.rglob("*.md")):
+        if path.resolve() in exclude_resolved:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for raw_line in text.splitlines():
+            body = _iter_markdown_bodies(raw_line)
+            if body is None:
+                candidate = raw_line.strip()
+                if len(candidate) < 24 or candidate.startswith("#"):
+                    continue
+                body = candidate
+            norm = normalize_match_text(body)
+            if len(norm) < 16:
+                continue
+            fps.add(insight_fingerprint(body))
+            fps.add(hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16])
+            if len(samples) < MAX_CORPUS_LINES:
+                samples.append(norm)
+    return fps, samples
+
+
+def is_near_duplicate_of_corpus(text: str, fps: set[str], corpus_lines: Sequence[str]) -> bool:
+    """True when this line matches a known lesson or bullet in ``.learnings``."""
+
+    if insight_fingerprint(text) in fps:
+        return True
+    norm = normalize_match_text(text)
+    if hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16] in fps:
+        return True
+    if len(norm) < 20:
+        return False
+    for other in corpus_lines:
+        if len(other) < 16:
+            continue
+        ratio = SequenceMatcher(None, norm, other).ratio()
+        if ratio >= FUZZY_DUPLICATE_RATIO:
+            return True
+    return False
+
+
+def _insight_sort_key(ins: Insight) -> tuple[int, int, str]:
+    sev = {"error": 0, "warning": 1, "info": 2}.get(ins.severity, 9)
+    cat = {"loss": 0, "lesson": 1, "win": 2, "general": 3}.get(ins.category, 9)
+    return sev, cat, ins.text.lower()
+
+
+def build_action_candidates(issues: Sequence[Insight], lessons: Sequence[Insight]) -> list[str]:
+    out: list[str] = []
+    for ins in sorted(issues, key=_insight_sort_key)[:14]:
+        t = normalize_insight_text(ins.text)
+        if t:
+            out.append(f"Investigate root cause and add a guardrail for: {t}")
+    for ins in sorted(lessons, key=_insight_sort_key)[:10]:
+        t = normalize_insight_text(ins.text)
+        if t:
+            out.append(f"Turn lesson into checklist or automation: {t}")
+    deduped: dict[str, str] = {}
+    for line in out:
+        key = insight_fingerprint(line)
+        deduped.setdefault(key, line)
+    return list(deduped.values())
+
+
+def build_reflection_markdown(
+    run_at: datetime,
+    window_start: datetime,
+    window_end: datetime,
+    sources: Sequence[str],
+    wins: Sequence[Insight],
+    issues: Sequence[Insight],
+    insights: Sequence[str],
+    actions: Sequence[str],
+) -> str:
+    src_preview = ", ".join(f"`{s}`" for s in sources[:12])
+    if len(sources) > 12:
+        src_preview += ", …"
+    head = [
+        f"# Auto reflection — {run_at.date().isoformat()} (UTC)",
+        "",
+        f"- **Generated (UTC)**: {run_at.replace(microsecond=0).isoformat()}",
+        f"- **Window**: {window_start.date().isoformat()} → {window_end.date().isoformat()} (source mtimes)",
+        f"- **Sources**: {src_preview or '_none_'}",
+        "",
+    ]
+
+    def section(title: str, lines: Sequence[str] | Sequence[Insight], *, as_insight: bool) -> list[str]:
+        block = [title, ""]
+        if as_insight:
+            seq = [normalize_insight_text(i.text) for i in lines]  # type: ignore[arg-type]
+        else:
+            seq = list(lines)
+        seq = [s for s in seq if s]
+        if not seq:
+            block.append("_Nothing notable in this bucket for the scanned window._")
+        else:
+            for item in seq:
+                block.append(f"- {item}")
+        block.append("")
+        return block
+
+    head.extend(section("# Wins", wins, as_insight=True))
+    head.extend(section("# Issues", issues, as_insight=True))
+    head.extend(section("# Insights", insights, as_insight=False))
+    head.extend(section("# Action Items", actions, as_insight=False))
+    return "\n".join(head).rstrip() + "\n"
+
+
+def reflection_file_path(root: Path, day: datetime) -> Path:
+    return root / LEARNINGS_DIR / AUTO_SUBDIR / f"{day.date().isoformat()}_reflection.md"
+
+
+def write_latest_pointer(root: Path, rel_md: str) -> None:
+    ptr = root / LEARNINGS_DIR / LATEST_NAME
+    ptr.parent.mkdir(parents=True, exist_ok=True)
     data = {
-        "insights_md": md_path.relative_to(root).as_posix(),
-        "weekly_summary_md": weekly_path.relative_to(root).as_posix(),
-        "generated_at_utc": utc_now().replace(microsecond=0).isoformat(),
+        "auto_reflection_md": rel_md,
+        "generated_at_utc": utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z"),
     }
-    if wins_losses_md is not None:
-        data["wins_losses_md"] = wins_losses_md.relative_to(root).as_posix()
-    ptr.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    ptr.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def post_webhook(url: str, payload: dict[str, Any]) -> tuple[bool, str]:
@@ -605,115 +543,13 @@ def post_telegram_summary(token: str, chat_id: str, text: str) -> tuple[bool, st
     return True, last_msg or "ok"
 
 
-def collect_globs(extra: Sequence[str]) -> tuple[str, ...]:
-    merged = list(DEFAULT_SESSION_GLOBS)
-    env_extra = os.environ.get("AUTO_REFLECTION_SESSION_GLOBS", "")
-    if env_extra.strip():
-        merged.extend(p.strip() for p in env_extra.split(",") if p.strip())
-    merged.extend(extra)
-    return tuple(dict.fromkeys(merged))
-
-
-def run_reflection(
-    root: Path,
-    *,
-    since_hours: float,
-    extra_globs: Sequence[str],
-    overlap_minutes: int = 90,
-    dry_run: bool = False,
-) -> ReflectionRun:
-    started = utc_now()
-    state = load_state(root)
-    last_run_s = state.get("last_run_utc")
-    if last_run_s:
-        try:
-            last_dt = datetime.fromisoformat(last_run_s.replace("Z", "+00:00"))
-            if last_dt.tzinfo is None:
-                last_dt = last_dt.replace(tzinfo=timezone.utc)
-            cutoff = last_dt - timedelta(minutes=overlap_minutes)
-        except ValueError:
-            cutoff = started - timedelta(hours=since_hours)
-    else:
-        cutoff = started - timedelta(hours=since_hours)
-
-    globs = collect_globs(extra_globs)
-    session_files = iter_session_files(
-        root,
-        globs,
-        cutoff,
-        extra_roots=session_dirs_from_env(),
-    )
-
-    insights: list[Insight] = []
-    for sf in session_files:
-        insights.extend(read_and_extract(sf, root))
-
-    insights = dedupe_insights(insights)
-    insights.sort(key=lambda x: (x.category, x.severity, x.text))
-
-    top_sessions = [rel_under_root(p, root) for p in session_files[:20]]
-    summary = build_summary_markdown(started, len(session_files), insights, top_sessions)
-
-    finished = utc_now()
-    run_id = started.strftime("%Y%m%d_%H%M%S")
-
-    run = ReflectionRun(
-        run_id=run_id,
-        started_at_utc=started.replace(microsecond=0).isoformat(),
-        finished_at_utc=finished.replace(microsecond=0).isoformat(),
-        files_scanned=len(session_files),
-        session_files=[rel_under_root(p, root) for p in session_files],
-        insights=insights,
-        summary_markdown=summary,
-    )
-
-    if dry_run:
-        return run
-
-    md_path, _ = write_insight_artifacts(root, run)
-    weekly_path = update_weekly_summary(root, started, summary)
-    wl_path = write_wins_losses_markdown(root, run)
-    write_latest_pointers(root, md_path, weekly_path, wl_path)
-
-    state["last_run_utc"] = finished.replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    state["last_run_id"] = run_id
-    state["last_insight_count"] = len(insights)
-    save_state(root, state)
-
-    try:
-        from src.coordination.iskra_kara_shared_memory import notify_kara_from_iskra
-
-        notify_kara_from_iskra(
-            "reflection",
-            {
-                "summary_markdown": run.summary_markdown,
-                "run_id": run.run_id,
-                "files_scanned": run.files_scanned,
-                "insight_count": len(run.insights),
-            },
-        )
-    except Exception:
-        pass
-
-    return run
-
-
-def maybe_post_results(run: ReflectionRun, *, dry_run: bool) -> list[str]:
+def maybe_post_results(body: str, meta: dict[str, Any], *, dry_run: bool) -> list[str]:
     log: list[str] = []
-    text = run.summary_markdown
     webhook = os.environ.get("REFLECTION_WEBHOOK_URL", "").strip()
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
-    payload = {
-        "text": text,
-        "meta": {
-            "run_id": run.run_id,
-            "started_at": run.started_at_utc,
-            "files_scanned": run.files_scanned,
-            "insight_count": len(run.insights),
-        },
-    }
+    payload = {"text": body, "meta": meta}
 
     if dry_run:
         log.append("[dry-run] Skipping webhook and Telegram.")
@@ -724,20 +560,134 @@ def maybe_post_results(run: ReflectionRun, *, dry_run: bool) -> list[str]:
         log.append(f"Webhook {'ok' if ok else 'FAILED'}: {msg[:400]}")
 
     if token and chat_id:
-        ok, msg = post_telegram_summary(token, chat_id, text)
+        ok, msg = post_telegram_summary(token, chat_id, body)
         log.append(f"Telegram {'ok' if ok else 'FAILED'}: {msg[:400]}")
     elif token or chat_id:
         log.append("Telegram skipped: need both TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.")
 
     if not webhook and not (token and chat_id):
-        log.append("No REFLECTION_WEBHOOK_URL or full Telegram credentials; summary only on disk.")
+        log.append("No REFLECTION_WEBHOOK_URL or full Telegram credentials; reflection only on disk.")
 
     return log
 
 
+def run_reflection(
+    root: Path,
+    *,
+    since_hours: float = 24 * 7,
+    extra_globs: Sequence[str] | None = None,
+    output_day: datetime | None = None,
+    dry_run: bool = False,
+) -> ReflectionRun:
+    """Scan ``memory/``, classify signals, optionally write ``.learnings/auto/…``."""
+
+    started = utc_now()
+    window_end = started
+    cutoff = started - timedelta(hours=since_hours)
+    globs = collect_memory_globs(extra_globs or ())
+
+    memory_paths = iter_recent_memory_files(root, globs, cutoff)
+    insights: list[Insight] = []
+    for mp in memory_paths:
+        insights.extend(read_and_extract(mp, root))
+
+    insights = dedupe_insights(insights)
+    insights.sort(key=_insight_sort_key)
+
+    wins = [i for i in insights if i.category == "win"]
+    issues = [
+        i
+        for i in insights
+        if i.category == "loss"
+        or (i.severity in ("error", "warning") and FAILURE_HINTS.search(i.text))
+    ]
+    issue_fps = {insight_fingerprint(i.text) for i in issues}
+    win_fps = {insight_fingerprint(i.text) for i in wins}
+    lesson_insights = [i for i in insights if i.category == "lesson" and insight_fingerprint(i.text) not in issue_fps]
+
+    day_for_file = output_day or started
+    out_path = reflection_file_path(root, day_for_file)
+    corpus_fps, corpus_lines = load_learning_corpus(root, exclude_paths={out_path})
+
+    insight_lines: list[str] = []
+    for ins in lesson_insights:
+        t = normalize_insight_text(ins.text)
+        if not t or is_near_duplicate_of_corpus(t, corpus_fps, corpus_lines):
+            continue
+        insight_lines.append(t)
+        corpus_fps.add(insight_fingerprint(t))
+        if len(corpus_lines) < MAX_CORPUS_LINES:
+            corpus_lines.append(normalize_match_text(t))
+
+    general_for_insights = [
+        i
+        for i in insights
+        if i.category == "general"
+        and insight_fingerprint(i.text) not in win_fps
+        and insight_fingerprint(i.text) not in issue_fps
+        and LESSON_HINTS.search(i.text)
+    ]
+    for ins in general_for_insights:
+        t = normalize_insight_text(ins.text)
+        if not t or is_near_duplicate_of_corpus(t, corpus_fps, corpus_lines):
+            continue
+        insight_lines.append(t)
+        corpus_fps.add(insight_fingerprint(t))
+        if len(corpus_lines) < MAX_CORPUS_LINES:
+            corpus_lines.append(normalize_match_text(t))
+
+    action_lines = build_action_candidates(issues, lesson_insights)
+    filtered_actions: list[str] = []
+    for line in action_lines:
+        if is_near_duplicate_of_corpus(line, corpus_fps, corpus_lines):
+            continue
+        filtered_actions.append(line)
+        corpus_fps.add(insight_fingerprint(line))
+        if len(corpus_lines) < MAX_CORPUS_LINES:
+            corpus_lines.append(normalize_match_text(line))
+
+    rel_sources = [rel_under_root(p, root) for p in memory_paths]
+    md = build_reflection_markdown(
+        started,
+        cutoff,
+        window_end,
+        rel_sources,
+        wins,
+        issues,
+        insight_lines,
+        filtered_actions,
+    )
+
+    finished = utc_now()
+    run_id = started.strftime("%Y%m%d_%H%M%S")
+    try:
+        intended_rel = out_path.relative_to(root).as_posix()
+    except ValueError:
+        intended_rel = out_path.as_posix()
+
+    run = ReflectionRun(
+        run_id=run_id,
+        started_at_utc=started.replace(microsecond=0).isoformat(),
+        finished_at_utc=finished.replace(microsecond=0).isoformat(),
+        files_scanned=len(memory_paths),
+        memory_files=rel_sources,
+        insights=insights,
+        reflection_markdown=md,
+        reflection_rel_path=intended_rel,
+    )
+
+    if dry_run:
+        return run
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(md, encoding="utf-8")
+    write_latest_pointer(root, intended_rel)
+    return replace(run, reflection_rel_path=intended_rel)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Analyze recent agent logs, refresh .learnings/, and optionally post a summary.",
+        description="Build a daily self-reflection markdown file from recent memory/ logs.",
     )
     parser.add_argument(
         "--root",
@@ -746,27 +696,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="Workspace root (default: AUTO_REFLECTION_ROOT or cwd).",
     )
     parser.add_argument(
+        "--days",
+        type=float,
+        default=float(os.environ.get("AUTO_REFLECTION_DAYS", "7")),
+        help="Rolling look-back in days (default: 7, or AUTO_REFLECTION_DAYS).",
+    )
+    parser.add_argument(
         "--since-hours",
         type=float,
-        default=DEFAULT_SINCE_HOURS,
-        help=f"Hours of history to include when no prior state exists (default: {DEFAULT_SINCE_HOURS}).",
+        default=None,
+        help="Override window size in hours (takes precedence over --days when set).",
+    )
+    parser.add_argument(
+        "--output-date",
+        type=str,
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="UTC calendar date for the output filename (default: today).",
     )
     parser.add_argument(
         "--glob",
         action="append",
         default=[],
         metavar="PATTERN",
-        help="Additional glob relative to root (repeatable).",
+        help="Extra glob relative to root, restricted to paths under memory/ (repeatable).",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Do not write files or POST; prints intended actions.",
+        help="Do not write files or POST; still prints side-channel logs.",
     )
     parser.add_argument(
-        "--stdout-summary",
+        "--stdout",
         action="store_true",
-        help="Print the markdown summary to stdout.",
+        help="Print the reflection markdown to stdout.",
     )
     return parser
 
@@ -780,21 +743,44 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     root = args.root or Path(os.environ.get("AUTO_REFLECTION_ROOT", "") or ".").resolve()
+    since_hours = args.since_hours if args.since_hours is not None else max(args.days, 0.01) * 24.0
+
+    output_day: datetime | None = None
+    if args.output_date:
+        try:
+            y, m, d = (int(p) for p in args.output_date.split("-", 2))
+            output_day = datetime(y, m, d, tzinfo=timezone.utc)
+        except ValueError:
+            print(f"Invalid --output-date {args.output_date!r}; use YYYY-MM-DD.", file=sys.stderr)
+            return 2
+
+    extra = [g for g in args.glob if g.strip().startswith("memory/")]
+    if args.glob and not extra:
+        print("Ignored --glob patterns outside memory/ for safety.", file=sys.stderr)
+
     if args.dry_run:
         print(f"[dry-run] root={root}", file=sys.stderr)
 
     run = run_reflection(
         root,
-        since_hours=args.since_hours,
-        extra_globs=args.glob,
+        since_hours=since_hours,
+        extra_globs=extra,
+        output_day=output_day,
         dry_run=args.dry_run,
     )
 
-    for line in maybe_post_results(run, dry_run=args.dry_run):
+    meta = {
+        "run_id": run.run_id,
+        "started_at": run.started_at_utc,
+        "files_scanned": run.files_scanned,
+        "insight_count": len(run.insights),
+        "reflection_path": run.reflection_rel_path,
+    }
+    for line in maybe_post_results(run.reflection_markdown, meta, dry_run=args.dry_run):
         print(line, file=sys.stderr)
 
-    if args.stdout_summary:
-        print(run.summary_markdown)
+    if args.stdout:
+        print(run.reflection_markdown)
 
     return 0
 
