@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """
-Daily self-reflection over recent agent logs and session transcripts.
+Periodic self-reflection over recent agent sessions and logs.
 
-Analyzes session-shaped content for role/tool flow, derives lightweight metrics
-(task completion signals, context switches, tool outcome heuristics), merges
-pattern insights from logs, and writes ``.learnings/reflections.md`` plus the
-existing insight / weekly artifacts.
+Reads OpenClaw ``sessions_history`` (JSON under the workspace), scans matching
+session transcripts and logs (including optional ``~/.openclaw/workspace`` via
+``AUTO_REFLECTION_SESSION_DIRS``), derives heuristics (tool outcomes, completion
+signals, context switches), detects cross-session patterns, and writes:
+
+- ``.learnings/`` — insights, weekly summaries, reflections journal (unchanged)
+- ``<openclaw>/memory/YYYY-MM-DD.md`` — full run log for the UTC day
+- ``<openclaw>/MEMORY.md`` — short appended section with actionable bullets
 
 Daily cron (08:00 UTC example)::
 
@@ -13,8 +17,11 @@ Daily cron (08:00 UTC example)::
 
 Environment (optional unless posting):
 
-- ``AUTO_REFLECTION_ROOT`` — workspace root (default: cwd)
-- ``AUTO_REFLECTION_SESSION_GLOBS`` — extra comma-separated globs under root
+- ``AUTO_REFLECTION_ROOT`` — repo / scan root (default: cwd)
+- ``OPENCLAW_WORKSPACE`` — OpenClaw workspace (default: ``~/.openclaw/workspace``)
+- ``OPENCLAW_SESSIONS_HISTORY`` — explicit path to ``sessions_history.json`` (optional)
+- ``AUTO_REFLECTION_SESSION_GLOBS`` — extra comma-separated globs under each scan root
+- ``AUTO_REFLECTION_SESSION_DIRS`` — extra comma-separated directories scanned with the same globs
 - ``TELEGRAM_BOT_TOKEN`` / ``TELEGRAM_CHAT_ID`` — Telegram ``sendMessage``
 - ``REFLECTION_WEBHOOK_URL`` — POST JSON ``{\"text\": \"...\", \"meta\": {...}}``
 """
@@ -22,6 +29,7 @@ Environment (optional unless posting):
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
 import os
@@ -49,6 +57,27 @@ DEFAULT_SESSION_GLOBS = (
     "logs/**/*.json",
     "memory/**/*_log.md",
     "memory/**/*.md",
+    "memory/**/conversation_extract_*.json",
+    "**/session.json",
+)
+
+MAX_SCANNED_FILES = 400
+
+# JSON keys commonly used by OpenClaw-style session indexes (tolerant matching).
+_SESSION_HISTORY_PATH_KEYS = frozenset(
+    {
+        "path",
+        "sessionpath",
+        "session_path",
+        "file",
+        "transcript",
+        "artifact",
+        "artifactpath",
+        "sessionfile",
+        "session_json",
+        "sessionjson",
+        "transcriptpath",
+    }
 )
 
 FAILURE_HINTS = re.compile(
@@ -70,6 +99,135 @@ BLOCKER_HINT = re.compile(
 MAX_FILE_BYTES = 2 * 1024 * 1024
 TELEGRAM_TEXT_LIMIT = 4000
 REFLECTIONS_MAX_LINES = 500
+
+
+def rel_under_roots(path: Path, roots: Sequence[Path]) -> str:
+    """Stable display path: first root that is a parent of ``path``, else absolute."""
+
+    rp = path.resolve()
+    for r in roots:
+        try:
+            return rp.relative_to(r.resolve()).as_posix()
+        except ValueError:
+            continue
+    return rp.as_posix()
+
+
+def resolve_openclaw_workspace_for_memory() -> Path:
+    """OpenClaw workspace root (env override, package helper, then default layout)."""
+
+    override = os.environ.get("OPENCLAW_WORKSPACE", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    try:
+        from src.coordination.iskra_kara_shared_memory import resolve_openclaw_workspace
+
+        return resolve_openclaw_workspace()
+    except ImportError:
+        return (Path.home() / ".openclaw" / "workspace").resolve()
+
+
+def sessions_history_json_candidates(workspace: Path) -> tuple[Path, ...]:
+    explicit = os.environ.get("OPENCLAW_SESSIONS_HISTORY", "").strip()
+    if explicit:
+        return (Path(explicit).expanduser().resolve(),)
+    return tuple(
+        dict.fromkeys(
+            (
+                workspace / "memory" / "sessions_history.json",
+                workspace / "sessions_history.json",
+            )
+        )
+    )
+
+
+def load_sessions_history_payload(workspace: Path) -> Any | None:
+    """Load first readable ``sessions_history`` JSON found under the workspace."""
+
+    for candidate in sessions_history_json_candidates(workspace):
+        if not candidate.is_file():
+            continue
+        try:
+            raw = candidate.read_text(encoding="utf-8", errors="replace")
+            return json.loads(raw)
+        except (json.JSONDecodeError, OSError):
+            continue
+    return None
+
+
+def _coerce_path_string(value: str, workspace: Path) -> Path | None:
+    p = Path(value.strip())
+    if not p.parts:
+        return None
+    if not p.is_absolute():
+        p = (workspace / p).resolve()
+    else:
+        p = p.resolve()
+    return p if p.is_file() else None
+
+
+def iter_session_paths_from_history_obj(obj: Any, workspace: Path) -> Iterator[Path]:
+    """Walk arbitrary JSON and yield existing transcript/log files referenced as paths."""
+
+    if isinstance(obj, str):
+        coerced = _coerce_path_string(obj, workspace)
+        if coerced is not None and coerced.suffix.lower() in {".json", ".md", ".log", ".txt"}:
+            yield coerced
+        return
+    if isinstance(obj, dict):
+        for key, val in obj.items():
+            if isinstance(key, str) and key.lower() in _SESSION_HISTORY_PATH_KEYS:
+                if isinstance(val, str):
+                    coerced = _coerce_path_string(val, workspace)
+                    if coerced is not None:
+                        yield coerced
+                elif isinstance(val, list):
+                    for item in val:
+                        yield from iter_session_paths_from_history_obj(item, workspace)
+                elif isinstance(val, dict):
+                    yield from iter_session_paths_from_history_obj(val, workspace)
+            else:
+                yield from iter_session_paths_from_history_obj(val, workspace)
+        return
+    if isinstance(obj, list):
+        for item in obj:
+            yield from iter_session_paths_from_history_obj(item, workspace)
+
+
+def collect_session_paths_from_openclaw_history(workspace: Path, cutoff: datetime) -> list[Path]:
+    """Session artifact paths declared in ``sessions_history`` and touched after ``cutoff``."""
+
+    payload = load_sessions_history_payload(workspace)
+    if payload is None:
+        return []
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for p in iter_session_paths_from_history_obj(payload, workspace):
+        rp = p.resolve()
+        if rp in seen:
+            continue
+        seen.add(rp)
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        if datetime.fromtimestamp(st.st_mtime, tz=timezone.utc) < cutoff:
+            continue
+        if st.st_size > MAX_FILE_BYTES:
+            continue
+        out.append(p)
+    out.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+    return out
+
+
+def session_dirs_from_env() -> tuple[Path, ...]:
+    raw = os.environ.get("AUTO_REFLECTION_SESSION_DIRS", "")
+    roots: list[Path] = []
+    for part in raw.split(","):
+        p = Path(part.strip()).expanduser()
+        if p.is_dir():
+            roots.append(p.resolve())
+    return tuple(dict.fromkeys(roots))
 
 
 def _norm_role(role: str | None) -> str:
@@ -433,11 +591,41 @@ def save_state(root: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def iter_session_files(root: Path, globs: Sequence[str], cutoff: datetime) -> list[Path]:
+def iter_session_files(
+    root: Path,
+    globs: Sequence[str],
+    cutoff: datetime,
+    *,
+    extra_roots: Sequence[Path] | None = None,
+    extra_files: Sequence[Path] | None = None,
+) -> list[Path]:
     seen: set[Path] = set()
     out: list[Path] = []
-    for pattern in globs:
-        for path in root.glob(pattern):
+    bases = [root]
+    if extra_roots:
+        bases.extend(Path(p).resolve() for p in extra_roots if p.is_dir())
+
+    for base in bases:
+        for pattern in globs:
+            for path in base.glob(pattern):
+                if not path.is_file():
+                    continue
+                try:
+                    st = path.stat()
+                except OSError:
+                    continue
+                if datetime.fromtimestamp(st.st_mtime, tz=timezone.utc) < cutoff:
+                    continue
+                if st.st_size > MAX_FILE_BYTES:
+                    continue
+                rp = path.resolve()
+                if rp in seen:
+                    continue
+                seen.add(rp)
+                out.append(path)
+
+    if extra_files:
+        for path in extra_files:
             if not path.is_file():
                 continue
             try:
@@ -453,7 +641,10 @@ def iter_session_files(root: Path, globs: Sequence[str], cutoff: datetime) -> li
                 continue
             seen.add(rp)
             out.append(path)
+
     out.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    if len(out) > MAX_SCANNED_FILES:
+        return out[:MAX_SCANNED_FILES]
     return out
 
 
@@ -487,8 +678,76 @@ def insight_fingerprint(text: str) -> str:
     return hashlib.sha256(text.lower().encode("utf-8")).hexdigest()[:16]
 
 
-def extract_insights_from_text(path: Path, root: Path, raw: str) -> Iterator[Insight]:
-    rel = path.relative_to(root).as_posix()
+@functools.lru_cache(maxsize=1)
+def _session_parser_pair() -> tuple[Any, Any] | None:
+    try:
+        from scripts.conversation_extractor import analyze_segments, parse_session_log
+
+        return parse_session_log, analyze_segments
+    except ImportError:
+        try:
+            from conversation_extractor import analyze_segments, parse_session_log
+
+            return parse_session_log, analyze_segments
+        except ImportError:
+            return None
+
+
+def extract_insights_from_openclaw_session(path: Path, roots: Sequence[Path]) -> list[Insight] | None:
+    """Structured transcript digest (decisions, learnings) plus line heuristics."""
+
+    pair = _session_parser_pair()
+    if pair is None:
+        return None
+    parse_session_log, analyze_segments = pair
+    segments = parse_session_log(path)
+    if not segments:
+        return None
+
+    rel = rel_under_roots(path, roots)
+    digest = analyze_segments(segments, rel)
+    out: list[Insight] = []
+
+    for d in digest.decisions:
+        text = normalize_insight_text(str(d))
+        if text:
+            out.append(Insight(text=text, source_paths=[rel], severity="info", category="lesson"))
+
+    for item in digest.learnings:
+        text = normalize_insight_text(str(item))
+        if text:
+            out.append(Insight(text=text, source_paths=[rel], severity="info", category="lesson"))
+
+    for _turn, _role, text in segments:
+        out.extend(_insights_from_segment_text(rel, text))
+
+    return out or None
+
+
+def _insights_from_segment_text(rel: str, raw: str) -> list[Insight]:
+    found: list[Insight] = []
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if len(stripped) < 12:
+            continue
+        if not (FAILURE_HINTS.search(stripped) or LESSON_HINTS.search(stripped)):
+            continue
+        norm = normalize_insight_text(stripped)
+        if not norm:
+            continue
+        found.append(
+            Insight(
+                text=norm,
+                source_paths=[rel],
+                severity=_severity_for_line(stripped),
+                category=_category_for_line(stripped),
+            ),
+        )
+    return found
+
+
+def extract_insights_from_text(path: Path, roots: Sequence[Path], raw: str) -> Iterator[Insight]:
+    rel = rel_under_roots(path, roots)
     for line in raw.splitlines():
         stripped = line.strip()
         if len(stripped) < 12:
@@ -505,12 +764,12 @@ def extract_insights_from_text(path: Path, root: Path, raw: str) -> Iterator[Ins
             )
 
 
-def extract_insights_from_json(path: Path, root: Path, raw: str) -> Iterator[Insight]:
-    rel = path.relative_to(root).as_posix()
+def extract_insights_from_json(path: Path, roots: Sequence[Path], raw: str) -> Iterator[Insight]:
+    rel = rel_under_roots(path, roots)
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        yield from extract_insights_from_text(path, root, raw)
+        yield from extract_insights_from_text(path, roots, raw)
         return
 
     strings: list[str] = []
@@ -530,20 +789,23 @@ def extract_insights_from_json(path: Path, root: Path, raw: str) -> Iterator[Ins
 
     walk(data)
     for s in strings:
-        for insight in extract_insights_from_text(path, root, s):
+        for insight in extract_insights_from_text(path, roots, s):
             if rel not in insight.source_paths:
                 insight.source_paths.insert(0, rel)
             yield insight
 
 
-def read_and_extract(path: Path, root: Path) -> list[Insight]:
+def read_and_extract(path: Path, roots: Sequence[Path]) -> list[Insight]:
     try:
         raw = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
     if path.suffix.lower() == ".json":
-        return list(extract_insights_from_json(path, root, raw))
-    return list(extract_insights_from_text(path, root, raw))
+        structured = extract_insights_from_openclaw_session(path, roots)
+        if structured is not None:
+            return structured
+        return list(extract_insights_from_json(path, roots, raw))
+    return list(extract_insights_from_text(path, roots, raw))
 
 
 def dedupe_insights(insights: Iterable[Insight]) -> list[Insight]:
@@ -632,6 +894,138 @@ def build_summary_markdown(
     for cat, n in ctr.most_common():
         lines.append(f"- **{cat}**: {n}")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def build_cross_session_patterns_markdown(
+    insights: Sequence[Insight],
+    agg: AggregatedSessionMetrics,
+) -> str:
+    """Lightweight pattern view across deduplicated insights and aggregate metrics."""
+
+    lines: list[str] = ["## Cross-session patterns (heuristic)", ""]
+    ctr = Counter(i.category for i in insights)
+    repeated = [(c, n) for c, n in ctr.most_common() if n >= 2]
+    if repeated:
+        lines.append("Insight categories with more than one hit after deduplication:")
+        for c, n in repeated[:12]:
+            lines.append(f"- **{c}**: {n}")
+        lines.append("")
+    sev_ctr = Counter(i.severity for i in insights)
+    lines.append("Severity distribution:")
+    for s, n in sev_ctr.most_common():
+        lines.append(f"- **{s}**: {n}")
+    lines.append("")
+    multi = [i for i in insights if len(i.source_paths) >= 2]
+    if multi:
+        lines.append(
+            f"**{len(multi)}** deduplicated insights were tied to multiple session files "
+            f"(same text in more than one place)—candidate standing rules or playbooks."
+        )
+        lines.append("")
+    tcr = agg.task_completion_rate
+    tsr = agg.tool_success_rate
+    if tcr is not None and tsr is not None:
+        lines.append(
+            f"Aggregate heuristics: task-signal ratio **{tcr:.0%}**, tool-output success ratio **{tsr:.0%}**."
+        )
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def memory_digest_bullets(
+    went_well: Sequence[str],
+    improve: Sequence[str],
+    insights: Sequence[Insight],
+    *,
+    day_iso: str,
+    max_items: int = 12,
+) -> list[str]:
+    """Short bullets for ``MEMORY.md`` (avoid duplicating the full daily file)."""
+
+    out: list[str] = []
+    out.extend(went_well[:3])
+    out.extend(improve[:3])
+    ctr = Counter(i.category for i in insights)
+    for cat, n in ctr.most_common(5):
+        if n >= 2:
+            out.append(f"Recurring theme: **{cat}** ({n} deduplicated hits in window).")
+    if len([i for i in insights if len(i.source_paths) >= 2]) >= 2:
+        out.append("Same learnings surfaced across multiple sessions—consider capturing as a durable rule.")
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for line in out:
+        key = line[:160].lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(line)
+        if len(deduped) >= max_items:
+            break
+    if not deduped:
+        return [f"Reflection run completed; see `memory/{day_iso}.md` for metrics and excerpts."]
+    return deduped
+
+
+def write_openclaw_daily_memory_md(
+    workspace: Path,
+    run_at: datetime,
+    *,
+    run_id: str,
+    full_body: str,
+) -> Path:
+    """Append to ``memory/YYYY-MM-DD.md`` under the OpenClaw workspace (idempotent per ``run_id``)."""
+
+    mem_dir = workspace / "memory"
+    mem_dir.mkdir(parents=True, exist_ok=True)
+    path = mem_dir / f"{run_at.date().isoformat()}.md"
+    marker = f"<!-- auto_reflection run_id={run_id} -->"
+    chunk = f"\n\n{marker}\n\n## Reflection run `{run_id}`\n\n{full_body.strip()}\n"
+    if path.exists():
+        existing = path.read_text(encoding="utf-8")
+        if run_id in existing:
+            return path
+        path.write_text(existing.rstrip() + chunk, encoding="utf-8")
+    else:
+        path.write_text(
+            f"# Memory log — {run_at.date().isoformat()} (UTC)\n\n"
+            f"_Appended by ``scripts/self_improvement/auto_reflection.py``._\n{chunk}",
+            encoding="utf-8",
+        )
+    return path
+
+
+def append_openclaw_memory_md(
+    memory_path: Path,
+    run_at: datetime,
+    *,
+    run_id: str,
+    bullets: Sequence[str],
+    daily_rel: str,
+) -> None:
+    """Append a compact section to ``MEMORY.md`` (idempotent per ``run_id``)."""
+
+    heading = f"## Auto-reflection — {run_at.date().isoformat()} (UTC)"
+    marker = f"<!-- auto_reflection run_id={run_id} -->"
+    if memory_path.exists():
+        body = memory_path.read_text(encoding="utf-8")
+        if run_id in body:
+            return
+    else:
+        body = "# MEMORY\n\n_Long-lived facts and periodic cron summaries._\n"
+
+    block = [
+        "",
+        marker,
+        "",
+        heading,
+        "",
+        f"_Full detail: `{daily_rel}`._",
+        "",
+    ]
+    block.extend(f"- {b}" for b in bullets)
+    block.append("")
+    memory_path.parent.mkdir(parents=True, exist_ok=True)
+    memory_path.write_text(body.rstrip() + "\n" + "\n".join(block), encoding="utf-8")
 
 
 def weekly_report_path(root: Path, dt: datetime) -> Path:
@@ -757,10 +1151,10 @@ def collect_globs(extra: Sequence[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(merged))
 
 
-def collect_per_file_metrics(root: Path, session_files: list[Path]) -> list[SessionMetrics]:
+def collect_per_file_metrics(roots: Sequence[Path], session_files: list[Path]) -> list[SessionMetrics]:
     rows: list[SessionMetrics] = []
     for sf in session_files:
-        rel = sf.relative_to(root).as_posix()
+        rel = rel_under_roots(sf, roots)
         try:
             raw = sf.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -780,6 +1174,8 @@ def run_reflection(
     extra_globs: Sequence[str],
     overlap_minutes: int = 90,
     dry_run: bool = False,
+    openclaw_workspace: Path | None = None,
+    skip_openclaw_memory: bool = False,
 ) -> ReflectionRun:
     started = utc_now()
     state = load_state(root)
@@ -795,15 +1191,28 @@ def run_reflection(
     else:
         cutoff = started - timedelta(hours=since_hours)
 
-    globs = collect_globs(extra_globs)
-    session_files = iter_session_files(root, globs, cutoff)
+    oc_ws = openclaw_workspace if openclaw_workspace is not None else resolve_openclaw_workspace_for_memory()
+    display_roots: tuple[Path, ...] = tuple(dict.fromkeys((root.resolve(), oc_ws.resolve())))
 
-    per_file = collect_per_file_metrics(root, session_files)
+    globs = collect_globs(extra_globs)
+    history_paths: list[Path] = []
+    if not skip_openclaw_memory:
+        history_paths = collect_session_paths_from_openclaw_history(oc_ws, cutoff)
+
+    session_files = iter_session_files(
+        root,
+        globs,
+        cutoff,
+        extra_roots=session_dirs_from_env(),
+        extra_files=history_paths,
+    )
+
+    per_file = collect_per_file_metrics(display_roots, session_files)
     agg = aggregate_session_metrics(per_file)
 
     insights: list[Insight] = []
     for sf in session_files:
-        insights.extend(read_and_extract(sf, root))
+        insights.extend(read_and_extract(sf, display_roots))
 
     insights = dedupe_insights(insights)
     insights.sort(key=lambda x: (x.category, x.severity, x.text))
@@ -816,8 +1225,9 @@ def run_reflection(
 
     run_id = started.strftime("%Y%m%d_%H%M%S")
     reflections_body = build_reflections_markdown(started, run_id, agg, went_well, improve, top_for_reflection)
+    patterns_md = build_cross_session_patterns_markdown(insights, agg)
 
-    top_sessions = [p.relative_to(root).as_posix() for p in session_files[:20]]
+    top_sessions = [rel_under_roots(p, display_roots) for p in session_files[:20]]
     summary = build_summary_markdown(started, len(session_files), insights, top_sessions, agg)
 
     finished = utc_now()
@@ -840,7 +1250,7 @@ def run_reflection(
         started_at_utc=started.replace(microsecond=0).isoformat(),
         finished_at_utc=finished.replace(microsecond=0).isoformat(),
         files_scanned=len(session_files),
-        session_files=[p.relative_to(root).as_posix() for p in session_files],
+        session_files=[rel_under_roots(p, display_roots) for p in session_files],
         insights=insights,
         summary_markdown=summary,
         aggregated_metrics=agg_dict,
@@ -855,26 +1265,57 @@ def run_reflection(
     reflections_path = update_reflections_md(root, reflections_body)
     write_latest_pointers(root, md_path, weekly_path, reflections_path)
 
+    if not skip_openclaw_memory:
+        daily_full = "\n\n".join(
+            (
+                summary.strip(),
+                patterns_md.strip(),
+                "## Reflections (metrics narrative)",
+                "",
+                reflections_body.strip(),
+            )
+        )
+        daily_path = write_openclaw_daily_memory_md(
+            oc_ws,
+            started,
+            run_id=run_id,
+            full_body=daily_full,
+        )
+        daily_rel = daily_path.resolve().relative_to(oc_ws.resolve()).as_posix()
+        bullets = memory_digest_bullets(went_well, improve, insights, day_iso=started.date().isoformat())
+        append_openclaw_memory_md(
+            oc_ws / "MEMORY.md",
+            started,
+            run_id=run_id,
+            bullets=bullets,
+            daily_rel=daily_rel,
+        )
+
     state["last_run_utc"] = finished.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     state["last_run_id"] = run_id
     state["last_insight_count"] = len(insights)
     state["last_aggregated_metrics"] = agg_dict
+    if not skip_openclaw_memory:
+        state["last_openclaw_memory_daily"] = str(
+            (oc_ws / "memory" / f"{started.date().isoformat()}.md").resolve()
+        )
     save_state(root, state)
 
     try:
         from src.coordination.iskra_kara_shared_memory import notify_kara_from_iskra
 
-        notify_kara_from_iskra(
-            "reflection",
-            {
-                "summary_markdown": run.summary_markdown,
-                "reflections_markdown": run.reflections_markdown,
-                "run_id": run.run_id,
-                "files_scanned": run.files_scanned,
-                "insight_count": len(run.insights),
-                "metrics": run.aggregated_metrics,
-            },
-        )
+        payload: dict[str, Any] = {
+            "summary_markdown": run.summary_markdown,
+            "reflections_markdown": run.reflections_markdown,
+            "patterns_markdown": patterns_md,
+            "run_id": run.run_id,
+            "files_scanned": run.files_scanned,
+            "insight_count": len(run.insights),
+            "metrics": run.aggregated_metrics,
+        }
+        if not skip_openclaw_memory:
+            payload["openclaw_memory_daily"] = str((oc_ws / "memory" / f"{started.date().isoformat()}.md").resolve())
+        notify_kara_from_iskra("reflection", payload)
     except Exception:
         pass
 
@@ -952,21 +1393,41 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the markdown summary to stdout.",
     )
+    parser.add_argument(
+        "--openclaw-workspace",
+        type=Path,
+        default=None,
+        help="OpenClaw workspace for sessions_history, MEMORY.md, and memory/YYYY-MM-DD.md (default: env or ~/.openclaw/workspace).",
+    )
+    parser.add_argument(
+        "--skip-openclaw-memory",
+        action="store_true",
+        help="Do not read sessions_history or write under the OpenClaw workspace memory tree.",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    repo = Path(__file__).resolve().parent.parent.parent
+    repo_s = str(repo)
+    if repo_s not in sys.path:
+        sys.path.insert(0, repo_s)
+
     args = build_parser().parse_args(argv)
 
     root = args.root or Path(os.environ.get("AUTO_REFLECTION_ROOT", "") or ".").resolve()
     if args.dry_run:
         print(f"[dry-run] root={root}", file=sys.stderr)
 
+    oc = args.openclaw_workspace.resolve() if args.openclaw_workspace else None
+
     run = run_reflection(
         root,
         since_hours=args.since_hours,
         extra_globs=args.glob,
         dry_run=args.dry_run,
+        openclaw_workspace=oc,
+        skip_openclaw_memory=args.skip_openclaw_memory,
     )
 
     for line in maybe_post_results(run, dry_run=args.dry_run):
