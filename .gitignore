@@ -3,4 +3,7 @@ logs/nightly_pipeline.log
 .learnings/
 __pycache__/
 *.py[cod]
+
+# Scraped public-source JSON artifacts (see scripts/content_scraper.py)
+data/**/*.json
 tool_discovery_report.md
