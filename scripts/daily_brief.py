@@ -33,6 +33,9 @@ COMPOSIO_API_KEY: str | None = os.getenv("COMPOSIO_API_KEY")
 TELEGRAM_BOT_TOKEN: str | None = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID: str | None = os.getenv("TELEGRAM_CHAT_ID")
 
+# Moscow timezone (UTC+3) — used for calendar day queries
+TZ_MOSCOW = timezone.utc  # we'll apply +03:00 offset manually
+
 
 def check_env() -> None:
     """Verify all required env vars are present."""
@@ -73,10 +76,11 @@ def fetch_gmail_messages(client: Any, max_results: int = 5) -> list[dict[str, st
         result = client.execute(
             tool_name="gmail_fetch_emails",
             arguments={
-                "max_results": max_results,
+                "query": "is:unread",
                 "user_id": "me",
-                # Only unread, prefer important
-                # (Composio Gmail tool may support filter in query)
+                "max_results": max_results,
+                "verbose": False,
+                "include_payload": False,
             },
         )
     except Exception as exc:
@@ -85,7 +89,7 @@ def fetch_gmail_messages(client: Any, max_results: int = 5) -> list[dict[str, st
 
     messages: list[dict[str, str]] = []
     data = result.get("data", {}) if isinstance(result, dict) else {}
-    items = data if isinstance(data, list) else data.get("messages", [])
+    items = data.get("messages", []) if isinstance(data, dict) else []
 
     for item in items[:max_results]:
         if isinstance(item, dict):
@@ -95,7 +99,6 @@ def fetch_gmail_messages(client: Any, max_results: int = 5) -> list[dict[str, st
                 "snippet": item.get("snippet", "")[:80],
             })
         elif isinstance(item, str):
-            # fallback: raw id as subject placeholder
             messages.append({"from": "—", "subject": item, "snippet": ""})
 
     return messages
@@ -105,16 +108,27 @@ def fetch_gmail_messages(client: Any, max_results: int = 5) -> list[dict[str, st
 # Composio – Google Calendar
 # ---------------------------------------------------------------------------
 def fetch_today_events(client: Any) -> list[dict[str, Any]]:
-    """Fetch today's calendar events via Composio Google Calendar tool."""
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    """Fetch today's calendar events via Composio Google Calendar tool.
+
+    Uses Moscow (UTC+3) local date boundaries. The Composio Google Calendar
+    tool requires RFC3339 timestamps with mandatory timezone offset in
+    timeMin/timeMax — bare UTC 'Z' dates would miss events on the local date.
+    """
+    # Moscow = UTC+3 — use local date with explicit offset
+    today = datetime.now().strftime("%Y-%m-%d")
+    time_min = f"{today}T00:00:00+03:00"
+    time_max = f"{today}T23:59:59+03:00"
+
     try:
         result = client.execute(
-            tool_name="googlecalendar_list_events",
+            tool_name="googlecalendar_events_list",
             arguments={
-                "calendar_id": "primary",
-                "time_min": f"{today}T00:00:00Z",
-                "time_max": f"{today}T23:59:59Z",
-                "max_results": 20,
+                "calendarId": "primary",
+                "timeMin": time_min,
+                "timeMax": time_max,
+                "maxResults": 20,
+                "singleEvents": True,
+                "orderBy": "startTime",
             },
         )
     except Exception as exc:
@@ -126,24 +140,24 @@ def fetch_today_events(client: Any) -> list[dict[str, Any]]:
     items = data if isinstance(data, list) else data.get("items", [])
 
     for item in items:
-        if isinstance(item, dict):
-            start = item.get("start", {})
-            end = item.get("end", {})
-            # start can be "date" (all-day) or "dateTime"
-            start_str = start.get("dateTime", start.get("date", ""))
-            end_str = end.get("dateTime", end.get("date", ""))
-            # Extract HH:MM from ISO datetime
-            time_display = ""
-            if "T" in start_str:
-                try:
-                    time_display = start_str.split("T")[1][:5]
-                except IndexError:
-                    time_display = start_str
-            summary = item.get("summary", "Без названия")
-            events.append({
-                "time": time_display,
-                "summary": summary,
-            })
+        if not isinstance(item, dict):
+            continue
+        start = item.get("start", {})
+        end = item.get("end", {})
+        start_str = start.get("dateTime", start.get("date", ""))
+        summary = item.get("summary", "Без названия")
+
+        # Extract HH:MM from ISO datetime
+        time_display = ""
+        if "T" in start_str:
+            try:
+                # Remove UTC offset before extracting time
+                naive = start_str.split("+")[0] if "+" in start_str else start_str
+                time_display = naive.split("T")[1][:5]
+            except (IndexError, ValueError):
+                time_display = start_str
+
+        events.append({"time": time_display, "summary": summary})
 
     return events
 
@@ -157,10 +171,8 @@ def format_digest(events: list[dict[str, Any]], emails: list[dict[str, str]]) ->
 
     lines: list[str] = []
 
-    # Header
-    lines.append(f"📅 *Календарь на сегодня:*\n")
+    lines.append("📅 *Календарь на сегодня:*\n")
     if events:
-        # Sort by time
         sorted_events = sorted(events, key=lambda e: e.get("time", ""))
         for ev in sorted_events:
             time_str = ev.get("time", "??:??").replace(":", ":")
@@ -170,7 +182,7 @@ def format_digest(events: list[dict[str, Any]], emails: list[dict[str, str]]) ->
         lines.append("  Нет событий")
 
     lines.append("")
-    lines.append(f"📧 *Непрочитанные письма:*\n")
+    lines.append("📧 *Непрочитанные письма:*\n")
     if emails:
         for em in emails:
             sender = em.get("from", "—")
@@ -198,11 +210,9 @@ def main() -> int:
 
     log.info("Daily Brief started")
 
-    # Initialise Composio client
     from composio import Composio
     client = Composio(api_key=COMPOSIO_API_KEY)
 
-    # Fetch data
     log.info("Fetching Gmail messages…")
     emails = fetch_gmail_messages(client, max_results=5)
     log.info("Got %d emails", len(emails))
@@ -211,7 +221,6 @@ def main() -> int:
     events = fetch_today_events(client)
     log.info("Got %d events", len(events))
 
-    # Format & send
     digest = format_digest(events, emails)
     log.info("Sending digest to Telegram…")
     send_telegram(digest)
