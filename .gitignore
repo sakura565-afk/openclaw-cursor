@@ -1,3 +1,6 @@
+scripts/data/competitors.db
+scripts/data/competitors/
+
 logs/sync_obsidian_*.json
 logs/nightly_pipeline.log
 .learnings/
