@@ -1,5 +1,20 @@
 # Scripts
 
+## ComfyUI furniture video benchmark (`comfy_video_benchmark.py`)
+
+Benchmarks **RIFE** (24→60 FPS vs a `camera_motion_stable` 60 FPS reference), **SUPIR** at multiple scales (`SUPIR-v0Q_fp16.safetensors` via `object_info` wiring), and a short **RIFE+SUPIR** chain on interpolated frames. Results and RTX 3060 12GB tuning notes go to `scripts/data/video_benchmark_results.md`.
+
+```bash
+python scripts/camera_motion_stable.py --input photo.jpg --out_dir scripts/data/camera_motion_stable_out
+python scripts/comfy_video_benchmark.py --reference-image photo.jpg --dry-run
+python scripts/comfy_video_benchmark.py --reference-image photo.jpg \
+  --comfy-url http://127.0.0.1:8188 \
+  --comfy-input-dir /path/to/ComfyUI/input \
+  --rife-models-dir /path/to/ComfyUI/models/frame_interpolation
+```
+
+Environment overrides: `COMFY_URL`, `COMFYUI_INPUT`, `COMFYUI_MODELS_FRAME`, `SUPIR_CKPT`.
+
 ## Iskra → Kara shared memory (`kara_poll_iskra_results.py`)
 
 Iskra (tasks bot) appends structured JSON objects to a locked queue file under the OpenClaw workspace; Kara’s cron drains that file and clears it. Default path:
