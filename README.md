@@ -118,3 +118,22 @@ python -m scripts.nouz_search near-core my-core --limit 10
 python -m unittest tests.test_nouz
 ```
 
+## SEO Title Generator
+
+`python scripts/seo_title_generator.py` generates A/B meta title and description variants for furniture product cards (amadey.ru, divaninfo.ru) via local Ollama (`mistral-nemo:latest`).
+
+Quick start:
+
+```bash
+ollama pull mistral-nemo:latest
+python scripts/seo_title_generator.py --input data/sample_products.csv
+```
+
+Full setup, CLI options, and output format: [docs/scripts/seo_title_generator/README.md](docs/scripts/seo_title_generator/README.md).
+
+Tests (mocked Ollama, no local server required):
+
+```bash
+python -m unittest tests.test_seo_title_generator -v
+```
+
