@@ -2,6 +2,52 @@
 
 OpenClaw orchestration via Cursor Cloud Agent.
 
+## Sitemap generator (divaninfo.ru)
+
+`python -m scripts.sitemap_generator` builds `public/sitemap.xml` and `public/robots.txt` from product JSON files, category metadata, and blog posts. Uses only the Python 3.11+ standard library.
+
+### Product data format
+
+Place product JSON files in `data/` (or pass `--products-dir`):
+
+```json
+{
+  "slug": "divan-bergamo",
+  "category": "divany",
+  "lastmod": "2026-05-10"
+}
+```
+
+Supported fields for `lastmod`: `lastmod`, `updated_at`, `modified`, `date`. You can also set `url_path` instead of `slug` + `category`.
+
+Categories are read from `seo/meta_templates.json`. Blog posts are scanned from `blog/*.md` (date is taken from YAML frontmatter).
+
+### Commands
+
+```bash
+# Defaults: domain=https://divaninfo.ru, output=public/, products-dir=data/
+python -m scripts.sitemap_generator
+
+python -m scripts.sitemap_generator --domain https://divaninfo.ru --output public --products-dir data
+
+python scripts/sitemap_generator.py --domain divaninfo.ru --output ./public --products-dir ./data
+```
+
+### Output
+
+- `public/sitemap.xml` — home, catalog, categories, products, blog
+- `public/robots.txt` — allows all crawlers and links to the sitemap
+
+Priorities: home `1.0` (daily), categories `0.8` (weekly), products `0.6` (monthly), blog `0.7` (weekly).
+
+See `sample-sitemap.xml` for a minimal example with two products.
+
+### Tests
+
+```bash
+python -m pytest tests/test_sitemap_generator.py -q
+```
+
 ## Ollama Model Manager
 
 `python -m scripts.ollama_model_manager` provides a stdlib-only CLI for managing local Ollama models used by OpenClaw.
