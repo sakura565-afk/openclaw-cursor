@@ -1,0 +1,35 @@
+# Quality gate rules for ComfyUI generation outputs.
+# Consumed by scripts/quality_gate.py and scripts/anatomy_analyzer.py.
+# Confidence thresholds gate whether a detected defect is reported.
+rules:
+  anatomical:
+    extra_limbs: {enabled: true, confidence_threshold: 0.7}
+    fused_hands: {enabled: true, confidence_threshold: 0.6}
+    bad_feet: {enabled: true, confidence_threshold: 0.7}
+    asymmetric_breasts: {enabled: true, area_diff_threshold: 0.25}
+    toy_color_roulette:
+      enabled: true
+      hue_ranges:
+        purple: [280, 320]
+        pink: [300, 340]
+    penetration_miss: {enabled: true}
+  pose_forbidden:
+    - {keywords: ["squat", "toy"], action: "reject", reason: "3-arm artifact"}
+  approved_poses:
+    - standing_water
+    - kneel_water
+    - shore_walk
+  vram:
+    rtx3060_12gb:
+      safe_gb: 10
+      model_vram_gb:
+        flux-2-klein-9b: 6
+        ponyV6XL: 7
+        sdxl: 4
+        sd1.5: 2
+        wan2.2: 12
+        default: 4
+  telegram:
+    max_size_mb: 10
+    safety_threshold_mb: 8
+    upscale_warning: 4x
