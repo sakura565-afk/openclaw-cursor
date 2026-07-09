@@ -1,0 +1,42 @@
+# Camera motion presets for scripts/scene_composer.py
+#
+# Each preset drives a center-based crop/zoom over the clip duration.
+#   zoom_start / zoom_end : crop scale at t=0 and t=duration (1.0 = full frame).
+#                           A zoom > 1.0 crops a smaller window and scales it up
+#                           (zoom-in); interpolated linearly across the clip.
+#   pan_x / pan_y         : total horizontal / vertical travel of the crop centre
+#                           in output pixels across the whole clip. The pan is
+#                           centred, i.e. it moves from -pan/2 to +pan/2.
+#                           pan_x: positive = pans right, negative = pans left.
+#                           pan_y: positive = pans down,  negative = pans up.
+presets:
+  slow_zoom:
+    description: Gentle zoom-in (1.0x -> 1.15x) over duration. Best for editorial portraits.
+    zoom_start: 1.0
+    zoom_end: 1.15
+    pan_x: 0
+    pan_y: 0
+  dramatic_zoom:
+    description: Heavy zoom-in (1.0x -> 1.4x). Best for hero shots.
+    zoom_start: 1.0
+    zoom_end: 1.4
+    pan_x: 0
+    pan_y: 0
+  side_pan:
+    description: Slow horizontal pan (+/-40 px). Best for landscapes.
+    zoom_start: 1.0
+    zoom_end: 1.0
+    pan_x: 40  # positive = right, negative = left
+    pan_y: 0
+  dolly_in:
+    description: Zoom-in + slight forward pan. Best for cinematic feel.
+    zoom_start: 1.0
+    zoom_end: 1.2
+    pan_x: 0
+    pan_y: 10
+  dolly_out:
+    description: Zoom-out reveal (1.3x -> 1.0x). Best for dramatic reveals.
+    zoom_start: 1.3
+    zoom_end: 1.0
+    pan_x: 0
+    pan_y: 0
