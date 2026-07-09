@@ -1,0 +1,58 @@
+# Quality / defect rules for the Auto-LoRA stack selector.
+# Consumed by scripts/lora_selector.py to raise warnings before a render.
+
+# Known model defects. Each rule has a regex (matched case-insensitively against
+# the prompt) and the checkpoint it applies to. When the regex matches, the
+# `warning` is surfaced to the user.
+known_defects:
+  - id: klein_no_penetration
+    checkpoint: klein
+    pattern: '\b(penetration|penetrate|penetrating|intercourse|insertion)\b'
+    warning: "Klein 9B does not draw anatomical penetration — fall back to Pony v6 XL."
+  - id: pony_toy_color_roulette
+    checkpoint: pony
+    pattern: '\b(dildo|toy|toys|vibrator|plug|strap-?on)\b'
+    warning: "Pony v6 XL color-roulettes toy colors (purple/pink/black) per seed — pin the seed."
+  - id: klein_deep_squat_toy_three_arms
+    checkpoint: klein
+    pattern: '\b(deep[ _-]?squat|squat(ting)?)\b.*\b(dildo|toy|toys|vibrator|plug)\b|\b(dildo|toy|toys|vibrator|plug)\b.*\b(deep[ _-]?squat|squat(ting)?)\b'
+    warning: "Klein deep squat + toy triggers a THREE ARMS artifact — forbidden combination."
+  - id: klein_squat_foot_deform
+    checkpoint: klein
+    pattern: '\b(squat(ting)?|crouch(ing)?)\b'
+    warning: "Klein foot/toe deformation is common in squat/crouch poses — prefer standing/kneel/walk."
+  - id: klein_walking_water_arm_fusion
+    checkpoint: klein
+    pattern: '\bwalk(ing)?\b.*\b(water|ocean|sea|wave)\b|\b(water|ocean|sea|wave)\b.*\bwalk(ing)?\b'
+    warning: "Klein walking_water (side/back) pose fuses arm with thigh — use shore_walk (back-walking)."
+  - id: klein_lying_sand_asymmetry
+    checkpoint: klein
+    pattern: '\b(lying|lie|laying|lay)\b.*\b(sand|beach|shore)\b|\b(sand|beach|shore)\b.*\b(lying|lie|laying|lay)\b'
+    warning: "Klein lying_sand gives seed-dependent asymmetric breasts — reroll seed or avoid."
+
+# Poses that are safe with no known artifact risk.
+approved_poses:
+  standing_water: "hands on hips, waist-deep"
+  kneel_water: "hands on thighs, front-facing"
+  shore_walk: "back-walking, hands free"
+
+# Pose combinations that are risky or outright forbidden.
+forbidden_pose_combos:
+  - id: deep_squat_toy
+    description: "deep squat + toy → THREE ARMS artifact on Klein"
+    poses: [deep_squat]
+    with_content: [toy]
+    severity: forbidden
+  - id: walking_water
+    description: "walking_water (side/back) → arm fuses with thigh on Klein"
+    poses: [walking_water]
+    severity: risky
+  - id: lying_sand
+    description: "lying_sand → asymmetric breasts (seed-dependent) on Klein"
+    poses: [lying_sand]
+    severity: risky
+
+# Delivery constraints.
+limits:
+  telegram_max_bytes: 10485760  # 10 MB Telegram photo/file upload ceiling
+  telegram_max_mb: 10
