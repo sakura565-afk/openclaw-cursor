@@ -1,5 +1,40 @@
 # Scripts
 
+## Image audit tool (`image_audit.py` + `image_audit_report.py`)
+
+Read-only crawler + auditor for `amadey.ru` and `divaninfo.ru`. It discovers
+auditable pages from each site's `sitemap.xml` (scope filtered by the
+`audit_url_regex` in `config/sites.yaml`), extracts every `<img>` (including
+`<picture>`/`<source>` `srcset` and `loading` hints) and audits each image
+against an SEO / performance / accessibility checklist.
+
+Images are **never downloaded to disk** — only HTTP `HEAD` (with a ranged `GET`
+fallback of the first 64 KB) is used to learn size / real content-type. No JS is
+executed, so JS-rendered images are a documented limitation. Politeness: custom
+`OpenClawImageAuditBot/1.0` UA, per-request delay, request-rate ceiling and
+`robots.txt` respected; `/admin`, `/cart`, `/login`, `/user` are out of scope.
+
+### Config
+- `config/sites.yaml` — per-site `base_url`, `sitemap_url`, `audit_url_regex`.
+- `config/image_audit_rules.yaml` — thresholds, severities, recommendation text.
+- `config/templates/image_audit_report.html.j2` — Jinja2 report template.
+
+### Usage
+```bash
+# Crawl + audit, persist to SQLite (data/image_audit.db) and write an HTML report
+python scripts/image_audit.py run --site amadey --max-pages 50
+python scripts/image_audit.py run --site divaninfo --max-pages 10 --json
+
+# Regenerate an HTML report from the most recent stored run
+python scripts/image_audit.py report --site amadey --last --out report.html
+```
+
+Reports are written to `reports/image_audit/<site>_<YYYYMMDD_HHMM>/index.html`
+(plus `assets/site.css`). Findings are stored in `data/image_audit.db`
+(`runs` / `images` / `issues`).
+
+Tests: `pytest tests/test_image_audit.py -v --cov=scripts.image_audit`.
+
 ## Iskra → Kara shared memory (`kara_poll_iskra_results.py`)
 
 Iskra (tasks bot) appends structured JSON objects to a locked queue file under the OpenClaw workspace; Kara’s cron drains that file and clears it. Default path:

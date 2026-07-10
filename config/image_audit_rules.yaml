@@ -1,0 +1,86 @@
+# Thresholds, severities and recommendation text for the image audit tool
+# (scripts/image_audit.py + scripts/image_audit_report.py).
+#
+# Everything here is data-driven so operators can tune the audit without
+# touching Python. audit_image() reads `thresholds`, the report generator reads
+# `severity` and `recommendations`.
+
+thresholds:
+  png_max_kb: 200
+  jpg_max_kb: 300
+  webp_max_kb: 500
+  avif_max_kb: 500
+  gif_max_kb: 500          # fallback ceiling for other raster formats
+  alt_max_chars: 150
+  alt_max_words: 8
+  alt_max_phrases: 4        # comma-separated phrases before we flag stuffing
+  lazy_threshold_px: 500    # "above the fold" cut-off in CSS pixels
+  duplicate_url_threshold: 5
+  progressive_jpg_expected: true
+
+# Severity buckets consumed by the report (critical > major > minor).
+severity:
+  MISSING_ALT: major
+  EMPTY_SRC: critical
+  OVERSIZE_FILE: major
+  BROKEN_URL: critical
+  UNOPTIMIZED_FORMAT: minor
+  MISSING_DIMENSIONS: major
+  LAZY_MISSING_ABOVE_FOLD: minor
+  DUPLICATE_HASH: minor
+  ALT_TOO_LONG: minor
+  ALT_KEYWORD_STUFFED: minor
+
+# Rule-based recommendation text rendered in the HTML report. `url` links to a
+# canonical reference; `text` is the human explanation of the fix.
+recommendations:
+  MISSING_ALT:
+    text: >-
+      Add descriptive alt text for content images so screen readers and search
+      engines understand them. Decorative images should use alt="" explicitly.
+    url: "https://developer.mozilla.org/en-US/docs/Web/HTML/Element/img#alt"
+  EMPTY_SRC:
+    text: >-
+      Remove placeholder src="" / src="#" values or replace them with a real
+      asset. Empty sources trigger a redundant request to the current page.
+    url: "https://developer.mozilla.org/en-US/docs/Web/HTML/Element/img#src"
+  OVERSIZE_FILE:
+    text: >-
+      Compress or resize this image. Serve responsive sizes via srcset and
+      prefer modern formats (WebP/AVIF) to stay under the size budget.
+    url: "https://web.dev/articles/serve-responsive-images"
+  BROKEN_URL:
+    text: >-
+      The image URL returned an error or was unreachable. Fix the path or
+      remove the reference to avoid broken images and wasted requests.
+    url: "https://web.dev/articles/optimize-cls"
+  UNOPTIMIZED_FORMAT:
+    text: >-
+      Convert PNG photos to WebP/AVIF and enable progressive scan for JPEGs to
+      cut bytes without a visible quality loss.
+    url: "https://web.dev/articles/uses-webp-images"
+  MISSING_DIMENSIONS:
+    text: >-
+      Set explicit width and height attributes (or CSS aspect-ratio) so the
+      browser can reserve space and avoid Cumulative Layout Shift.
+    url: "https://web.dev/articles/optimize-cls"
+  LAZY_MISSING_ABOVE_FOLD:
+    text: >-
+      Above-the-fold LCP images should load eagerly (no loading="lazy"); images
+      further down the page should use loading="lazy" to save bandwidth.
+    url: "https://web.dev/articles/lazy-loading-images"
+  DUPLICATE_HASH:
+    text: >-
+      This image URL is reused across many pages. Host it once on a shared CDN
+      path so browsers can cache it and de-duplicate downloads.
+    url: "https://web.dev/articles/http-cache"
+  ALT_TOO_LONG:
+    text: >-
+      Shorten the alt text to a concise description (under 150 characters).
+      Long alt text is tedious for screen-reader users.
+    url: "https://www.w3.org/WAI/tutorials/images/"
+  ALT_KEYWORD_STUFFED:
+    text: >-
+      Rewrite the alt text as a natural sentence. Comma-separated keyword lists
+      read as spam to both users and search engines.
+    url: "https://www.w3.org/WAI/tutorials/images/decision-tree/"
