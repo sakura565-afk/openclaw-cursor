@@ -1,0 +1,40 @@
+# Site definitions shared across crawling tools (Task 07 product_catalog,
+# Task 08 image_audit). Each entry describes how to discover and filter the
+# pages worth auditing for a given furniture site.
+#
+# Fields:
+#   base_url         - canonical origin, used to resolve relative URLs.
+#   sitemap_url      - primary sitemap entry point (index or urlset).
+#   audit_url_regex  - only URLs matching this pattern are audited (product /
+#                      category / landing pages). Everything else (admin, cart,
+#                      login, account, search, filters) is skipped. Added in
+#                      Task 08 for the image audit tool.
+#   user_agent       - polite bot identity sent on every request.
+#   max_pages        - default crawl budget per run.
+#   delay_s          - per-request politeness delay (seconds).
+#   max_rps          - hard ceiling on request rate.
+
+defaults:
+  user_agent: "OpenClawImageAuditBot/1.0"
+  max_pages: 1000
+  delay_s: 1.0
+  max_rps: 3.0
+
+sites:
+  amadey:
+    name: "Мебельная фабрика Амадей"
+    base_url: "https://amadey.ru"
+    sitemap_url: "https://amadey.ru/sitemap.xml"
+    # amadey.ru serves the home page plus product/category pages as *.htm(l).
+    # The negative lookahead keeps admin / cart / login / account out of scope.
+    audit_url_regex: '^https?://(www\.)?amadey\.ru/(?!(?:admin|cart|korzina|login|logout|account|lichn|user|search|poisk|filter))(?:$|[\w\-/]+\.html?(?:\?.*)?$)'
+    user_agent: "OpenClawImageAuditBot/1.0"
+
+  divaninfo:
+    name: "DivanInfo"
+    base_url: "https://www.divaninfo.ru"
+    sitemap_url: "https://www.divaninfo.ru/sitemap.xml"
+    # divaninfo.ru serves the home page plus product/category pages as *.php
+    # (often with an ?id= query). Same out-of-scope exclusions apply.
+    audit_url_regex: '^https?://(www\.)?divaninfo\.ru/(?!(?:admin|cart|korzina|login|logout|account|lichn|user|search|poisk|filter))(?:$|[\w\-/]+\.php(?:\?.*)?$)'
+    user_agent: "OpenClawImageAuditBot/1.0"
