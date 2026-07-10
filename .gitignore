@@ -3,6 +3,14 @@ logs/nightly_pipeline.log
 .learnings/
 __pycache__/
 *.py[cod]
+
+# product_catalog pipeline runtime artifacts
+data/*.db
+logs/
+*.pyc
+.coverage
+.pytest_cache/
+products_*.csv
 tool_discovery_report.md
 tests/fixtures/
 
