@@ -1,0 +1,47 @@
+# Site-specific configuration for scripts/product_catalog.py
+#
+# Each top-level key is a site slug used on the CLI (--site <slug>).
+# `product_url_regex` filters sitemap URLs down to product detail pages.
+# `category_url_regex` identifies category/listing pages (used to infer
+# a product's category from its URL when no explicit category field exists).
+# `selectors` lists CSS selectors tried in order; the first match wins.
+
+# NOTE ON REGEXES: the spec's assumed patterns (/product/, /catalog/.../..., /divan/...)
+# are preserved below as the first alternations. The live sites are legacy
+# windows-1251 PHP apps whose product detail pages actually live at
+# `base.php?id=...` (divaninfo is served from the `www.` host), so the real
+# pattern is appended as an extra alternation. This keeps the config a superset
+# of the spec while making discovery functional against the live sitemaps.
+
+amadey:
+  base_url: https://amadey.ru
+  product_url_regex: '^https://amadey\.ru/(product/|catalog/[^/]+/[^/]+/?$|base\.php\?)'
+  category_url_regex: '^https://amadey\.ru/(catalog/[^/]+/?$|type\.php\?)'
+  user_agent: 'OpenClawCatalogBot/1.0 (+https://openclaw.ai/bot)'
+  # Best-effort fallbacks for the legacy base.php pages (no microdata):
+  # use the URL's `id` param as a stable SKU and read the "от NNNNN руб"
+  # price out of the page text when no price selector matches.
+  sku_url_param: id
+  price_text_regex: 'от\s*([\d\s\u00a0]+)\s*руб'
+  selectors:
+    sku: ['span.sku', '[itemprop="sku"]', '.product-article']
+    title: ['h1.product-title', 'h1', '[itemprop="name"]']
+    price: ['[itemprop="price"]', '.price-value', '.product-price']
+    in_stock: ['.in-stock', '.availability']
+    description: ['[itemprop="description"]', '.product-description']
+    image_main: ['[itemprop="image"]', '.product-image img', 'img.product']
+
+divaninfo:
+  base_url: https://divaninfo.ru
+  product_url_regex: '^https://(www\.)?divaninfo\.ru/(product/|divan/[^/]+/?$|base\.php\?id=)'
+  category_url_regex: '^https://(www\.)?divaninfo\.ru/(divan/?$|type\.php\?)'
+  user_agent: 'OpenClawCatalogBot/1.0 (+https://openclaw.ai/bot)'
+  sku_url_param: id
+  price_text_regex: 'от\s*([\d\s\u00a0]+)\s*руб'
+  selectors:
+    sku: ['[itemprop="sku"]', '.sku', '.product_meta .sku', '.article']
+    title: ['h1.entry-title', 'h1.product_title', 'h1', '[itemprop="name"]']
+    price: ['[itemprop="price"]', 'p.price .amount', '.price .amount', '.price']
+    in_stock: ['.stock', '.availability', '.in-stock']
+    description: ['[itemprop="description"]', '.woocommerce-product-details__short-description', '.product-description', '.entry-summary p']
+    image_main: ['[itemprop="image"]', '.woocommerce-product-gallery__image img', '.product-image img', 'img.product']
