@@ -5,6 +5,12 @@ __pycache__/
 *.py[cod]
 tool_discovery_report.md
 tests/fixtures/
+.coverage
+.pytest_cache/
+htmlcov/
+
+# image_audit generated HTML reports (runtime artifacts)
+reports/image_audit/
 
 # workflow_vcs runtime artifacts (per-machine git repo + sidecar metadata)
 comfyui_workflows/.git/
