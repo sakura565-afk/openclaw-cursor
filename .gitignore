@@ -4,6 +4,7 @@ logs/nightly_pipeline.log
 __pycache__/
 *.py[cod]
 tool_discovery_report.md
+tests/fixtures/
 
 # workflow_vcs runtime artifacts (per-machine git repo + sidecar metadata)
 comfyui_workflows/.git/
