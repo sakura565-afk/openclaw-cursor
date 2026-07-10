@@ -1,9 +1,10 @@
-# Quality / defect rules for the Auto-LoRA stack selector.
-# Consumed by scripts/lora_selector.py to raise warnings before a render.
+# Combined quality rules for the Auto-LoRA stack selector AND ComfyUI Quality Gate.
+# Consumed by:
+#   - scripts/lora_selector.py    (LoRA Stack Selector, Task 1)
+#   - scripts/quality_gate.py     (Quality Gate, Task 2)
+#   - scripts/anatomy_analyzer.py (Quality Gate, Task 2)
 
-# Known model defects. Each rule has a regex (matched case-insensitively against
-# the prompt) and the checkpoint it applies to. When the regex matches, the
-# `warning` is surfaced to the user.
+# ===== LoRA Stack Selector: known model defects (regex over prompt) =====
 known_defects:
   - id: klein_no_penetration
     checkpoint: klein
@@ -30,13 +31,11 @@ known_defects:
     pattern: '\b(lying|lie|laying|lay)\b.*\b(sand|beach|shore)\b|\b(sand|beach|shore)\b.*\b(lying|lie|laying|lay)\b'
     warning: "Klein lying_sand gives seed-dependent asymmetric breasts — reroll seed or avoid."
 
-# Poses that are safe with no known artifact risk.
 approved_poses:
   standing_water: "hands on hips, waist-deep"
   kneel_water: "hands on thighs, front-facing"
   shore_walk: "back-walking, hands free"
 
-# Pose combinations that are risky or outright forbidden.
 forbidden_pose_combos:
   - id: deep_squat_toy
     description: "deep squat + toy → THREE ARMS artifact on Klein"
@@ -52,7 +51,40 @@ forbidden_pose_combos:
     poses: [lying_sand]
     severity: risky
 
-# Delivery constraints.
 limits:
   telegram_max_bytes: 10485760  # 10 MB Telegram photo/file upload ceiling
   telegram_max_mb: 10
+
+# ===== Quality Gate: anatomical + pose + VRAM + delivery =====
+rules:
+  anatomical:
+    extra_limbs: {enabled: true, confidence_threshold: 0.7}
+    fused_hands: {enabled: true, confidence_threshold: 0.6}
+    bad_feet: {enabled: true, confidence_threshold: 0.7}
+    asymmetric_breasts: {enabled: true, area_diff_threshold: 0.25}
+    toy_color_roulette:
+      enabled: true
+      hue_ranges:
+        purple: [280, 320]
+        pink: [300, 340]
+    penetration_miss: {enabled: true}
+  pose_forbidden:
+    - {keywords: ["squat", "toy"], action: "reject", reason: "3-arm artifact"}
+  approved_poses:
+    - standing_water
+    - kneel_water
+    - shore_walk
+  vram:
+    rtx3060_12gb:
+      safe_gb: 10
+      model_vram_gb:
+        flux-2-klein-9b: 6
+        ponyV6XL: 7
+        sdxl: 4
+        sd1.5: 2
+        wan2.2: 12
+        default: 4
+  telegram:
+    max_size_mb: 10
+    safety_threshold_mb: 8
+    upscale_warning: 4x
