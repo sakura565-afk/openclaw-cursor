@@ -155,15 +155,24 @@ def test_collect_jobs_seed_variants(tmp_path: Path) -> None:
     assert jobs[1].prompt_graph()["3"]["inputs"]["seed"] == 101
 
 
-def test_dispatch_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dispatch_dry_run_without_live_hosts(tmp_path: Path) -> None:
+    """Dry-run must not require reachable ComfyUI endpoints."""
+    jobs = [RenderJob(job_id="a", workflow=API_WORKFLOW, label="a")]
+    pool = MachinePool(machines=[Machine(name="Local", url="http://127.0.0.1:59999")])
+    results = dispatch_jobs(
+        jobs,
+        pool=pool,
+        output_dir=tmp_path / "out",
+        dry_run=True,
+        logger=multi.MarkdownLogger(tmp_path / "log.md"),
+    )
+    assert len(results) == 1
+    assert results[0].success
+    assert results[0].machine == "Local"
+
+
+def test_dispatch_dry_run(tmp_path: Path) -> None:
     machines = [Machine(name="Local", url="http://127.0.0.1:8188")]
-
-    def fake_probe(machine: Machine, timeout: float = 5.0) -> MachineStatus:
-        return MachineStatus(machine=machine, online=True)
-
-    monkeypatch.setattr("scripts.comfy_multi_render.probe_machine", fake_probe)
-    monkeypatch.setattr("scripts.comfy_machine_pool.probe_machine", fake_probe)
-
     jobs = [
         RenderJob(job_id="a", workflow=API_WORKFLOW, label="a"),
         RenderJob(job_id="b", workflow=API_WORKFLOW, label="b"),
@@ -187,15 +196,9 @@ def test_cli_pool_list() -> None:
     assert main(["list"]) == 0
 
 
-def test_cli_multi_render_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_multi_render_dry_run(tmp_path: Path) -> None:
     wf = tmp_path / "w.json"
     wf.write_text(json.dumps(API_WORKFLOW), encoding="utf-8")
-
-    def fake_probe(machine: Machine, timeout: float = 5.0) -> MachineStatus:
-        return MachineStatus(machine=machine, online=True)
-
-    monkeypatch.setattr("scripts.comfy_multi_render.probe_machine", fake_probe)
-    monkeypatch.setattr("scripts.comfy_machine_pool.probe_machine", fake_probe)
 
     rc = multi.main(
         [

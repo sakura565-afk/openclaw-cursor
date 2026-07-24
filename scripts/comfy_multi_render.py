@@ -297,15 +297,22 @@ def select_machine(
     *,
     prefer: Optional[str] = None,
     sticky: Optional[MachineStatus] = None,
+    dry_run: bool = False,
 ) -> MachineStatus:
     if prefer:
         machine = pool.get(prefer)
         if machine is None:
             raise RenderError(f"Unknown preferred machine: {prefer}")
+        if dry_run:
+            return MachineStatus(machine=machine, online=True)
         status = probe_machine(machine, timeout=pool.timeout)
         if not status.online:
             raise RenderError(f"Preferred machine {prefer} is offline: {status.error}")
         return status
+    if dry_run:
+        if not pool.machines:
+            raise RenderError("Machine pool is empty.")
+        return MachineStatus(machine=pool.machines[0], online=True)
     if sticky is not None and sticky.online:
         refreshed = probe_machine(sticky.machine, timeout=pool.timeout)
         if refreshed.online:
@@ -399,7 +406,7 @@ def dispatch_jobs(
     workers = max(1, min(parallel, len(jobs) or 1))
 
     def _submit(job: RenderJob) -> RenderResult:
-        status = select_machine(pool, prefer=prefer)
+        status = select_machine(pool, prefer=prefer, dry_run=dry_run)
         return run_one_job(
             job,
             status.machine,
