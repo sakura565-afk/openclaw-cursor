@@ -1,0 +1,13 @@
+name: health_sheets
+type: script
+description: Collect system health metrics and write to Google Sheets, alert via Telegram on anomaly
+
+config:
+  runner: python
+  path: scripts/health_sheets.py
+  timeout: 120
+  env:
+    COMPOSIO_API_KEY: "${COMPOSIO_API_KEY}"
+    TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
+    TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID}"
+    GOOGLE_SHEETS_ID: "${GOOGLE_SHEETS_ID}"

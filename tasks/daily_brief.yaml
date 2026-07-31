@@ -1,0 +1,28 @@
+# =============================================================================
+# Daily Brief Task Definition
+# Fetches today's calendar events + unread emails, sends digest to Telegram
+# =============================================================================
+
+name: daily_brief
+description: >
+  Daily brief: fetches Google Calendar events for today + top unread emails
+  from Gmail, formats a digest in Russian, and sends it via Telegram bot.
+type: script
+
+# Environment variables required:
+env:
+  - COMPOSIO_API_KEY      # Composio API key for Gmail/Calendar access
+  - TELEGRAM_BOT_TOKEN    # Telegram bot token
+  - TELEGRAM_CHAT_ID      # Target chat ID for the digest
+
+# Composio tools used (connection must be active):
+#   - gmail      (Gmail toolkit via Composio)
+#   - googlecalendar  (Google Calendar toolkit via Composio)
+
+script: scripts/daily_brief.py
+
+# Log output
+log_file_pattern: "logs/daily_brief_YYYYMMDD.json"
+
+# Optional trigger configuration (can be run manually or via cron):
+# trigger: "0 8 * * *"  # 08:00 daily
