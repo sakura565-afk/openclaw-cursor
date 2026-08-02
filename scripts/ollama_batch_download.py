@@ -29,7 +29,7 @@ def log(msg: str):
     ts = time.strftime("%H:%M:%S")
     line = f"[{ts}] {msg}"
     print(line)
-    with open(LOG, "a") as f:
+    with open(LOG, "a", encoding="utf-8") as f:
         f.write(line + "\n")
 
 def pull(model: str) -> bool:

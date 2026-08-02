@@ -165,26 +165,31 @@ def generate_morning_brief() -> str:
 
 
 def send_telegram_summary(brief: str) -> str:
-    """Send morning brief to Telegram"""
+    """Send morning brief to Telegram via the repo's own telegram_sender."""
     log("Sending Telegram summary...")
     try:
-        script_path = (
-            Path.home()
-            / ".openclaw"
-            / "skills"
-            / "telegram-media-send"
-            / "scripts"
-            / "telegram_media_send_v2.py"
-        )
-        if not script_path.exists():
-            log("Telegram script not found, skipping")
+        from scripts.telegram_sender import TelegramConfig, TelegramSender, TelegramSenderError
+
+        try:
+            config = TelegramConfig.from_env()
+        except TelegramSenderError:
+            log("Telegram env vars not set (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID), skipping")
             return "SKIP"
 
-        msg = f"🌅 *Утренний брифинг*\n\n{brief}"
-        msg_file = Path(tempfile.gettempdir()) / "openclaw_brief_msg.txt"
-        msg_file.write_text(msg, encoding="utf-8")
-
-        log(f"Brief ready at: {Path.home() / '.openclaw' / 'workspace' / 'morning_brief.md'}")
+        msg = f"*Утренний брифинг*\n\n{brief}"
+        sender = TelegramSender(config, reporter=log)
+        brief_path = Path.home() / ".openclaw" / "workspace" / "morning_brief.md"
+        if brief_path.exists():
+            sender.send_document(brief_path, caption=msg[:1024])
+        else:
+            import requests as _requests
+            url = f"https://api.telegram.org/bot{config.token}/sendMessage"
+            _requests.post(
+                url,
+                json={"chat_id": config.chat_id, "text": msg, "parse_mode": "Markdown"},
+                timeout=config.timeout_seconds,
+            )
+        log("Telegram summary sent successfully")
         return "OK"
     except Exception as e:
         return f"EXCEPTION: {e}"
