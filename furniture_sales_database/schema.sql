@@ -1,5 +1,31 @@
 PRAGMA foreign_keys = ON;
 
+CREATE TABLE IF NOT EXISTS suppliers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    contact TEXT,
+    phone TEXT,
+    email TEXT,
+    website TEXT,
+    address TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS platform_supplier_prices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_id INTEGER NOT NULL,
+    product_name TEXT NOT NULL,
+    unit_price REAL NOT NULL,
+    min_quantity INTEGER DEFAULT 1,
+    lead_time_days INTEGER,
+    currency TEXT DEFAULT 'RUB',
+    source_url TEXT,
+    scraped_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
+);
+
 CREATE TABLE IF NOT EXISTS platforms (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE
