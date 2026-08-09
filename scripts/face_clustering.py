@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 """Cluster faces in an image archive.
 
 Backends (``--backend``):
@@ -21,6 +22,7 @@ import argparse
 import json
 import multiprocessing
 import os
+import shutil
 import sys
 import threading
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -122,7 +124,6 @@ class FaceRecognitionBackend:
         return [np.asarray(vector, dtype=float) for vector in encodings]
 
 
-class InsightFaceBackend:
 class InsightFaceBackend:
     kind: ClassVar[str] = "insightface"
 
@@ -595,10 +596,10 @@ def export_folders(scan_root: Path, result: ClusterResult, export_dir: Path) -> 
         person_dir.mkdir(parents=True, exist_ok=True)
         for member in members:
             link_name = safe_link_name(scan_root, member.file_path, member.face_index)
-            link_path = person_dir / link_name
-            if link_path.exists() or link_path.is_symlink():
-                link_path.unlink()
-            link_path.symlink_to(member.file_path.resolve())
+            dest_path = person_dir / link_name
+            if dest_path.exists():
+                dest_path.unlink()
+            shutil.copy2(member.file_path.resolve(), dest_path)
 
 
 def run(

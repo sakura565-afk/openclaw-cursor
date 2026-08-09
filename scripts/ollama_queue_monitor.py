@@ -14,9 +14,9 @@ QUEUE = [
     ("deepseek-r1:14b", "deepseek-r1:14b"),
     ("gemma4:e4b", "gemma4:e4b"),
     ("deepcoder:14b", "deepcoder:14b"),
-    ("nemotron-reward:latest", "nemotron-reward"),
-    ("lfm2.5:latest", "lfm2.5"),
-    ("bespoke:latest", "bespoke"),
+    # Removed nemotron-reward (doesn't exist in Ollama library)
+    # Removed lfm2.5 (use maternion/lfm2.5 if needed)
+    # Removed bespoke (doesn't exist, only bespoke-minicheck)
 ]
 
 LOG = Path(__file__).parent.parent / "logs" / "ollama_queue_monitor.log"
@@ -32,33 +32,81 @@ def log(msg: str):
 def get_ollama_models() -> list:
     try:
         result = subprocess.run(
-            ["ollama", "list", "--json"],
+            ["ollama", "list"],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=60 # Increased timeout
         )
-        import json
-        models = json.loads(result.stdout)
-        return [m["name"] for m in models]
-    except:
+        log(f"ollama list stdout: {result.stdout.strip()}")
+        log(f"ollama list stderr: {result.stderr.strip()}")
+        log(f"ollama list returncode: {result.returncode}")
+
+        # Plain text table: NAME (30 chars) | ID | SIZE | MODIFIED
+        lines = result.stdout.strip().split("\n")
+        if len(lines) <= 1:
+            log("No models found or only header returned by ollama list.")
+            return []
+        models = []
+        for line in lines[1:]:  # Skip header
+            if line.strip():
+                # NAME column is first 30 characters, stripped
+                name = line[:30].strip()
+                if name:
+                    models.append(name)
+        return models
+    except Exception as e:
+        log(f"ERROR getting ollama models: {e}")
+        return []
         return []
 
-def is_model_downloading(model_short: str) -> bool:
-    """Check if Ollama is currently downloading a model (running ollama pull)."""
+def is_ollama_pull_active() -> bool:
+    """Check if an ollama *pull* subprocess is currently active.
+    The Ollama server (ollama serve) is always running, so checking for any
+    ollama.exe would yield a constant false positive. We use WMIC to inspect
+    the command line and only flag processes whose command starts with
+    'ollama pull'.
+    """
     try:
         result = subprocess.run(
-            ["curl", "-s", "http://localhost:11434/api/ps"],
+            ["wmic", "process", "where",
+             "name='ollama.exe'",
+             "get", "CommandLine", "/format:list"],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=15
         )
-        import json
-        data = json.loads(result.stdout)
-        # If there's a running model with "pulling" in status, it's downloading
-        if data.get("model"):
-            return "pulling" in str(data).lower()
+        # Iterate each block separated by blank lines; each block has
+        # CommandLine=... If any block contains a pull invocation, return True.
+        text = result.stdout or ""
+        for block in text.split("\n\n"):
+            for line in block.splitlines():
+                if line.lower().startswith("commandline="):
+                    cmd = line.split("=", 1)[1].strip().lower()
+                    # Treat as a pull if command line is 'ollama pull ...'
+                    if "ollama" in cmd and "pull" in cmd:
+                        log(f"Detected active ollama pull: {cmd}")
+                        return True
         return False
-    except:
+    except FileNotFoundError:
+        log("WMIC unavailable; falling back to broader heuristic.")
+        # Fallback: any ollama.exe other than the persistent server is suspicious.
+        # Use tasklist to at least count processes.
+        try:
+            res = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq ollama.exe"],
+                capture_output=True, text=True, timeout=10
+            )
+            lines = [l for l in res.stdout.splitlines() if "ollama.exe" in l.lower()]
+            # If more than one ollama.exe, a pull is likely in progress
+            if len(lines) > 1:
+                log(f"Multiple ollama.exe processes ({len(lines)}); assuming pull active.")
+                return True
+            return False
+        except Exception as inner:
+            log(f"Fallback process check failed: {inner}")
+            return False
+    except Exception as e:
+        log(f"ERROR checking for active ollama pull: {e}")
         return False
 
 def launch_pull(model: str) -> bool:
@@ -79,9 +127,9 @@ def main():
     models = get_ollama_models()
     log(f"Current models: {models}")
 
-    # Check if something is still downloading
-    if is_model_downloading(""):
-        log("A model is still downloading, skip launching new one")
+    # Check if an ollama process is running (potential pull or inference)
+    if is_ollama_pull_active():
+        log("An Ollama process is active, skipping new launch to avoid conflicts.")
         log("=== DONE ===")
         return
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 import atexit
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -21,6 +22,20 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+# Strip  DeepSeek-R1/Qwen3-style chain-of-thought (``...``) and
+# ANSI terminal escape sequences (cursor movement / spinner / hide-cursor).
+_THINK_RE = re.compile(r"\{}.*?{}", re.DOTALL)
+_ESC_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\[\?[0-9]+[hl]|\[\d*[GK]")
+def _strip_artifacts(text: str) -> str:
+    if not text:
+        return text or ""
+    text = _THINK_RE.sub("", text)
+    text = _ESC_RE.sub("", text)
+    text = re.sub(r"^Thinking\.\.\..*?thinking\.\n?", "", text, flags=re.DOTALL)
+    text = re.sub(r"\.{3,}|\.{3,}|…{2,}", "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 LOG_FILE = Path(__file__).parent.parent / "logs" / "nightly_pipeline.log"
 LOG_FILE.parent.mkdir(exist_ok=True)
@@ -115,6 +130,29 @@ def obsidian_sync() -> str:
         return f"EXCEPTION: {e}"
 
 
+def _recent_daily_context(memory_dir: Path, max_files: int = 3, max_chars: int = 1500) -> str:
+    """Fallback: concatenate the most recent daily-YYYY-MM-DD.md files by mtime.
+
+    Skips non-date files (e.g. comfyui_news.md, nightly_pipeline_state.json.md).
+    Returns empty string when nothing matches.
+    """
+    date_re = re.compile(r"^\d{4}-\d{2}-\d{2}\.md$")
+    candidates = [
+        f for f in memory_dir.glob("*.md")
+        if date_re.match(f.name)
+    ]
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+    chunks: List[str] = []
+    for f in candidates[:max_files]:
+        try:
+            chunks.append(f.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+    return "\n\n---\n\n".join(chunks)[:max_chars]
+
+
 def generate_morning_brief() -> str:
     """Generate morning brief using local model"""
     log("Generating morning brief...")
@@ -127,12 +165,17 @@ def generate_morning_brief() -> str:
 
     context = "No recent logs found"
     if log_file.exists():
-        context = log_file.read_text(encoding="utf-8")[:1000]
+        context = log_file.read_text(encoding="utf-8", errors="replace")[:1000]
     else:
         today = datetime.now().strftime("%Y-%m-%d")
         today_file = memory_dir / f"{today}.md"
         if today_file.exists():
-            context = today_file.read_text(encoding="utf-8")[:1000]
+            context = today_file.read_text(encoding="utf-8", errors="replace")[:1000]
+        else:
+            recent = _recent_daily_context(memory_dir)
+            if recent:
+                log("  No daily for yesterday/today, falling back to recent files")
+                context = recent
 
     prompt = (
         f"Create a short morning summary in Russian (3-4 lines):\n\n"
@@ -140,7 +183,7 @@ def generate_morning_brief() -> str:
         f"Format:\n✅ Что сделано:\n🔄 В процессе:\n⚠️ Требует внимания:"
     )
 
-    result = run_ollama("qwen3.5:2b", prompt, timeout=60)
+    result = _strip_artifacts(run_ollama("deepseek-r1:14b", prompt, timeout=120))
 
     brief_file = Path.home() / ".openclaw" / "workspace" / "morning_brief.md"
     brief_file.write_text(
