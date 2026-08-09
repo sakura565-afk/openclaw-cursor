@@ -1,0 +1,50 @@
+diff --git a/modules/impact/wildcards.py b/modules/impact/wildcards.py
+index 7fa94a5..d3c7079 100644
+--- a/modules/impact/wildcards.py
++++ b/modules/impact/wildcards.py
+@@ -383,6 +383,16 @@ def load_yaml_wildcard(file_path, key_prefix=''):
+     if not yaml_data:
+         return []
+ 
++    # Hardening for ComfyUI upgrades: a malformed .yaml/.yml wildcard file may
++    # parse into a bare str (or list) instead of a mapping. Calling .items() /
++    # .values() on it raises "'str' object has no attribute 'items'/'values'".
++    # Guard so a single bad file cannot abort wildcard loading / validation.
++    if not isinstance(yaml_data, dict):
++        logging.warning(
++            f"[Impact Pack] Skipping malformed YAML wildcard "
++            f"(expected mapping, got {type(yaml_data).__name__}): {file_path}")
++        return yaml_data if isinstance(yaml_data, list) else []
++
+     # For nested YAML structures, expand into loaded_wildcards
+     result = []
+     for k, v in yaml_data.items():
+@@ -495,9 +505,13 @@ def read_wildcard_dict(wildcard_path, on_demand=False):
+                     # since they may contain nested structures
+                     loader = LazyWildcardLoader(file_path, 'yaml')
+                     yaml_data = loader.get_data()
+-                    if yaml_data:
++                    if isinstance(yaml_data, dict):
+                         for k, v in yaml_data.items():
+                             read_wildcard(k, v, on_demand)
++                    elif yaml_data:
++                        logging.warning(
++                            f"[Impact Pack] Skipping malformed YAML wildcard "
++                            f"(expected mapping, got {type(yaml_data).__name__}): {file_path}")
+                 else:
+                     # Load data immediately (original behavior)
+                     try:
+@@ -507,6 +521,13 @@ def read_wildcard_dict(wildcard_path, on_demand=False):
+                         with open(file_path, 'r', encoding="UTF-8", errors="ignore") as f:
+                             yaml_data = yaml.load(f, Loader=yaml.FullLoader)
+ 
++                    if not isinstance(yaml_data, dict):
++                        if yaml_data:
++                            logging.warning(
++                                f"[Impact Pack] Skipping malformed YAML wildcard "
++                                f"(expected mapping, got {type(yaml_data).__name__}): {file_path}")
++                        continue
++
+                     for k, v in yaml_data.items():
+                         read_wildcard(k, v, on_demand)
+ 
