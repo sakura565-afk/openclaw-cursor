@@ -1,0 +1,18 @@
+project: furniture_catalog
+source_dir: media/inbound/furniture/
+outputs:
+  - { format: "1:1",  motion: slow_push_in, duration_sec: 7 }
+  - { format: "9:16", motion: slow_push_in, duration_sec: 7 }
+  - { format: "16:9", motion: slow_push_in, duration_sec: 7 }
+quality_gates:
+  max_ar_drift: 0.03
+  max_render_sec: 1800
+  min_resolution_h: 720
+delivery:
+  telegram_chat: 25979298
+  progress_every_min: 30
+  caption_template: "{name} {format} ready 7s"
+recovery:
+  max_retries: 2
+  resume_from_state: true
+output_dir: media/out/main/furniture/

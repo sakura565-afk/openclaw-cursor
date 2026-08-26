@@ -1,0 +1,13 @@
+project: editorial_pose_series
+source_dir: media/inbound/editorial/
+outputs:
+  - { format: "3:4", motion: slow_turn, duration_sec: 5 }
+  - { format: "9:16", motion: slow_turn, duration_sec: 5 }
+quality_gates:
+  max_ar_drift: 0.05
+delivery:
+  telegram_chat: 25979298
+  caption_template: "{name} 3:4 editorial ready"
+recovery:
+  max_retries: 3
+output_dir: media/out/main/editorial/
