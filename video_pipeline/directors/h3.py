@@ -184,13 +184,34 @@ class H3Director(Director):
         return prompt_id
 
     def _extract_video_path(self, history_entry: dict[str, Any], job: JobSpec) -> Path:
-        """Extract rendered video path from ComfyUI history output."""
+        """Extract rendered video path from ComfyUI history output.
+
+        Tries multiple output field names (``videos``, ``video``, ``gifs``) since
+        different Save* nodes (SaveVideo, VHS Video Combine, custom MiniMax H3
+        helpers) use different key conventions. Falls back to a filesystem scan
+        on ``output_dir`` matching the job's filename_prefix when the history
+        extraction fails (ComfyUI sometimes returns success with no usable
+        output reference, especially with custom nodes).
+        """
         outputs = history_entry.get("outputs", {})
-        for node_output in outputs.values():
-            videos = node_output.get("videos", [])
-            if videos:
-                video_info = videos[0]
-                filename = video_info["filename"]
+        candidate_keys = ("videos", "video", "gifs", "images")
+
+        for node_id, node_output in outputs.items():
+            for key in candidate_keys:
+                items = node_output.get(key)
+                if not items:
+                    continue
+                video_info = items[0] if isinstance(items, list) else items
+                if not isinstance(video_info, dict):
+                    continue
+                filename = video_info.get("filename")
+                if not filename:
+                    continue
+                # For images, skip — we only want video/audio extensions
+                if key == "images" and not filename.lower().endswith(
+                    (".mp4", ".webm", ".gif", ".mov", ".avi")
+                ):
+                    continue
                 subfolder = video_info.get("subfolder", "")
                 folder_type = video_info.get("type", "output")
                 params = {
@@ -198,17 +219,83 @@ class H3Director(Director):
                     "subfolder": subfolder,
                     "type": folder_type,
                 }
-                response = self._http("GET", "/view", params=params, timeout=120)
+                try:
+                    response = self._http("GET", "/view", params=params, timeout=120)
+                    job.output_path.parent.mkdir(parents=True, exist_ok=True)
+                    job.output_path.write_bytes(response.content)
+                    logger.info(
+                        "Extracted video via history node={} key={} filename={}",
+                        node_id, key, filename,
+                    )
+                    return job.output_path
+                except Exception as exc:
+                    logger.warning(
+                        "History extraction failed for node={} key={} ({})",
+                        node_id, key, exc,
+                    )
+                    continue
+
+        # Fallback: scan filesystem for files matching the job's prefix.
+        fallback = self._locate_output_fallback(job)
+        if fallback is not None:
+            try:
                 job.output_path.parent.mkdir(parents=True, exist_ok=True)
-                job.output_path.write_bytes(response.content)
+                if fallback != job.output_path:
+                    job.output_path.write_bytes(fallback.read_bytes())
+                logger.info(
+                    "Extracted video via filesystem fallback: {}",
+                    fallback,
+                )
                 return job.output_path
+            except Exception as exc:
+                logger.warning("Filesystem fallback failed for {}: {}", fallback, exc)
 
         status = history_entry.get("status", {})
         if status.get("status_str") == "error":
             messages = status.get("messages", [])
             raise H3DirectorError(f"ComfyUI render failed: {messages}")
 
-        raise H3DirectorError(f"No video output in history for job {job.output_path.name}")
+        # Diagnostic: dump output keys so the failure is debuggable.
+        keys_summary = {
+            node_id: sorted(node_output.keys())
+            for node_id, node_output in outputs.items()
+        }
+        raise H3DirectorError(
+            f"No video output in history for job {job.output_path.name}. "
+            f"Outputs keys per node: {keys_summary}"
+        )
+
+    def _locate_output_fallback(self, job: JobSpec) -> Path | None:
+        """Scan ``output_dir`` for files matching the job's filename_prefix.
+
+        ComfyUI's SaveVideo (and some custom nodes) return non-standard keys
+        in history and sometimes no usable ``videos`` reference at all. Falling
+        back to a filesystem scan matches the proven v4 director pattern and
+        makes the pipeline resilient to workflow output-shape changes.
+        """
+        if not self.output_dir.exists():
+            return None
+
+        # Prefer explicit prefix from job.extra (set in prepare()).
+        prefix = (job.extra or {}).get("filename_prefix", "")
+        bare = prefix.split("/")[-1] if prefix else ""
+
+        # Fall back to stem-based match if no prefix was set.
+        if not bare:
+            bare = job.output_path.stem
+
+        candidates: list[Path] = []
+        # ComfyUI typically writes files matching {prefix}_{counter:05d}_.mp4
+        for pattern in (f"{bare}*.mp4", f"{bare}*.webm", f"{bare}*.mov", f"{bare}*"):
+            candidates.extend(self.output_dir.glob(pattern))
+
+        if not candidates:
+            return None
+
+        # Prefer newest, but require file age to match the current render
+        # window (avoid picking up stale files from previous jobs).
+        candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return candidates[0]
 
     def poll_until_done(self, prompt_id: str, timeout_sec: int) -> VideoResult:
         """Poll ComfyUI history until render completes."""
