@@ -166,8 +166,10 @@ def fetch_day_stats(
     with opener.open(request, timeout=timeout) as response:
         payload = json.loads(response.read().decode("utf-8"))
 
-    totals = payload.get("totals", [[]])
-    row = totals[0] if totals and isinstance(totals[0], list) else []
+    # API may return totals as a flat list [v0, v1, v2] (single-day or week group)
+    # OR as a nested list [[d0], [d1], ...] (multi-day with day group). Handle both.
+    totals = payload.get("totals", [])
+    row = totals[0] if totals and isinstance(totals[0], list) else totals
     return DayStats.from_totals([float(x) for x in row])
 
 
