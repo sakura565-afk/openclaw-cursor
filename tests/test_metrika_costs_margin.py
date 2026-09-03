@@ -152,5 +152,43 @@ class ReportBuildTests(unittest.TestCase):
         self.assertIn("No cost data available", report)
 
 
+class ResolveCategoryTests(unittest.TestCase):
+    """Override-based category resolution (mirrors -> Classic furniture)."""
+
+    def test_mirror_in_name_reclassified_to_classic(self) -> None:
+        cost = {"name": "Зеркало напольное MF-102", "category": "Декор"}
+        sale = {"sku": "Зеркало напольное 'Амадей MF-102'", "category": "Декор"}
+        self.assertEqual(mcm.resolve_category(cost, sale), "Классическая мебель")
+
+    def test_mirror_in_sku_only_reclassified_to_classic(self) -> None:
+        # cost_item.name may be stale (e.g. "Стол садовый Rio белый") while the
+        # sale.sku is the authoritative mirror reference; the override must
+        # still hit. Regression case from 2026-09-03.
+        cost = {"name": "Стол садовый Rio белый", "category": "Декор"}
+        sale = {"sku": "Зеркало напольное 'Амадей MF-102'", "category": "Декор"}
+        self.assertEqual(mcm.resolve_category(cost, sale), "Классическая мебель")
+
+    def test_non_mirror_decor_kept_as_decor(self) -> None:
+        cost = {"name": "Подставка для обуви SS 102", "category": "Декор"}
+        sale = {"sku": "Подставка 01 арт.", "category": "Декор"}
+        self.assertEqual(mcm.resolve_category(cost, sale), "Декор")
+
+    def test_other_categories_unaffected(self) -> None:
+        cost = {"name": "Диван Селва", "category": "Мягкая мебель"}
+        sale = {"sku": "Диван Селва", "category": "Мягкая мебель"}
+        self.assertEqual(mcm.resolve_category(cost, sale), "Мягкая мебель")
+
+    def test_missing_category_falls_back_to_unknown(self) -> None:
+        cost = {"name": "Item without category"}
+        sale = {"sku": "X"}
+        self.assertEqual(mcm.resolve_category(cost, sale), "(unknown)")
+
+    def test_override_does_not_match_substring_of_unrelated_word(self) -> None:
+        # Guard against future Cyrillic stem collisions: "Зер" must NOT trigger.
+        cost = {"name": "Зернодробилка", "category": "Декор"}
+        sale = {"sku": "Зернодробилка бытовая", "category": "Декор"}
+        self.assertEqual(mcm.resolve_category(cost, sale), "Декор")
+
+
 if __name__ == "__main__":
     unittest.main()
