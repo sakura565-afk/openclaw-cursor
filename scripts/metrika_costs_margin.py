@@ -86,9 +86,14 @@ SALES_LOOKBACK_DAYS = 30
 # Category overrides applied after the data-driven category lookup. Each entry
 # matches a substring of the cost-item name + sale sku (case-insensitive); the
 # first match wins. Add new overrides here when a sub-category is consistently
-# mis-classified upstream (e.g. mirrors sitting in "Декор" with no margin story).
+# mis-classified upstream (e.g. mirrors and tables sitting in "Декор" with no
+# margin story). The order is significant — keep higher-priority / longer
+# stems earlier to win the substring race.
 CATEGORY_OVERRIDES: tuple[tuple[str, str], ...] = (
     ("Зеркал", "Классическая мебель"),  # Mirrors — classic furniture, not decor.
+    ("Стол", "Классическая мебель"),  # Tables (письменный/чайный/туалетный/обеденный/садовый)
+                                       # — classic furniture, not decor. Substring catches
+                                       # all inflections: Стол/Столы/Столик/Столу/Столом.
 )
 
 # Cyrillic look-alikes normalized to their Latin counterpart so a SKU typed
