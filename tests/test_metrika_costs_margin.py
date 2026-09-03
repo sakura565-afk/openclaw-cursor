@@ -189,6 +189,31 @@ class ResolveCategoryTests(unittest.TestCase):
         sale = {"sku": "Зернодробилка бытовая", "category": "Декор"}
         self.assertEqual(mcm.resolve_category(cost, sale), "Декор")
 
+    def test_table_in_name_reclassified_to_classic(self) -> None:
+        # Substring "Стол" should match every table variant.
+        for table_name in [
+            "Стол письменный арт.101",
+            "Стол чайный T203А",
+            "Стол туалетный М 115",
+            "Стол Сабля 140*180",
+            "Стол раздвижной круглый Ф120(160)",
+            "Стол садовый Rio белый",  # even when stale cost name != sku
+        ]:
+            with self.subTest(table_name=table_name):
+                cost = {"name": table_name, "category": "Декор"}
+                sale = {"sku": table_name, "category": "Декор"}
+                self.assertEqual(mcm.resolve_category(cost, sale), "Классическая мебель")
+
+    def test_stolb_substring_documented_as_furniture(self) -> None:
+        # Documented edge case: "Столб" (column/post) contains substring "Стол"
+        # and is therefore reclassified too. Acceptable for a furniture-only
+        # SKU universe. If posts ever appear in the data and need their own
+        # category, narrow the override to "Стол " (trailing space) or move
+        # to word-boundary matching.
+        cost = {"name": "Столб декоративный", "category": "Декор"}
+        sale = {"sku": "Столб декоративный", "category": "Декор"}
+        self.assertEqual(mcm.resolve_category(cost, sale), "Классическая мебель")
+
 
 if __name__ == "__main__":
     unittest.main()
