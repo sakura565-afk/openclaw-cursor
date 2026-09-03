@@ -83,6 +83,19 @@ DEFAULT_SALES_FILE = REPO_ROOT / "scripts" / "parsed_sales_v20.json"
 VAT_MULTIPLIER = 1.20
 SALES_LOOKBACK_DAYS = 30
 
+# Category overrides applied after the data-driven category lookup. Each entry
+# matches a substring of the cost-item name + sale sku (case-insensitive); the
+# first match wins. Add new overrides here when a sub-category is consistently
+# mis-classified upstream (e.g. mirrors and tables sitting in "Декор" with no
+# margin story). The order is significant — keep higher-priority / longer
+# stems earlier to win the substring race.
+CATEGORY_OVERRIDES: tuple[tuple[str, str], ...] = (
+    ("Зеркал", "Классическая мебель"),  # Mirrors — classic furniture, not decor.
+    ("Стол", "Классическая мебель"),  # Tables (письменный/чайный/туалетный/обеденный/садовый)
+                                       # — classic furniture, not decor. Substring catches
+                                       # all inflections: Стол/Столы/Столик/Столу/Столом.
+)
+
 # Cyrillic look-alikes normalized to their Latin counterpart so a SKU typed
 # with either alphabet still matches (constraint: "normalize Cyrillic").
 _CYRILLIC_TO_LATIN = str.maketrans(
@@ -355,6 +368,25 @@ def compute_margin(sale_total: float, cost_with_vat: float) -> tuple[float, floa
     return margin_rub, margin_pct
 
 
+def resolve_category(cost_item: dict, sale: dict) -> str:
+    """Effective category for a matched sale.
+
+    Starts from the data-driven category (``cost_item['category']`` or
+    ``sale['category']``) and re-applies the name-based overrides defined in
+    ``CATEGORY_OVERRIDES``. Mirrors (Зеркало/Зеркала) are intentionally
+    reclassified as "Классическая мебель" so they stop inflating the "Декор"
+    margin in the daily report.
+    """
+    base = cost_item.get("category") or sale.get("category") or "(unknown)"
+    haystack = (
+        str(cost_item.get("name", "")) + " " + str(sale.get("sku", ""))
+    ).lower()
+    for needle, target in CATEGORY_OVERRIDES:
+        if needle.lower() in haystack:
+            return target
+    return base
+
+
 @dataclass
 class MatchedSale:
     sale: dict
@@ -491,7 +523,7 @@ def build_category_table(matched: list[MatchedSale]) -> list[str]:
 
     by_category: dict[str, list[MatchedSale]] = {}
     for m in matched:
-        category = m.cost_item.get("category") or m.sale.get("category") or "(unknown)"
+        category = resolve_category(m.cost_item, m.sale)
         by_category.setdefault(category, []).append(m)
 
     rows = []
