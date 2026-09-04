@@ -83,3 +83,15 @@ Fenced code blocks (``` … ```) are skipped so example links inside snippets ar
 - Markdown links like `[label](other.md#section)` resolve paths relative to the source file.
 
 When a heading link uses only an anchor (e.g. `[text](#section)`), resolution is checked against the **source** note.
+
+## Furniture competitor monitor (`competitor_monitor.py` + `scrap_furniture.py`)
+
+Scrapes Avito (HTML) and Wildberries (search JSON), stores snapshots in SQLite (`scripts/data/competitors.db` by default), tracks `price_history`, detects new listings, price moves, discounts, and items that left the SERP or look sold on Avito. Writes weekly Markdown digests to `scripts/data/competitors/weekly_digest_YYYYMMDD.md`.
+
+```bash
+python scripts/competitor_monitor.py scrape --avito "диван массив" --wb "кровать 160"
+python scripts/competitor_monitor.py digest --week-end 2026-05-22
+python scripts/competitor_monitor.py run --config /path/to/queries.json
+```
+
+Generated DB and digest files are listed in `.gitignore` under `scripts/data/`.
