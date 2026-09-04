@@ -1,4 +1,5 @@
 flask
+requests
 markdown2
 python-frontmatter
 pillow
