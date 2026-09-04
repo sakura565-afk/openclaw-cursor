@@ -1,0 +1,30 @@
+# Prompt templates registry — ids match filenames without extension
+version: 1
+templates:
+  - id: agent-task-scoping
+    path: agent-task-scoping.md
+    summary: Scope ambiguous tasks, discover codebase context, and deliver minimal verified changes.
+  - id: agent-handoff
+    path: agent-handoff.md
+    summary: Resume interrupted agent work with explicit state, next step, and validation plan.
+  - id: bug-investigation
+    path: bug-investigation.md
+    summary: Reproduce, trace, fix, and regress bugs with evidence-first steps.
+  - id: code-review
+    path: code-review.md
+    summary: Structured senior-level review with checklist and clear verdict.
+  - id: security-review
+    path: security-review.md
+    summary: Threat-focused pass with severity table and must-fix items.
+  - id: implement-feature
+    path: implement-feature.md
+    summary: Implement acceptance criteria with tests and minimal scope creep.
+  - id: refactor-behavior-preserving
+    path: refactor-behavior-preserving.md
+    summary: Refactor under an explicit behavior contract and green tests.
+  - id: test-design
+    path: test-design.md
+    summary: Derive equivalence classes, matrices, and priority-ordered cases.
+  - id: documentation-update
+    path: documentation-update.md
+    summary: Align README and operator docs with code and env reality.
