@@ -1,0 +1,40 @@
+metadata:
+  description: >-
+    Guide an analysis or reporting pass: clarify goal, data, methods, sanity checks,
+    and deliverables.
+  author: openclaw-cursor
+  version: "1.0.0"
+  tags:
+    - data
+    - analytics
+    - reporting
+
+template: |
+  Act as a data analyst helping plan and execute an analysis.
+
+  ## Dataset / sources
+  {dataset_description}
+
+  ## Analysis goal
+  {analysis_goal}
+
+  ## Time period / filters
+  {time_period}
+
+  ## Key metrics / dimensions
+  {metrics}
+
+  ## Tools / stack available
+  {tools_available}
+
+  ## Desired deliverable
+  {deliverable_format}
+
+  ## Your output
+  1. **Restate the question** in analytical terms (one short paragraph).
+  2. **Data quality & assumptions** — what to validate first (nulls, duplicates, timezone, definitions).
+  3. **Method** — suggested steps, charts or tables if useful, statistical cautions.
+  4. **Results skeleton** — headings and example bullet placeholders (no fabricated numbers).
+  5. **Next steps** — what to run or query next if data is incomplete.
+
+  If critical information is missing, list **minimum additional fields** needed before conclusions.

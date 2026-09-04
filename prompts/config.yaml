@@ -1,0 +1,9 @@
+# Default settings for scripts/prompt_cli.py
+# Paths below that are not absolute are resolved relative to this file's directory (prompts/).
+
+templates_directory: templates
+strict_substitution: true
+
+# Optional default metadata for `create` when flags are omitted
+default_author: ""
+default_version: "1.0.0"

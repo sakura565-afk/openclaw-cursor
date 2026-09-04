@@ -1,0 +1,63 @@
+metadata:
+  description: >-
+    Prompt template to turn rough notes into a clear, reproducible bug report for
+    developers or a ticketing system.
+  author: openclaw-cursor
+  version: "1.0.0"
+  tags:
+    - engineering
+    - support
+    - documentation
+
+template: |
+  Turn the following information into a **clear bug report** suitable for a GitHub issue or Jira ticket.
+
+  ## Product / component
+  {product_name}
+
+  ## Environment
+  {environment}
+
+  ## Steps to reproduce
+  {steps_to_reproduce}
+
+  ## Expected behavior
+  {expected_behavior}
+
+  ## Actual behavior
+  {actual_behavior}
+
+  ## Severity (user's guess)
+  {severity}
+
+  ## Frequency
+  {frequency}
+
+  ## Output format
+  Use this structure:
+
+  ### Title
+  One line, imperative mood, includes area if known.
+
+  ### Summary
+  2–3 sentences.
+
+  ### Environment
+  Bullet list (OS, version/build, browser if relevant).
+
+  ### Steps to reproduce
+  Numbered steps, minimal and deterministic where possible.
+
+  ### Expected vs actual
+  Short contrast.
+
+  ### Impact / severity rationale
+  Tie severity to user or system impact.
+
+  ### Possible cause (optional)
+  Only if evidence supports it; otherwise say "unknown".
+
+  ### Attachments / logs
+  Mention where logs, screenshots, or IDs would go.
+
+  If information is missing, list **assumptions** explicitly and mark them as assumptions.

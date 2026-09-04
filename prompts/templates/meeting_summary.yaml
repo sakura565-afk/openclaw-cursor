@@ -1,0 +1,38 @@
+metadata:
+  description: >-
+    Turn meeting notes into an actionable summary with decisions, owners, and
+    follow-ups.
+  author: openclaw-cursor
+  version: "1.0.0"
+  tags:
+    - collaboration
+    - documentation
+    - leadership
+
+template: |
+  You are summarizing a meeting for people who were not present and for future reference.
+
+  ## Meeting
+  {meeting_title}
+
+  ## Date / time (as given)
+  {date}
+
+  ## Attendees
+  {attendees}
+
+  ## Agenda (if known)
+  {agenda}
+
+  ## Raw notes / transcript excerpt
+  {raw_notes}
+
+  ## Produce
+  1. **TL;DR** — 3 bullets max.
+  2. **Discussion highlights** — grouped by topic; call out disagreements or unresolved threads.
+  3. **Decisions** — table or bullets: Decision | Rationale (if stated).
+  4. **Action items** — each item: task, owner (or TBD), due date if known, priority.
+  5. **Parking lot** — topics deferred with one-line reason.
+  6. **Next meeting** — only if mentioned in notes; otherwise omit.
+
+  Do not invent decisions or owners. If unclear, write **TBD** and list the clarification needed.
