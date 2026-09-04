@@ -16,8 +16,8 @@ class ConversationExtractorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.root = Path(self.tempdir.name)
-        self.memory = self.root / "memory"
-        self.memory.mkdir(parents=True)
+        self.conversations = self.root / ".learnings" / "conversations"
+        self.conversations.mkdir(parents=True)
 
     def tearDown(self) -> None:
         self.tempdir.cleanup()
@@ -80,16 +80,59 @@ class ConversationExtractorTests(unittest.TestCase):
         for row in payload["tools_ranked"]:
             self.assertEqual(set(row.keys()), {"name", "count"})
 
-    def test_run_extraction_writes_md_and_json(self) -> None:
+    def test_run_extraction_writes_digest_and_exchanges_under_learnings(self) -> None:
         log = self.root / "run.txt"
         log.write_text("assistant: Lesson: cache pip wheels locally.\n", encoding="utf-8")
-        md_path, js_path = conversation_extractor.run_extraction(log, self.memory, self.root)
+        md_path, js_path = conversation_extractor.run_extraction(log, self.conversations, self.root)
 
         self.assertTrue(md_path.is_file() and js_path.is_file())
         self.assertEqual(js_path.suffix, ".json")
+        self.assertIn(".learnings/conversations", md_path.as_posix())
         body = json.loads(js_path.read_text(encoding="utf-8"))
         self.assertEqual(body["artifact_type"], "conversation_knowledge")
         self.assertTrue(any("cache" in x for x in body["lessons_learned"]))
+        self.assertIn("exchanges", body)
+        self.assertIn("exchanges_written", body)
+
+    def test_dedupe_skips_second_identical_exchange(self) -> None:
+        log = self.root / "dup.txt"
+        log.write_text(
+            "user: What is 2+2?\nassistant: Learning: four is the answer.\n",
+            encoding="utf-8",
+        )
+        conversation_extractor.run_extraction(log, self.conversations, self.root)
+        before = list(self.conversations.glob("insights__*.md"))
+        self.assertTrue(before)
+        conversation_extractor.run_extraction(log, self.conversations, self.root)
+        after = list(self.conversations.glob("insights__*.md"))
+        self.assertEqual(len(before), len(after))
+
+    def test_classify_error_correction(self) -> None:
+        segments = [
+            (1, "user", "Use approach A."),
+            (1, "assistant", "Actually, approach B is correct; I was wrong about A."),
+        ]
+        ex = conversation_extractor.build_extracted_exchanges(segments, "t.txt")
+        self.assertTrue(ex)
+        self.assertEqual(ex[0].conversation_type, "error_corrections")
+
+    def test_list_and_search_helpers(self) -> None:
+        sample = self.conversations / "questions__deadbeefcafe.md"
+        sample.write_text(
+            "---\n"
+            'conversation_type: "questions"\n'
+            "content_fingerprint: deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n"
+            'source: "x.txt"\n'
+            "source_turn: 1\n"
+            'title: "pytest markers"\n'
+            "extracted_at_utc: 2026-01-01T00:00:00+00:00\n"
+            "---\n\n### User\n\nHow do I run pytest?\n",
+            encoding="utf-8",
+        )
+        listed = conversation_extractor.list_extracted_conversations(self.conversations)
+        self.assertIn(sample.resolve(), [p.resolve() for p in listed])
+        hits = conversation_extractor.search_extracted_conversations(self.conversations, "pytest")
+        self.assertIn(sample.resolve(), [p.resolve() for p in hits])
 
 
 if __name__ == "__main__":
