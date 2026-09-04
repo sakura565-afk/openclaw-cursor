@@ -1,0 +1,75 @@
+{
+  "$id": "https://github.com/openclaw-cursor/openclaw-cursor/prompts/templates/templates.schema.json",
+  "title": "OpenClaw Cursor prompt template registry",
+  "description": "Validates templates.manifest.json describing Markdown prompt templates under prompts/templates/.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "templates"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "1"
+    },
+    "templates": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/templateEntry" }
+    }
+  },
+  "definitions": {
+    "templateEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "taskType", "file", "summary", "placeholders"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "taskType": {
+          "type": "string",
+          "enum": [
+            "code_review",
+            "image_generation",
+            "session_summary",
+            "error_diagnosis",
+            "task_planning"
+          ]
+        },
+        "file": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*\\.md$"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 500
+        },
+        "placeholders": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/placeholder" }
+        }
+      }
+    },
+    "placeholder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "description", "required"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 400
+        },
+        "required": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}
