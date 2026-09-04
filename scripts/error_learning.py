@@ -3,6 +3,11 @@
 
 Clusters similar failures via normalized signatures, infers triage buckets, and
 exposes ``patterns``, ``suggest``, and ``open`` commands for faster remediation.
+
+Also scans ``.learnings/**/*.md`` for structured corrections (YAML front matter
+and/or markdown section headings), supports similarity search over those
+records, and can refresh ``.learnings/auto/error_summary.md`` with recurring
+themes drawn from both the JSON log and markdown sources.
 """
 
 from __future__ import annotations
@@ -14,7 +19,8 @@ import os
 import re
 import sys
 from collections import Counter, defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -24,6 +30,10 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LOG_PATH = ROOT / ".learnings" / "error_log.json"
 SCHEMA_VERSION = 1
 INSIGHTS_GLOB = "run_*.md"
+AUTO_SUBDIR = "auto"
+ERROR_SUMMARY_FILENAME = "error_summary.md"
+ERRORS_SUBDIR = "errors"
+SUMMARY_RELATIVE_PATH = f"{AUTO_SUBDIR}/{ERROR_SUMMARY_FILENAME}"
 ANSI = {
     "reset": "\033[0m",
     "bold": "\033[1m",
@@ -642,6 +652,512 @@ def print_recurring_patterns(
                 print(f"  {colorize('·', 'yellow')} {line[:240]}{'…' if len(line) > 240 else ''}")
 
 
+@dataclass(frozen=True, slots=True)
+class MarkdownLearning:
+    """Structured correction parsed from markdown under ``.learnings/``."""
+
+    relative_path: str
+    ordinal: int
+    error_pattern: str
+    root_cause: str
+    fix: str
+    tags: tuple[str, ...] = ()
+
+
+# Maps normalized heading text to canonical field names.
+_MD_SECTION_ALIASES: dict[str, str] = {
+    "error pattern": "error_pattern",
+    "error description": "error_pattern",
+    "symptom": "error_pattern",
+    "error": "error_pattern",
+    "root cause": "root_cause",
+    "what went wrong": "root_cause",
+    "cause": "root_cause",
+    "fix": "fix",
+    "what fixed it": "fix",
+    "resolution": "fix",
+    "corrective action": "fix",
+    "lesson learned": "fix",
+    "tags": "tags",
+}
+
+_FM_KEY_ALIASES: dict[str, str] = {
+    "error_pattern": "error_pattern",
+    "error": "error_pattern",
+    "pattern": "error_pattern",
+    "symptom": "error_pattern",
+    "root_cause": "root_cause",
+    "cause": "root_cause",
+    "what_went_wrong": "root_cause",
+    "fix": "fix",
+    "resolution": "fix",
+    "lesson": "fix",
+    "what_fixed_it": "fix",
+    "tags": "tags",
+}
+
+
+def learnings_dir_from_log(log_path: Path) -> Path:
+    """Return the ``.learnings`` directory that owns ``error_log.json``."""
+
+    return log_path.parent
+
+
+def _relative_posix(root: Path, path: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def iter_learnings_markdown_paths(learnings_root: Path) -> Iterator[Path]:
+    """Yield every ``*.md`` file under ``learnings_root`` except the auto summary output."""
+
+    if not learnings_root.is_dir():
+        return
+    for path in sorted(learnings_root.rglob("*.md")):
+        rel = _relative_posix(learnings_root, path)
+        if rel == SUMMARY_RELATIVE_PATH:
+            continue
+        yield path
+
+
+def _parse_tags_value(raw: str) -> tuple[str, ...]:
+    text = raw.strip()
+    if not text:
+        return ()
+    if text.startswith("[") and text.endswith("]"):
+        inner = text[1:-1].strip()
+        if not inner:
+            return ()
+        parts = [p.strip().strip("'\"") for p in inner.split(",")]
+        return tuple(p for p in parts if p)
+    return tuple(t.strip() for t in re.split(r"[,;]+", text) if t.strip())
+
+
+def _parse_flat_front_matter_block(block: str) -> dict[str, str]:
+    """Parse simple ``key: value`` lines (no nested YAML)."""
+
+    out: dict[str, str] = {}
+    for raw_line in block.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        canon = _FM_KEY_ALIASES.get(key.strip().lower().replace(" ", "_"))
+        if not canon:
+            continue
+        out[canon] = value.strip().strip("\"'")
+    return out
+
+
+def _extract_leading_front_matter(text: str) -> tuple[dict[str, str], str]:
+    """Split optional YAML-like front matter from the remainder of the file."""
+
+    stripped = text.lstrip("\ufeff")
+    lines = stripped.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}, stripped
+
+    meta_lines: list[str] = []
+    i = 1
+    while i < len(lines):
+        if lines[i].strip() == "---":
+            body = "\n".join(lines[i + 1 :])
+            return _parse_flat_front_matter_block("\n".join(meta_lines)), body
+        meta_lines.append(lines[i])
+        i += 1
+    return {}, stripped
+
+
+def _normalize_section_title(title: str) -> str:
+    inner = title.strip().lower()
+    inner = re.sub(r"[`_*]+", "", inner)
+    return " ".join(inner.split())
+
+
+def _parse_markdown_sections(body: str) -> dict[str, str]:
+    """Parse ``## Heading`` sections into canonical keys."""
+
+    pattern = re.compile(r"^##\s+(.+)\s*$", re.MULTILINE)
+    matches = list(pattern.finditer(body))
+    out: dict[str, str] = {}
+    if not matches:
+        return out
+
+    for idx, match in enumerate(matches):
+        raw_title = match.group(1)
+        key = _MD_SECTION_ALIASES.get(_normalize_section_title(raw_title))
+        if not key:
+            continue
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(body)
+        chunk = body[start:end].strip()
+        if chunk:
+            out[key] = chunk
+    return out
+
+
+def _coalesce_learning_fields(meta: dict[str, str], sections: dict[str, str]) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for key in ("error_pattern", "root_cause", "fix"):
+        merged[key] = (sections.get(key) or meta.get(key) or "").strip()
+    tags_raw = (sections.get("tags") or meta.get("tags") or "").strip()
+    merged["tags"] = tags_raw
+    return merged
+
+
+def _learning_from_fields(
+    rel_path: str,
+    ordinal: int,
+    fields: dict[str, str],
+) -> MarkdownLearning | None:
+    ep = fields.get("error_pattern", "").strip()
+    rc = fields.get("root_cause", "").strip()
+    fx = fields.get("fix", "").strip()
+    if not (ep or rc or fx):
+        return None
+    tags = _parse_tags_value(fields.get("tags", ""))
+    return MarkdownLearning(
+        relative_path=rel_path,
+        ordinal=ordinal,
+        error_pattern=ep,
+        root_cause=rc,
+        fix=fx,
+        tags=tags,
+    )
+
+
+def parse_markdown_file(path: Path, *, learnings_root: Path) -> list[MarkdownLearning]:
+    """Parse every structured learning block found in a single markdown file."""
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+
+    rel = _relative_posix(learnings_root, path)
+    out: list[MarkdownLearning] = []
+    ordinal = 0
+
+    meta, body = _extract_leading_front_matter(text)
+    sections = _parse_markdown_sections(body)
+    merged = _coalesce_learning_fields(meta, sections)
+    item = _learning_from_fields(rel, ordinal, merged)
+    if item:
+        out.append(item)
+    return out
+
+
+def scan_markdown_learnings(learnings_root: Path) -> list[MarkdownLearning]:
+    """Scan ``.learnings/**/*.md`` and return all structured learnings."""
+
+    found: list[MarkdownLearning] = []
+    for md_path in iter_learnings_markdown_paths(learnings_root):
+        found.extend(parse_markdown_file(md_path, learnings_root=learnings_root))
+    return found
+
+
+def markdown_learning_text_blob(item: MarkdownLearning) -> str:
+    """Flatten searchable fields for keyword / fuzzy similarity."""
+
+    tag_blob = " ".join(item.tags)
+    return normalize_text(" ".join((item.error_pattern, item.root_cause, item.fix, tag_blob)))
+
+
+def markdown_similarity_score(query: str, item: MarkdownLearning) -> float:
+    """Score markdown learnings using token overlap and fuzzy ratios (no embeddings)."""
+
+    normalized_query = normalize_text(query)
+    haystack = markdown_learning_text_blob(item)
+    if not normalized_query or not haystack:
+        return 0.0
+
+    substring_bonus = 1.5 if normalized_query in haystack else 0.0
+    query_tokens = set(normalized_query.split())
+    haystack_tokens = set(haystack.split())
+    overlap = len(query_tokens & haystack_tokens) / max(len(query_tokens), 1)
+    ratio = SequenceMatcher(None, normalized_query, haystack).ratio()
+
+    shape_bonus = 0.0
+    qsig = error_signature(query)
+    for field in (item.error_pattern, item.root_cause, item.fix):
+        if not field:
+            continue
+        fsig = error_signature(field)
+        if qsig and fsig:
+            if qsig == fsig:
+                shape_bonus += 2.5
+            else:
+                shape_bonus += SequenceMatcher(None, qsig, fsig).ratio() * 0.9
+    return substring_bonus + overlap + (ratio * 0.45) + shape_bonus
+
+
+def find_similar_markdown_learnings(
+    query: str,
+    learnings_root: Path,
+    *,
+    limit: int = 12,
+    min_score: float = 0.55,
+) -> list[tuple[float, MarkdownLearning]]:
+    """Return markdown learnings ranked by lexical / pattern similarity to ``query``."""
+
+    ranked: list[tuple[float, MarkdownLearning]] = []
+    for item in scan_markdown_learnings(learnings_root):
+        score = markdown_similarity_score(query, item)
+        if score >= min_score:
+            ranked.append((score, item))
+    ranked.sort(key=lambda row: (-row[0], row[1].relative_path.lower(), row[1].ordinal))
+    return ranked[: max(limit, 1)]
+
+
+def json_entry_similarity_score(query: str, entry: dict[str, object]) -> float:
+    """Wrap :func:`search_score` for type clarity when merging sources."""
+
+    return search_score(query, entry)
+
+
+def find_similar_learnings_unified(
+    query: str,
+    *,
+    log_path: Path,
+    learnings_root: Path | None = None,
+    limit: int = 12,
+) -> tuple[list[tuple[float, str, object]], list[tuple[float, MarkdownLearning]]]:
+    """Return JSON log hits and markdown hits for the same natural-language query."""
+
+    root = learnings_root or learnings_dir_from_log(log_path)
+    json_hits: list[tuple[float, str, object]] = []
+    store = load_store(log_path)
+    raw_entries = store.get("entries", [])
+    if isinstance(raw_entries, list):
+        validated = [validate_entry(item) for item in raw_entries]
+        for entry in validated:
+            score = json_entry_similarity_score(query, entry)
+            if score >= 0.45:
+                json_hits.append((score, "json", entry))
+        json_hits.sort(key=lambda row: (-row[0], str(row[2].get("timestamp", ""))))  # type: ignore[union-attr]
+
+    md_hits = find_similar_markdown_learnings(query, root, limit=limit)
+    return json_hits[:limit], md_hits[:limit]
+
+
+def _signature_for_summary(item: MarkdownLearning) -> str:
+    blob = item.error_pattern or item.root_cause or item.fix
+    sig = error_signature(blob)
+    return sig or normalize_text(blob)
+
+
+def _summary_rows_from_markdown(items: list[MarkdownLearning]) -> list[tuple[int, str, MarkdownLearning]]:
+    counts = Counter(_signature_for_summary(item) for item in items if _signature_for_summary(item))
+    buckets: dict[str, list[MarkdownLearning]] = defaultdict(list)
+    for item in items:
+        sig = _signature_for_summary(item)
+        if sig:
+            buckets[sig].append(item)
+
+    rows: list[tuple[int, str, MarkdownLearning]] = []
+    for sig, count in counts.items():
+        group = buckets.get(sig, [])
+        if not group:
+            continue
+        rep = max(group, key=lambda it: len(it.error_pattern))
+        rows.append((count, sig, rep))
+    rows.sort(key=lambda row: (-row[0], -len(row[1])))
+    return rows
+
+
+def _summary_rows_from_json(entries: list[dict[str, object]]) -> list[tuple[int, str, dict[str, object]]]:
+    return recurring_pattern_rows(entries, min_count=1, limit=500)
+
+
+def write_error_summary_md(
+    learnings_root: Path,
+    log_path: Path,
+    *,
+    out_path: Path | None = None,
+    top_markdown: int = 15,
+    top_json: int = 15,
+) -> Path:
+    """Write ``.learnings/auto/error_summary.md`` with recurring themes."""
+
+    destination = out_path or (learnings_root / AUTO_SUBDIR / ERROR_SUMMARY_FILENAME)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    md_items = scan_markdown_learnings(learnings_root)
+    md_rows = _summary_rows_from_markdown(md_items)[:top_markdown]
+
+    store = load_store(log_path)
+    raw_entries = store.get("entries", [])
+    json_entries = [validate_entry(item) for item in raw_entries] if isinstance(raw_entries, list) else []
+    json_rows = _summary_rows_from_json(json_entries)[:top_json]
+
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    lines: list[str] = [
+        "# Error learning summary",
+        "",
+        f"_Generated {stamp} (UTC) by ``scripts/error_learning.py``._",
+        "",
+        "This file consolidates the most recurring failure shapes discovered in the JSON "
+        "error log plus structured markdown learnings under ``.learnings/``. Regenerate with "
+        "``python3 scripts/error_learning.py write-summary``.",
+        "",
+        "## Top recurring patterns (JSON log)",
+        "",
+    ]
+
+    if not json_rows:
+        lines.append("_No JSON log entries yet._")
+        lines.append("")
+    else:
+        for idx, (count, sig, rep) in enumerate(json_rows, start=1):
+            bucket = infer_bucket(str(rep["category"]), str(rep["error"]), str(rep["lesson"]))
+            preview = sig if len(sig) <= 160 else sig[:157] + "..."
+            lines.append(f"{idx}. **×{count}** `{bucket}` — category _{rep['category']}_")
+            lines.append(f"   - **Shape:** {preview}")
+            lines.append(f"   - **Action:** {rep['lesson']}")
+            lines.append("")
+
+    lines.extend(
+        [
+            "## Top recurring themes (markdown learnings)",
+            "",
+        ]
+    )
+    if not md_rows:
+        lines.append("_No structured markdown entries detected (add sections or front matter)._")
+        lines.append("")
+    else:
+        for idx, (count, sig, rep) in enumerate(md_rows, start=1):
+            preview = sig if len(sig) <= 160 else sig[:157] + "..."
+            tag_txt = ", ".join(rep.tags) if rep.tags else "_none_"
+            lines.append(f"{idx}. **×{count}** — `{rep.relative_path}`")
+            lines.append(f"   - **Signature:** {preview}")
+            if rep.error_pattern:
+                lines.append(f"   - **Error pattern:** {rep.error_pattern}")
+            if rep.root_cause:
+                lines.append(f"   - **Root cause:** {rep.root_cause}")
+            if rep.fix:
+                lines.append(f"   - **Fix:** {rep.fix}")
+            lines.append(f"   - **Tags:** {tag_txt}")
+            lines.append("")
+
+    destination.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return destination
+
+
+def append_interactive_markdown_entry(
+    learnings_root: Path,
+    *,
+    error_pattern: str,
+    root_cause: str,
+    fix: str,
+    tags: tuple[str, ...],
+) -> Path:
+    """Persist a new markdown learning under ``.learnings/errors/``."""
+
+    def _yaml_scalar(value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            return '""'
+        return json.dumps(cleaned, ensure_ascii=False)
+
+    target_dir = learnings_root / ERRORS_SUBDIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    digest = hashlib.sha1(
+        json.dumps(
+            {
+                "error_pattern": normalize_text(error_pattern),
+                "root_cause": normalize_text(root_cause),
+                "fix": normalize_text(fix),
+                "tags": list(tags),
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()[:8]
+    path = target_dir / f"entry_{stamp}_{digest}.md"
+    tag_line = ", ".join(tags) if tags else ""
+    body = "\n".join(
+        (
+            "---",
+            f"error_pattern: {_yaml_scalar(error_pattern)}",
+            f"root_cause: {_yaml_scalar(root_cause)}",
+            f"fix: {_yaml_scalar(fix)}",
+            f"tags: {tag_line}",
+            "---",
+            "",
+            "## Error pattern",
+            error_pattern.strip(),
+            "",
+            "## What went wrong",
+            root_cause.strip(),
+            "",
+            "## What fixed it",
+            fix.strip(),
+            "",
+            "## Tags",
+            tag_line or "_none_",
+            "",
+        )
+    )
+    path.write_text(body + "\n", encoding="utf-8")
+    return path
+
+
+def prompt_interactive_entry(learnings_root: Path) -> int:
+    """Prompt for fields and save a markdown learning entry."""
+
+    print(colorize("Interactive error learning entry", "bold"))
+    print(colorize("Press Ctrl+C to cancel.", "yellow"))
+    try:
+        error_pattern = input(colorize("Error description / pattern: ", "cyan")).strip()
+        root_cause = input(colorize("What went wrong (root cause): ", "cyan")).strip()
+        fix = input(colorize("What fixed it: ", "cyan")).strip()
+        tags_raw = input(colorize("Tags (comma-separated, optional): ", "cyan")).strip()
+    except EOFError:
+        print(colorize("Cancelled (EOF).", "yellow"))
+        return 1
+
+    if not (error_pattern or root_cause or fix):
+        print(colorize("Nothing to save — at least one field must be non-empty.", "red"))
+        return 1
+
+    tags = tuple(t.strip() for t in tags_raw.replace(";", ",").split(",") if t.strip())
+    path = append_interactive_markdown_entry(
+        learnings_root,
+        error_pattern=error_pattern or "(unspecified)",
+        root_cause=root_cause or "(unspecified)",
+        fix=fix or "(unspecified)",
+        tags=tags,
+    )
+    try:
+        shown = str(path.relative_to(ROOT))
+    except ValueError:
+        shown = str(path)
+    print(colorize(f"Wrote {shown}", "green"))
+    return 0
+
+
+def print_markdown_learning(item: MarkdownLearning, *, score: float | None = None) -> None:
+    """Pretty-print a markdown-derived learning."""
+
+    header_bits = [colorize(item.relative_path, "cyan"), f"#{item.ordinal}"]
+    if score is not None:
+        header_bits.append(colorize(f"score={score:.2f}", "yellow"))
+    print(" ".join(header_bits))
+    if item.error_pattern:
+        print(f"  {colorize('Pattern:', 'yellow')} {item.error_pattern}")
+    if item.root_cause:
+        print(f"  {colorize('Cause:', 'yellow')} {item.root_cause}")
+    if item.fix:
+        print(f"  {colorize('Fix:', 'green')} {item.fix}")
+    if item.tags:
+        print(f"  {colorize('Tags:', 'yellow')} {', '.join(item.tags)}")
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments."""
 
@@ -651,6 +1167,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=DEFAULT_LOG_PATH,
         help="Path to the error learning JSON log.",
+    )
+    parser.add_argument(
+        "--learnings-dir",
+        type=Path,
+        default=None,
+        help="Markdown learnings root (defaults to the directory containing the JSON log).",
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -720,6 +1242,66 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Append failure-like lines from .learnings/insights if they exist.",
     )
+
+    subparsers.add_parser("md-scan", help="List structured learnings parsed from .learnings/**/*.md.")
+
+    md_search_parser = subparsers.add_parser(
+        "md-search",
+        help="Search markdown learnings by keyword / pattern similarity.",
+    )
+    md_search_parser.add_argument("query", help="Natural language or error snippet.")
+    md_search_parser.add_argument(
+        "--limit",
+        type=int,
+        default=12,
+        help="Maximum number of matches to print.",
+    )
+    md_search_parser.add_argument(
+        "--min-score",
+        type=float,
+        default=0.55,
+        help="Minimum similarity score (0-∞, higher is stricter).",
+    )
+
+    similar_parser = subparsers.add_parser(
+        "similar",
+        help="Search both the JSON log and markdown learnings for a single query.",
+    )
+    similar_parser.add_argument("query", help="Natural language or error snippet.")
+    similar_parser.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Maximum number of hits per source.",
+    )
+
+    subparsers.add_parser(
+        "add-interactive",
+        help="Interactively capture a markdown learning entry under .learnings/errors/.",
+    )
+
+    summary_parser = subparsers.add_parser(
+        "write-summary",
+        help=f"Write {SUMMARY_RELATIVE_PATH} with recurring JSON + markdown themes.",
+    )
+    summary_parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Override output path (defaults to .learnings/auto/error_summary.md).",
+    )
+    summary_parser.add_argument(
+        "--top-md",
+        type=int,
+        default=15,
+        help="How many markdown clusters to include.",
+    )
+    summary_parser.add_argument(
+        "--top-json",
+        type=int,
+        default=15,
+        help="How many JSON signature clusters to include.",
+    )
     return parser.parse_args(argv)
 
 
@@ -770,6 +1352,92 @@ def main(argv: list[str] | None = None) -> int:
                 print(format_compact_neighbor(prev))
         return 0
 
+    learnings_root = (args.learnings_dir or learnings_dir_from_log(args.log_path)).resolve()
+
+    if args.command == "md-scan":
+        items = scan_markdown_learnings(learnings_root)
+        print(colorize(f"Markdown learnings under {learnings_root}", "bold"))
+        print(colorize(f"Structured entries: {len(items)}", "cyan"))
+        if not items:
+            print(colorize("No entries matched the structured format.", "yellow"))
+            return 0
+        by_file: dict[str, list[MarkdownLearning]] = defaultdict(list)
+        for item in items:
+            by_file[item.relative_path].append(item)
+        for rel in sorted(by_file):
+            group = by_file[rel]
+            print()
+            print(colorize(rel, "green"), colorize(f"({len(group)})", "yellow"))
+            for it in group:
+                print_markdown_learning(it)
+        return 0
+
+    if args.command == "md-search":
+        hits = find_similar_markdown_learnings(
+            args.query,
+            learnings_root,
+            limit=max(args.limit, 1),
+            min_score=float(args.min_score),
+        )
+        print(colorize(f"Markdown search: {args.query}", "bold"))
+        if not hits:
+            print(colorize("No markdown learnings met the score threshold.", "yellow"))
+            return 0
+        for idx, (score, item) in enumerate(hits):
+            if idx:
+                print()
+            print_markdown_learning(item, score=score)
+        return 0
+
+    if args.command == "similar":
+        json_hits, md_hits = find_similar_learnings_unified(
+            args.query,
+            log_path=args.log_path,
+            learnings_root=learnings_root,
+            limit=max(args.limit, 1),
+        )
+        print(colorize(f"Unified similarity search: {args.query}", "bold"))
+        print(colorize("JSON log", "bold"))
+        if not json_hits:
+            print(colorize("  (no strong matches)", "yellow"))
+        else:
+            for score, _src, entry in json_hits:
+                je = entry  # type: ignore[assignment]
+                assert isinstance(je, dict)
+                print(
+                    f"  {colorize(f'score={score:.2f}', 'yellow')} "
+                    f"{colorize(str(je.get('category')), category_color(str(je.get('category'))))}"
+                )
+                print(f"    {colorize('Error:', 'red')} {je.get('error')}")
+                print(f"    {colorize('Action:', 'green')} {je.get('lesson')}")
+        print()
+        print(colorize("Markdown learnings", "bold"))
+        if not md_hits:
+            print(colorize("  (no strong matches)", "yellow"))
+        else:
+            for score, item in md_hits:
+                print()
+                print_markdown_learning(item, score=score)
+        return 0
+
+    if args.command == "add-interactive":
+        return prompt_interactive_entry(learnings_root)
+
+    if args.command == "write-summary":
+        try:
+            path = write_error_summary_md(
+                learnings_root,
+                args.log_path,
+                out_path=args.output,
+                top_markdown=max(1, args.top_md),
+                top_json=max(1, args.top_json),
+            )
+        except ErrorLearningError as exc:
+            print(colorize(str(exc), "red"), file=sys.stderr)
+            return 1
+        print(colorize(f"Wrote {path}", "green"))
+        return 0
+
     validated_entries = [validate_entry(entry) for entry in entries]
     all_counts = count_signatures(validated_entries)
 
@@ -811,7 +1479,7 @@ def main(argv: list[str] | None = None) -> int:
             min_count=max(1, args.min_count),
             limit=max(args.limit, 1),
             include_insights=bool(args.include_insights),
-            learnings_dir=args.log_path.parent,
+            learnings_dir=learnings_root,
         )
         return 0
 

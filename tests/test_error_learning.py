@@ -205,6 +205,108 @@ class ErrorLearningTests(unittest.TestCase):
         self.assertIn("e1", stdout)
         self.assertNotIn("e2", stdout)
 
+    def test_parse_markdown_sections_and_similarity(self) -> None:
+        learnings = self.root / ".learnings"
+        md = learnings / "notes" / "lesson.md"
+        md.parent.mkdir(parents=True)
+        md.write_text(
+            "## Error pattern\n"
+            "JSON parser choked on trailing commas\n\n"
+            "## Root cause\n"
+            "Model emitted invalid JSON\n\n"
+            "## What fixed it\n"
+            "Strip trailing commas before json.loads\n",
+            encoding="utf-8",
+        )
+        parsed = error_learning.parse_markdown_file(md, learnings_root=learnings)
+        self.assertEqual(len(parsed), 1)
+        item = parsed[0]
+        self.assertIn("trailing commas", item.error_pattern.lower())
+        self.assertIn("invalid json", item.root_cause.lower())
+        self.assertIn("json.loads", item.fix.lower())
+
+        hits = error_learning.find_similar_markdown_learnings(
+            "json parse trailing comma",
+            learnings,
+            limit=5,
+            min_score=0.1,
+        )
+        self.assertTrue(hits)
+        self.assertGreater(hits[0][0], 0.5)
+
+    def test_write_summary_merges_json_and_markdown(self) -> None:
+        learnings = self.root / ".learnings"
+        (learnings / "errors").mkdir(parents=True)
+        (learnings / "errors" / "dup.md").write_text(
+            "## Error pattern\nOops timeout\n## Root cause\nSlow network\n## Fix\nRetry\n",
+            encoding="utf-8",
+        )
+        (learnings / "errors" / "dup2.md").write_text(
+            "## Error pattern\nOops timeout\n## Root cause\nVPN\n## Fix\nRetry harder\n",
+            encoding="utf-8",
+        )
+        error_learning.add_entry(self.log_path, "net", "Connection timeout to 1.2.3.4", "Increase client timeout")
+
+        out = error_learning.write_error_summary_md(learnings, self.log_path)
+        self.assertEqual(out, learnings / "auto" / "error_summary.md")
+        text = out.read_text(encoding="utf-8")
+        self.assertIn("Error learning summary", text)
+        self.assertIn("JSON log", text)
+        self.assertIn("markdown learnings", text)
+        self.assertIn("×2", text)
+        self.assertIn("timeout", text.lower())
+
+    def test_add_interactive_writes_markdown(self) -> None:
+        learnings = self.root / ".learnings"
+        learnings.mkdir(parents=True)
+        inputs = iter(
+            [
+                "Disk full during pip install",
+                "Build cache grew without bound",
+                "Prune cache and retry",
+                "disk, ci",
+            ]
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        env = dict(os.environ)
+        env.pop("NO_COLOR", None)
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch("sys.stdout", stdout), mock.patch(
+            "sys.stderr", stderr
+        ), mock.patch("builtins.input", lambda _p="": next(inputs)):
+            code = error_learning.main(
+                ["--log-path", str(self.log_path), "--learnings-dir", str(learnings), "add-interactive"]
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertIn("Wrote", stdout.getvalue())
+        written = list((learnings / "errors").glob("entry_*.md"))
+        self.assertEqual(len(written), 1)
+        body = written[0].read_text(encoding="utf-8")
+        self.assertIn("Disk full", body)
+        self.assertIn("Prune cache", body)
+
+    def test_md_search_cli(self) -> None:
+        learnings = self.root / ".learnings"
+        learnings.mkdir(parents=True)
+        (learnings / "x.md").write_text(
+            "## Error pattern\nYAML indentation drifted\n## Root cause\nTabs mixed with spaces\n"
+            "## Fix\nRun formatter\n",
+            encoding="utf-8",
+        )
+        exit_code, stdout, stderr = self.run_cli(
+            "--learnings-dir",
+            str(learnings),
+            "md-search",
+            "yaml tabs",
+            "--min-score",
+            "0.2",
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn("YAML", stdout)
+        self.assertIn("score=", stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
