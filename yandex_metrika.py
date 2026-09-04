@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import sqlite3
 import sys
 import urllib.parse
@@ -22,8 +23,8 @@ from dataclasses import dataclass
 from typing import Any
 
 
-YANDEX_LOGIN = "Sakura565"
-YANDEX_TOKEN = "Nastia56"
+YANDEX_LOGIN = os.environ.get("YANDEX_METRIKA_LOGIN", "")
+YANDEX_TOKEN = os.environ.get("YANDEX_METRIKA_TOKEN", "")
 YANDEX_API_BASE = "https://api-metrika.yandex.net"
 DEFAULT_DB_PATH = "yandex_metrika.db"
 TARGET_DOMAINS = ("amadey.ru", "divaninfo.ru")

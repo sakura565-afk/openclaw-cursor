@@ -10,7 +10,7 @@ from pathlib import Path
 
 # Default threshold (% of context used)
 DEFAULT_THRESHOLD_PCT = 75
-LOG_PATH = Path("C:/Users/user/.openclaw/workspace/memory")
+LOG_PATH = Path.home() / ".openclaw" / "workspace" / "memory"
 
 def get_session_sizes():
     """Parse openclaw status JSON to get session info."""
