@@ -1,0 +1,34 @@
+name: workspace_backup
+type: script
+description: |
+  Incremental backup of OpenClaw workspace to Google Drive.
+  Runs weekly or on-demand. Backs up only changed files (SHA256).
+  Stores files under Backups/YYYY-WW/ on Google Drive.
+  Keeps last 8 weeks of backups.
+
+files:
+  - tasks/workspace_backup.yaml
+  - scripts/workspace_backup.py
+
+schedule:
+  cron: "0 3 * * 1"   # Every Monday at 03:00 UTC
+  # manual trigger supported
+
+config:
+  runner: python
+  path: scripts/workspace_backup.py
+  timeout: 300
+  env:
+    COMPOSIO_API_KEY: "${COMPOSIO_API_KEY}"
+    COMPOSIO_ENTITY_ID: "${COMPOSIO_ENTITY_ID}"
+    COMPOSIO_WORKSPACE_ID: "${COMPOSIO_WORKSPACE_ID}"
+
+notes: |
+  Requirements:
+  - SHA256 incremental: only changed files uploaded
+  - Manifest: list of backed-up files with hash + mtime
+  - Drive structure: Backups/YYYY-WW/
+  - Cleanup: keep last 8 weeks
+  - Composio SDK for Google Drive upload
+  - All config from .env
+  - Resume: skip already-uploaded files (hash store at .workspace_backup_hashes.json)
