@@ -26,6 +26,11 @@ reports/metrika_costs_margin/
 MEMORY.md
 memory/MEMORY_sync_index.md
 
+# llm_router runtime artifacts (config data/llm_router_config.json остаётся в git)
+data/llm_cache.json
+data/llm_router_telemetry.jsonl
+data/llm_router_telemetry/
+
 # Per-agent git worktrees + their registry (scripts/worktree_orchestrator.py)
 .worktrees/
 data/worktrees.json
