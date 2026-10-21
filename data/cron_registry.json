@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "stale_factor": 1.5,
+  "ignore_task_prefixes": [
+    "\\Microsoft\\",
+    "\\NvTmRep",
+    "\\NvProfileUpdater",
+    "\\NvNodeLauncher",
+    "\\NahimicSvc",
+    "\\MicrosoftEdge",
+    "\\GoogleUpdate",
+    "\\OneDrive",
+    "\\Adobe",
+    "\\CreateExplorerShellUnelevatedTask",
+    "\\Opera",
+    "\\Steam"
+  ],
+  "tasks": [
+    {
+      "name": "Cursor-CloudAgent-Poll",
+      "enabled": true,
+      "command": "python C:\\Users\\user\\.openclaw\\workspace\\scripts\\check_cursor_agent_status.py",
+      "schedule": "every 15 minutes",
+      "period_hours": 0.25,
+      "state_file": "data/cursor_agent_status.json",
+      "log_file": "logs/cursor_agent_*.out.log",
+      "alert": "telegram",
+      "notes": "Poller lives outside cursor-repo (check_cursor_agent_status.py / check_cursor_agent.py); state path taken from the task sheet, not verified against the repo. Run --validate on the host to confirm."
+    },
+    {
+      "name": "HF-Trending-Daily",
+      "enabled": true,
+      "command": "powershell -ExecutionPolicy Bypass -File C:\\Users\\user\\.openclaw\\workspace\\scripts\\hf_trending.ps1",
+      "schedule": "daily 08:00 MSK",
+      "period_hours": 24,
+      "state_file": "data/hf_seen.json",
+      "log_file": "logs/hf_trending_*.out.log",
+      "alert": "telegram",
+      "notes": "State name verified in scripts/hf_trending.py (state_path() -> data/hf_seen.json), NOT data/hf_trending_state.json."
+    },
+    {
+      "name": "Metrika-Daily-Telegram",
+      "enabled": true,
+      "command": "python C:\\Users\\user\\.openclaw\\workspace\\scripts\\_analyze_metrika.py",
+      "schedule": "daily",
+      "period_hours": 24,
+      "state_file": "data/metrika_state.json",
+      "log_file": "logs/metrika_*.out.log",
+      "alert": "telegram",
+      "notes": "_analyze_metrika.py / _append_metrika_report.py live outside cursor-repo; state path taken from the task sheet, not verified. The in-repo scripts/metrika_costs_margin.py keeps no state file."
+    },
+    {
+      "name": "Ollama-Health-Daily",
+      "enabled": true,
+      "command": "powershell -ExecutionPolicy Bypass -File C:\\Users\\user\\.openclaw\\workspace\\scripts\\ollama_daily_smoke.ps1",
+      "schedule": "daily 06:00 MSK",
+      "period_hours": 24,
+      "state_file": "data/ollama_health_*.json",
+      "log_file": "logs/ollama_health_*.out.log",
+      "alert": "telegram",
+      "notes": "State name verified in scripts/ollama_daily_smoke.py (health_path_for_date -> data/ollama_health_YYYY-MM-DD.json); glob resolves to the newest file by mtime."
+    },
+    {
+      "name": "Ollama-Upgrade",
+      "enabled": true,
+      "command": "powershell -ExecutionPolicy Bypass -File C:\\Users\\user\\.openclaw\\workspace\\scripts\\ollama-upgrade.ps1",
+      "schedule": "one-shot / every ~7 days",
+      "period_hours": 168,
+      "state_file": "data/ollama_upgrade_state.json",
+      "log_file": "logs/ollama_upgrade_*.out.log",
+      "alert": "telegram",
+      "notes": "One-shot task; period_hours=168 means 'silent for more than 10.5 days is suspicious'. Script and state live outside cursor-repo, paths not verified."
+    },
+    {
+      "name": "Ollama AI Server",
+      "enabled": true,
+      "command": "python C:\\Users\\user\\.openclaw\\workspace\\scripts\\ollama_bridge.py",
+      "schedule": "daemon, heartbeat ~5 minutes",
+      "period_hours": 0.25,
+      "state_file": "data/ollama_server_state.json",
+      "log_file": "logs/ollama_*.out.log",
+      "alert": "telegram",
+      "notes": "Daemon watched by scripts/ollama_monitor.py; heartbeat is ~5 min but period_hours=0.25 keeps the stale window at ~22 min to avoid flapping. State path from the task sheet, not verified."
+    }
+  ]
+}

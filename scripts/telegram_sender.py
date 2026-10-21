@@ -152,6 +152,20 @@ class TelegramSender:
         self.sleep_func = sleep_func
         self.resize_func = resize_func
 
+    def send_message(self, text: str, *, disable_notification: bool = False) -> dict:
+        if not text or not text.strip():
+            raise TelegramSenderError("Message text must not be empty.")
+        self.reporter(f"Sending text message ({len(text)} chars).")
+        response = self._post(
+            "sendMessage",
+            data={
+                "chat_id": self.config.chat_id,
+                "text": text,
+                "disable_notification": disable_notification,
+            },
+        )
+        return response.json()
+
     def send_photo(self, image_path: os.PathLike[str] | str, caption: str = "") -> dict:
         prepared = self.resize_func(image_path, reporter=self.reporter)
         try:
@@ -240,13 +254,14 @@ class TelegramSender:
         return self._request_with_retries(
             method="POST",
             url=url,
-            reporter=self.reporter,
-            retries=self.config.retries,
             timeout=self.config.timeout_seconds,
             **kwargs,
         )
 
     def _request_with_retries(self, **kwargs) -> requests.Response:
+        # requests.request() rejects unknown keyword arguments.
+        kwargs.pop("reporter", None)
+        kwargs.pop("retries", None)
         last_error: Optional[BaseException] = None
         for attempt in range(1, self.config.retries + 1):
             self.reporter(f"Request attempt {attempt}/{self.config.retries}.")
@@ -290,6 +305,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    send_message = subparsers.add_parser("send-message", help="Send a plain text message.")
+    send_message.add_argument("text", help="Message body.")
+
     send_photo = subparsers.add_parser("send-photo", help="Send a single photo.")
     send_photo.add_argument("image", help="Path to an image file.")
     send_photo.add_argument("--caption", default="", help="Optional photo caption.")
@@ -311,7 +329,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     config = TelegramConfig.from_env(timeout_seconds=args.timeout, retries=args.retries)
     sender = TelegramSender(config)
 
-    if args.command == "send-photo":
+    if args.command == "send-message":
+        payload = sender.send_message(args.text)
+    elif args.command == "send-photo":
         payload = sender.send_photo(args.image, caption=args.caption)
     elif args.command == "send-group":
         payload = sender.send_group(args.images, caption=args.caption)
