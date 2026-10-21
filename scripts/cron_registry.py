@@ -441,6 +441,25 @@ SCHTASKS_NON_FAILURE_RESULTS = frozenset(
     {SCHTASKS_RESULT_RUNNING, SCHTASKS_RESULT_NOT_RUNNING}
 )
 
+#: Localized Task Scheduler states that mean "the task is running right now".
+#: A task that is currently running is healthy by definition, even when its
+#: previous run was refused (0x800710E0 happens when the scheduler tries to
+#: start a second instance of an already-running daemon).
+SCHTASKS_RUNNING_STATES = frozenset(
+    {
+        "выполняется",
+        "running",
+        "работает",
+    }
+)
+
+
+def is_schtasks_running(status: str | None) -> bool:
+    """True when the scheduler reports the task as currently running."""
+    if not status:
+        return False
+    return status.strip().casefold() in SCHTASKS_RUNNING_STATES
+
 
 def is_schtasks_failure(code: int | None) -> bool:
     """True when the scheduler's exit code means the last run did not succeed."""
@@ -954,7 +973,11 @@ class CronRegistry:
 
         # The scheduler's own exit code is the most reliable failure signal:
         # 0 = success, 1 = script error, 0x80070xxx = Windows-level failure.
-        scheduled_failing = is_schtasks_failure(health.scheduled_last_result)
+        scheduled_running = is_schtasks_running(health.scheduled_status)
+        scheduled_failing = (
+            not scheduled_running
+            and is_schtasks_failure(health.scheduled_last_result)
+        )
         if scheduled_failing:
             code = health.scheduled_last_result
             hexed = f"0x{code & 0xFFFFFFFF:08X}"
