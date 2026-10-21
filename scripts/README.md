@@ -83,3 +83,65 @@ Fenced code blocks (``` … ```) are skipped so example links inside snippets ar
 - Markdown links like `[label](other.md#section)` resolve paths relative to the source file.
 
 When a heading link uses only an anchor (e.g. `[text](#section)`), resolution is checked against the **source** note.
+
+## Best-of-N cloud agents (`best_of_n.py`)
+
+Runs one task through **N competing Cursor cloud agents** — each on its own
+model, branch (`cursor/<slug>-variant-<k>`), worktree and pull request — then
+scores the variants and marks a winner. The batch launcher, exponential
+backoff/jitter poller and transient retries all come from `queue_manager.py`;
+this module only adds fan-out, judging and reporting.
+
+### Usage
+
+```bash
+# inline prompt, default model triple
+python scripts/queue_manager.py run --best-of 3 \
+  --task-slug add-widget --task-prompt "Implement scripts/widget.py with tests"
+
+# YAML task spec (task_runner format: name/description/prompt/acceptance_criteria)
+python scripts/queue_manager.py best-of-n --best-of 3 \
+  --task-spec tasks/add_widget.yaml \
+  --best-of-models claude-opus-5-thinking-high gpt-5.6-sol-high gemini-3.7-flash-high \
+  --best-of-judge-model MiniMax-M3.1-Flash
+```
+
+`--best-of` below 2 keeps the classic one-agent-per-branch queue behaviour
+unchanged. `--best-of-no-telegram` writes the report without the digest.
+
+### Scoring
+
+1. **LLM-as-a-Judge** (preferred). The acceptance criteria from the task spec
+   plus each variant's diff summary are sent to the judge model, which must
+   answer `{"score": 0..1, "verdict": str, "reasons": [str]}`. The parser
+   accepts bare JSON, a ```json fence, or JSON embedded in prose; unusable
+   output yields `score = None` plus an `error` and never raises. The transport
+   is whatever `scripts/llm_call.py` (or
+   `src/openclaw_orchestration/llm_call.py`) exposes — when neither exists the
+   runner goes straight to the fallback.
+2. **Deterministic fallback** (no network): weighted diff statistics — tests
+   touched (0.35), new `src/` files (0.25), files changed (0.20), line volume
+   (0.20). Reports produced this way are marked `judge_mode: "fallback"`.
+
+Ties are broken by the lower `latency_s`, then the lower variant index, so the
+winner is always deterministic.
+
+### Outputs
+
+- `data/best_of_N/<slug>_<UTC timestamp>.json` — machine-readable report
+  (schema documented in `data/best_of_N/README.md`).
+- `data/best_of_N/<slug>_<UTC timestamp>.md` — variant comparison table.
+- Telegram digest via `telegram_sender.py` (winner first, one line per variant),
+  sent only when there are ≥ 2 variants, a winner, and a configured bot.
+
+### Configuration
+
+| Setting | Env var | Config key (`config/best_of_n.yaml`) |
+| --- | --- | --- |
+| Variant models | `OPENCLAW_BEST_OF_MODELS` | `models` |
+| Judge model | `OPENCLAW_BEST_OF_JUDGE_MODEL` | `judge_model` |
+| Report directory | `OPENCLAW_BEST_OF_REPORT_DIR` | — |
+| Worktree root | `OPENCLAW_WORKTREE_ROOT` | — |
+
+Worktree isolation prefers `scripts/worktree_orchestrator.py` (Task 12) when it
+is importable and otherwise falls back to a minimal `git worktree add` wrapper.

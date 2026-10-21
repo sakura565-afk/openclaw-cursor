@@ -189,6 +189,20 @@ class TelegramSender:
         finally:
             prepared.cleanup()
 
+    def send_message(self, text: str, *, disable_web_page_preview: bool = True) -> dict:
+        if not text or not text.strip():
+            raise TelegramSenderError("Message text must not be empty.")
+        self.reporter(f"Sending message ({len(text)} characters).")
+        response = self._post(
+            "sendMessage",
+            data={
+                "chat_id": self.config.chat_id,
+                "text": text,
+                "disable_web_page_preview": disable_web_page_preview,
+            },
+        )
+        return response.json()
+
     def send_document(self, file_path: os.PathLike[str] | str, caption: str = "") -> dict:
         document = Path(file_path)
         if not document.exists():
