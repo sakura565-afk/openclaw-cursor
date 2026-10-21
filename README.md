@@ -37,6 +37,56 @@ Run the focused test suite with:
 python -m unittest tests.test_ollama_model_manager
 ```
 
+## Worktree Orchestrator (parallel Cursor agents)
+
+`python -m scripts.worktree_orchestrator` hands every cloud agent its own `git worktree`
+instead of letting all agents share one checkout, where uncommitted edits from one agent
+leak into — and can break — another.
+
+### Commands
+
+```bash
+python -m scripts.worktree_orchestrator create --slug demo
+python -m scripts.worktree_orchestrator create --slug demo --base-ref main --variant 2
+python -m scripts.worktree_orchestrator list
+python -m scripts.worktree_orchestrator release --slug demo --keep
+python -m scripts.worktree_orchestrator release --slug demo --delete-branch
+python -m scripts.worktree_orchestrator reap --older-than-hours 24
+python -m scripts.worktree_orchestrator doctor
+```
+
+### Behaviour
+
+- Branch `cursor/<slug>` (or `cursor/<slug>-variant-<k>`) in `<repo>/.worktrees/<slug>`;
+  `--worktree-root` and `--registry` override the defaults.
+- `create` is idempotent: an existing branch or worktree is reused, never duplicated.
+- `release` never deletes the branch unless `--delete-branch` is passed, so unpushed agent
+  work survives. A locked or dirty worktree is logged, marked `error` in the registry, and
+  reported as a failure instead of raising.
+- `reap` releases worktrees whose owning pid is gone or that are older than the threshold,
+  and skips anything marked `kept`.
+- `list` / `doctor` reconcile the registry with `git worktree list --porcelain` (and, on
+  Windows, with Scheduled Tasks), flagging `missing_on_disk`, `not_in_git` and
+  `not_in_registry` drift.
+- Registry: `data/worktrees.json` (`{"version": 1, "worktrees": [...]}`), written
+  atomically, and carrying `agent_id` / `task_slug` / `pr_url` filled in by the caller.
+
+### Queue manager integration
+
+`scripts/queue_manager.py` isolates agents by default and appends the absolute worktree
+path to the agent prompt. Use `--shared-checkout` for the old single-checkout behaviour:
+
+```bash
+python -m scripts.queue_manager run --branches feature-a feature-b
+python -m scripts.queue_manager run --branches feature-a --shared-checkout
+```
+
+### Tests
+
+```bash
+python -m pytest tests/test_worktree_orchestrator.py
+```
+
 ## Tool Discovery CLI
 
 `python -m scripts.tool_discovery` discovers script capabilities, maps dependencies, generates docs, and suggests tools for a goal with contextual reasoning.

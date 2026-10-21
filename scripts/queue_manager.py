@@ -96,6 +96,47 @@ def _cursor_cli_cwd() -> str:
     return str(_REPO_ROOT)
 
 
+def _load_worktree_api() -> Optional[Any]:
+    """Import scripts.worktree_orchestrator however queue_manager was started."""
+    try:
+        from scripts import worktree_orchestrator as wt  # type: ignore
+    except ImportError:
+        try:
+            import worktree_orchestrator as wt  # type: ignore
+        except ImportError as exc:
+            print(f"⚠️ Worktree orchestrator unavailable ({exc}); shared checkout")
+            return None
+    return wt
+
+
+def prepare_worktree(branch: str) -> Optional[Tuple[str, Path]]:
+    """Hand the agent an isolated checkout; None means fall back to the shared one."""
+    wt = _load_worktree_api()
+    if wt is None:
+        return None
+    try:
+        slug = wt.normalize_slug(branch)
+        info = wt.WorktreeOrchestrator(_REPO_ROOT).create(slug)
+    except Exception as exc:
+        print(f"⚠️ Worktree setup failed for {branch} ({exc}); shared checkout")
+        return None
+    print(f"📁 Worktree for {branch}: {info.path}")
+    return info.slug, info.path
+
+
+def record_worktree_metadata(slug: Optional[str], **fields: Any) -> None:
+    """Store what the agent did (agent_id / pr_url / task_slug) in the registry."""
+    if not slug:
+        return
+    wt = _load_worktree_api()
+    if wt is None:
+        return
+    try:
+        wt.WorktreeOrchestrator(_REPO_ROOT).update(slug, **fields)
+    except Exception as exc:
+        print(f"⚠️ Could not update worktree registry for {slug}: {exc}")
+
+
 def _parse_iso8601(ts: Optional[str]) -> Optional[float]:
     if not ts or not isinstance(ts, str):
         return None
@@ -616,12 +657,22 @@ def get_active_agents() -> int:
         return 0
 
 
-def launch_agent_once(branch: str, description: str) -> Dict[str, Any]:
+def launch_agent_once(
+    branch: str,
+    description: str,
+    worktree_path: Optional[Path] = None,
+) -> Dict[str, Any]:
     """Launch a single Cursor agent (one attempt)."""
     prompt = (
         f"Merge the branch origin/cursor/{branch} into main. Review code, "
         f"ensure tests pass, merge via PR. Reply with PR URL."
     )
+    if worktree_path is not None:
+        prompt += (
+            f"\nWorktree: {worktree_path}\n"
+            "Run every command inside that directory — it is your isolated "
+            "checkout. Do not modify any other copy of this repository."
+        )
 
     try:
         result = subprocess.run(
@@ -658,12 +709,16 @@ def launch_agent_once(branch: str, description: str) -> Dict[str, Any]:
         return {"agent_id": None, "branch": branch, "status": f"ERROR: {e}"}
 
 
-def launch_agent(branch: str, description: str) -> Dict[str, Any]:
+def launch_agent(
+    branch: str,
+    description: str,
+    worktree_path: Optional[Path] = None,
+) -> Dict[str, Any]:
     """Launch with transient retries (subprocess / network)."""
     delay = TRANSIENT_BASE_DELAY
     last: Optional[Dict[str, Any]] = None
     for attempt in range(TRANSIENT_MAX_ATTEMPTS):
-        last = launch_agent_once(branch, description)
+        last = launch_agent_once(branch, description, worktree_path=worktree_path)
         status = last.get("status")
         if status == "LAUNCHED" or status == "LIMIT_REACHED":
             return last
@@ -867,11 +922,15 @@ def run_queue(
     auto_merge: bool = True,
     fresh: bool = False,
     resume: bool = True,
+    use_worktrees: bool = True,
 ):
     """
     Main queue runner.
     Launches agents in batches, monitors with HTTP batch polling,
     exponential backoff + jitter, optional PR merge, state + metrics persistence.
+
+    With ``use_worktrees`` (the default) every agent gets its own git worktree
+    so concurrent agents cannot see each other's uncommitted edits.
     """
     _install_signal_handlers()
 
@@ -882,6 +941,7 @@ def run_queue(
     running: Dict[str, str] = {}
     completed: List[Dict[str, Any]] = []
     agent_tracker: Dict[str, Dict[str, Any]] = {}
+    worktree_slugs: Dict[str, str] = {}
 
     saved = None if fresh or not resume else load_queue_state()
     if (
@@ -911,7 +971,13 @@ def run_queue(
         while len(running) < BATCH_SIZE and pending and not _is_shutdown_requested():
             branch = pending.pop(0)
 
-            result = launch_agent(branch, "")
+            worktree_path: Optional[Path] = None
+            if use_worktrees:
+                prepared = prepare_worktree(branch)
+                if prepared is not None:
+                    worktree_slugs[branch], worktree_path = prepared
+
+            result = launch_agent(branch, "", worktree_path=worktree_path)
 
             if result["status"] == "LIMIT_REACHED":
                 print(f"⚠️ Limit reached, {len(pending)} branches waiting")
@@ -927,6 +993,9 @@ def run_queue(
                         "started_ts": time.time(),
                         "last_poll_ts": 0.0,
                     },
+                )
+                record_worktree_metadata(
+                    worktree_slugs.get(branch), agent_id=aid, task_slug=branch
                 )
                 print(f"✅ Launched: {branch} ({aid})")
                 poll_interval = float(POLL_INTERVAL_INITIAL)
@@ -995,6 +1064,10 @@ def run_queue(
                 branch = running.pop(agent_id)
                 completed_this_round = True
                 pr_url = result.pr_urls[0] if result.pr_urls else None
+                if pr_url:
+                    record_worktree_metadata(
+                        worktree_slugs.get(branch), pr_url=pr_url
+                    )
 
                 merge_status = None
                 if auto_merge and pr_url:
@@ -1149,6 +1222,19 @@ def main():
         action="store_true",
         help="Ignore saved queue_state.json and start from the given branch list",
     )
+    parser.add_argument(
+        "--worktree",
+        dest="worktree",
+        action="store_true",
+        default=True,
+        help="Give every agent an isolated git worktree (default)",
+    )
+    parser.add_argument(
+        "--shared-checkout",
+        dest="worktree",
+        action="store_false",
+        help="Legacy behaviour: all agents work in the same checkout",
+    )
 
     args = parser.parse_args()
 
@@ -1167,7 +1253,13 @@ def main():
     elif not args.fresh:
         saved = load_queue_state()
         if saved and (saved.get("pending") or saved.get("running")):
-            run_queue([], auto_merge=not args.no_merge, fresh=False, resume=True)
+            run_queue(
+                [],
+                auto_merge=not args.no_merge,
+                fresh=False,
+                resume=True,
+                use_worktrees=args.worktree,
+            )
             return
 
     if not branches:
@@ -1182,6 +1274,7 @@ def main():
         auto_merge=not args.no_merge,
         fresh=args.fresh,
         resume=not explicit_branches,
+        use_worktrees=args.worktree,
     )
 
 
