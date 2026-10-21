@@ -81,6 +81,39 @@
       "log_file": "",
       "alert": "telegram",
       "notes": "ollama.exe serve — сервис без state-файла. Живость определяется по коду возврата и времени последнего запуска в Scheduled Tasks."
+    },
+    {
+      "name": "OpenClaw Gateway",
+      "enabled": true,
+      "command": "C:\\Users\\user\\.openclaw\\gateway.cmd",
+      "schedule": "при входе в систему (logon trigger)",
+      "period_hours": 24.0,
+      "state_file": "",
+      "log_file": "",
+      "alert": "telegram",
+      "notes": "Шлюз OpenClaw, запускается по триггеру входа в систему. Не задача с расписанием: код возврата относится к сессии входа, а не к ежедневному запуску. 21.10.2026: rc=1 (последний запуск 19.10)."
+    },
+    {
+      "name": "QMD-Embed-Nightly",
+      "enabled": true,
+      "command": "\"C:\\Program Files\\nodejs\\node.exe\" C:\\openclaw\\node_modules\\@tobilu\\qmd\\bin\\qmd-embed.js",
+      "schedule": "daily 04:00",
+      "period_hours": 24.0,
+      "state_file": "",
+      "log_file": "",
+      "alert": "telegram",
+      "notes": "21.10.2026: rc=-2147024894 (0x80070002, файл не найден) — команда указывает на несуществующий путь. Нужно проверить фактическое имя entrypoint-скрипта qmd."
+    },
+    {
+      "name": "Exec-Health-Watchdog",
+      "enabled": true,
+      "command": "\"C:\\Users\\user\\AppData\\Local\\Programs\\Python\\Python312\\pythonw.exe\" ...",
+      "schedule": "каждые 5 минут",
+      "period_hours": 0.0833,
+      "state_file": "",
+      "log_file": "",
+      "alert": "telegram",
+      "notes": "21.10.2026: rc=-2147020576 (0x800710E0, запуск отказан). Требуется разбор: задача активна, но не стартует."
     }
   ]
 }
