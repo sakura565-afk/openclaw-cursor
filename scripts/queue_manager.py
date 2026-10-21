@@ -10,6 +10,7 @@ import re
 import signal
 import ssl
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -19,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 API_KEY = os.environ.get(
     "CURSOR_API_KEY",
@@ -616,29 +617,30 @@ def get_active_agents() -> int:
         return 0
 
 
-def launch_agent_once(branch: str, description: str) -> Dict[str, Any]:
-    """Launch a single Cursor agent (one attempt)."""
-    prompt = (
-        f"Merge the branch origin/cursor/{branch} into main. Review code, "
-        f"ensure tests pass, merge via PR. Reply with PR URL."
-    )
+def _launch_cli(
+    branch: str, prompt: str, model: Optional[str] = None
+) -> Dict[str, Any]:
+    """Launch a single Cursor agent with an arbitrary prompt (one attempt)."""
+    cmd = [
+        "python",
+        "cursor_cloud_agent.py",
+        "launch",
+        "--api-key",
+        API_KEY,
+        "--repo",
+        REPO,
+        "--ref",
+        REF,
+        "--prompt",
+        prompt,
+        "--auto-pr",
+    ]
+    if model:
+        cmd += ["--model", model]
 
     try:
         result = subprocess.run(
-            [
-                "python",
-                "cursor_cloud_agent.py",
-                "launch",
-                "--api-key",
-                API_KEY,
-                "--repo",
-                REPO,
-                "--ref",
-                REF,
-                "--prompt",
-                prompt,
-                "--auto-pr",
-            ],
+            cmd,
             capture_output=True,
             text=True,
             timeout=30,
@@ -658,12 +660,30 @@ def launch_agent_once(branch: str, description: str) -> Dict[str, Any]:
         return {"agent_id": None, "branch": branch, "status": f"ERROR: {e}"}
 
 
-def launch_agent(branch: str, description: str) -> Dict[str, Any]:
-    """Launch with transient retries (subprocess / network)."""
+def launch_agent_once(branch: str, description: str) -> Dict[str, Any]:
+    """Launch a single merge agent for `branch` (one attempt)."""
+    prompt = (
+        f"Merge the branch origin/cursor/{branch} into main. Review code, "
+        f"ensure tests pass, merge via PR. Reply with PR URL."
+    )
+    return _launch_cli(branch, prompt)
+
+
+def launch_agent_prompt_once(
+    branch: str, prompt: str, model: Optional[str] = None
+) -> Dict[str, Any]:
+    """Launch a single agent with a caller-supplied prompt (one attempt)."""
+    return _launch_cli(branch, prompt, model=model)
+
+
+def _launch_with_transient_retries(
+    attempt_fn: Callable[[], Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Retry `attempt_fn` on transient subprocess / network failures."""
     delay = TRANSIENT_BASE_DELAY
     last: Optional[Dict[str, Any]] = None
     for attempt in range(TRANSIENT_MAX_ATTEMPTS):
-        last = launch_agent_once(branch, description)
+        last = attempt_fn()
         status = last.get("status")
         if status == "LAUNCHED" or status == "LIMIT_REACHED":
             return last
@@ -685,6 +705,22 @@ def launch_agent(branch: str, description: str) -> Dict[str, Any]:
         return last
     assert last is not None
     return last
+
+
+def launch_agent(branch: str, description: str) -> Dict[str, Any]:
+    """Launch with transient retries (subprocess / network)."""
+    return _launch_with_transient_retries(
+        lambda: launch_agent_once(branch, description)
+    )
+
+
+def launch_agent_prompt(
+    branch: str, prompt: str, model: Optional[str] = None
+) -> Dict[str, Any]:
+    """Launch an agent with a custom prompt and model, with transient retries."""
+    return _launch_with_transient_retries(
+        lambda: launch_agent_prompt_once(branch, prompt, model=model)
+    )
 
 
 def _parse_github_pr_ref(pr_url: str) -> Optional[Tuple[str, str, str]]:
@@ -1130,11 +1166,20 @@ def run_queue(
     return completed
 
 
+def _best_of_module():
+    """Import scripts.best_of_n lazily (it imports this module back)."""
+    import importlib
+
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+    return importlib.import_module("scripts.best_of_n")
+
+
 def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Cursor Batch Queue Manager")
-    parser.add_argument("action", choices=["run", "status"])
+    parser.add_argument("action", choices=["run", "status", "best-of-n"])
     parser.add_argument("--branches", nargs="+", help="Branch names to process")
     parser.add_argument(
         "--file", type=Path, help="File with branch list (one per line)"
@@ -1149,6 +1194,7 @@ def main():
         action="store_true",
         help="Ignore saved queue_state.json and start from the given branch list",
     )
+    _best_of_module().add_cli_arguments(parser)
 
     args = parser.parse_args()
 
@@ -1156,6 +1202,13 @@ def main():
         n = get_active_agents()
         print(f"Agents visible via API (approximate): {n}")
         return
+
+    if args.action == "best-of-n" or int(getattr(args, "best_of", 1) or 1) >= 2:
+        best_of = int(getattr(args, "best_of", 1) or 1)
+        if best_of < 2:
+            best_of = len(args.best_of_models or _best_of_module().default_models())
+            args.best_of = max(2, best_of)
+        raise SystemExit(_best_of_module().run_from_args(args))
 
     branches: List[str] = []
     if args.branches:
