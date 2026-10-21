@@ -1300,7 +1300,6 @@ def main():
         action="store_false",
         help="Legacy behaviour: all agents work in the same checkout",
     )
-
     _best_of_module().add_cli_arguments(parser)
 
     args = parser.parse_args()
@@ -1316,6 +1315,13 @@ def main():
         n = get_active_agents()
         print(f"Agents visible via API (approximate): {n}")
         return
+
+    if args.action == "best-of-n" or int(getattr(args, "best_of", 1) or 1) >= 2:
+        best_of = int(getattr(args, "best_of", 1) or 1)
+        if best_of < 2:
+            best_of = len(args.best_of_models or _best_of_module().default_models())
+            args.best_of = max(2, best_of)
+        raise SystemExit(_best_of_module().run_from_args(args))
 
     branches: List[str] = []
     if args.branches:
