@@ -11,9 +11,11 @@ import pytest
 from scripts import h3_preflight
 from src.h3_knowledge import constants as C
 from src.h3_knowledge.lora_compat import (
+    H3_BASE_MODEL,
     SafetensorsError,
     build_safetensors_header_bytes,
     check_lora_compatibility,
+    check_lora_compatibility_from_header,
     list_loras_in_dir,
     read_safetensors_header,
 )
@@ -176,7 +178,7 @@ def test_known_loras_catalogue() -> None:
     realism = C.KNOWN_LORAS["h3-realism-people-t2v-i2v-r2v.safetensors"]
     assert NSGIRL in realism["avoid_with"]
 
-    facial = C.KNOWN_LORAS["h3-facial-realism-t2v-i2v-r2v.safetensors"]
+    facial = C.KNOWN_LORAS["minimax-h3-facial-realism-closeup-cp2000.safetensors"]
     assert facial["strength_model"] == 0.45
 
 
@@ -407,7 +409,7 @@ def test_preflight_camera_zoom_conflict_is_warning(
 def test_preflight_shift_out_of_hard_range_is_error(lora_dir: Path) -> None:
     workflow = valid_workflow()
     workflow["3"]["inputs"]["shift_video"] = 40.0
-    result = h3_preflight.run_preflight(workflow, lora_dir=lora_dir, source_ar=SOURCE_AR_896_1280)
+    result = h3_preflight.run_preflight(workflow, lora_dirs=[lora_dir], source_ar=SOURCE_AR_896_1280)
     assert not result.ok
     assert any("shift_video" in message for message in result.errors)
 
@@ -415,7 +417,7 @@ def test_preflight_shift_out_of_hard_range_is_error(lora_dir: Path) -> None:
 def test_preflight_shift_outside_verified_band_is_warning(lora_dir: Path) -> None:
     workflow = valid_workflow()
     workflow["3"]["inputs"]["shift_video"] = 6.0
-    result = h3_preflight.run_preflight(workflow, lora_dir=lora_dir, source_ar=SOURCE_AR_896_1280)
+    result = h3_preflight.run_preflight(workflow, lora_dirs=[lora_dir], source_ar=SOURCE_AR_896_1280)
     assert result.ok
     assert any("shift_video" in message for message in result.warnings)
 
@@ -423,7 +425,7 @@ def test_preflight_shift_outside_verified_band_is_warning(lora_dir: Path) -> Non
 def test_preflight_missing_trigger_is_warning(lora_dir: Path) -> None:
     workflow = valid_workflow()
     workflow["3"]["inputs"]["prompt"] = "photorealistic skin, static hero framing"
-    result = h3_preflight.run_preflight(workflow, lora_dir=lora_dir, source_ar=SOURCE_AR_896_1280)
+    result = h3_preflight.run_preflight(workflow, lora_dirs=[lora_dir], source_ar=SOURCE_AR_896_1280)
     assert result.ok
     assert any("nsgirl" in message for message in result.warnings)
 
@@ -436,7 +438,7 @@ def test_preflight_conflicting_lora_pair_is_warning(lora_dir: Path) -> None:
         "class_type": "LoraLoader",
         "inputs": {"lora_name": realism, "strength_model": 0.6, "strength_clip": 1.0},
     }
-    result = h3_preflight.run_preflight(workflow, lora_dir=lora_dir, source_ar=SOURCE_AR_896_1280)
+    result = h3_preflight.run_preflight(workflow, lora_dirs=[lora_dir], source_ar=SOURCE_AR_896_1280)
     assert result.ok
     assert any(realism in message for message in result.warnings)
 
@@ -449,7 +451,7 @@ def test_preflight_without_h3_node_is_error() -> None:
 
 def test_preflight_lora_dir_unavailable_is_warning() -> None:
     result = h3_preflight.run_preflight(
-        valid_workflow(), lora_dir=None, source_ar=SOURCE_AR_896_1280
+        valid_workflow(), lora_dirs=None, source_ar=SOURCE_AR_896_1280
     )
     assert result.ok
     assert any("--lora-dir" in message for message in result.warnings)
@@ -588,3 +590,49 @@ def test_pitfalls_catalogue_is_complete() -> None:
     table_rows = [line for line in text.splitlines() if line.startswith("| ") and "|" in line[2:]]
     # 10 граблей + строка заголовка + разделитель в сводной таблице.
     assert len([row for row in table_rows if row.startswith("| ")]) >= 12
+
+
+def test_known_loras_use_verified_host_filenames() -> None:
+    """Имена LoRA в каталоге совпадают с файлами на хосте."""
+    assert "minimax-h3-facial-realism-closeup-cp2000.safetensors" in C.KNOWN_LORAS
+    assert "h3-facial-realism-t2v-i2v-r2v.safetensors" not in C.KNOWN_LORAS
+    facial = C.KNOWN_LORAS["minimax-h3-facial-realism-closeup-cp2000.safetensors"]
+    assert facial["verified_filename"] is True
+    assert facial["strength_clip"] == 0.35
+
+
+def test_lora_dirs_contains_both_host_directories() -> None:
+    """На хосте LoRA лежат в двух каталогах, а не в одном."""
+    assert len(C.LORA_DIRS) >= 2
+    assert any("comfyui" in d.lower() for d in C.LORA_DIRS)
+    assert any("loras" in d.lower() for d in C.LORA_DIRS)
+
+
+def test_rife_fps_constant() -> None:
+    """H3 отдаёт 24 fps, после RIFE — 60."""
+    assert C.FPS == 24
+    assert C.RIFE_FPS == 60
+
+
+def test_short_h3_key_layout_is_accepted() -> None:
+    """Вторая H3-раскладка — ключи blocks.* без diffusion_model.
+
+    Проверено на хосте: minimax-h3-facial-realism-closeup-cp2000.safetensors имеет
+    ключи blocks.N.attn.* и base_model=MiniMax/MiniMax-H3 в метаданных.
+    Без этого правила валидатор заваливал бы рабочую LoRA.
+    """
+    assert C.H3_SHORT_KEY_PREFIX == "blocks."
+    header = {
+        "blocks.25.attn.out_proj.lora_A.default.weight": {},
+        "blocks.25.attn.out_proj.lora_B.default.weight": {},
+    }
+    compat = check_lora_compatibility_from_header(header)
+    assert compat.compatible is True
+    assert compat.base_model == H3_BASE_MODEL
+
+
+def test_camera_marker_does_not_match_gaze_at_camera() -> None:
+    """"gaze stays at the camera" — это взгляд, а не движение камеры."""
+    assert "camera" not in C.CAMERA_PUSH_IN_MARKERS
+    assert "zoom in" in C.CAMERA_PUSH_IN_MARKERS
+    assert "push in" in C.CAMERA_PUSH_IN_MARKERS

@@ -29,7 +29,7 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator, TextIO
+from typing import Any, Iterator, TextIO, Sequence
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:  # запуск вида `python scripts/h3_preflight.py`
@@ -92,6 +92,11 @@ class WorkflowLoadError(Exception):
 # --------------------------------------------------------------------------- #
 
 
+def _is_unresolved(value: Any) -> bool:
+    """Значение не удалось вычислить статически (например, вызов random)."""
+    return isinstance(value, _Unresolved)
+
+
 def _looks_like_workflow(candidate: Any) -> bool:
     """Похоже ли это на ComfyUI API-workflow (словарь узлов с ``class_type``)."""
     if not isinstance(candidate, dict) or not candidate:
@@ -130,6 +135,113 @@ def load_workflow_file(path: str | Path) -> dict[str, Any]:
     return data
 
 
+
+def _collect_module_symbols(tree: ast.Module) -> dict[str, Any]:
+    """Собрать имя -> значение для простых присваиваний уровня модуля.
+
+    Поддерживаются константы (str/int/float/bool/None), списки, кортежи и словари
+    из таких констант. Выражения с вызовами игнорируются — выполнять скрипт нельзя.
+    """
+    symbols: dict[str, Any] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        value = _eval_node(node.value, symbols)
+        if value is not _UNRESOLVED:
+            symbols[target.id] = value
+    return symbols
+
+
+class _Unresolved:
+    """Маркер значения, которое не удалось вычислить без выполнения кода."""
+
+    def __repr__(self) -> str:  # pragma: no cover - только для отладки
+        return "<unresolved>"
+
+
+_UNRESOLVED = _Unresolved()
+
+
+def _eval_node(node: ast.AST, symbols: dict[str, Any]) -> Any:
+    """Вычислить узел AST, подставляя Name из символьной таблицы.
+
+    Всё, что требует выполнения кода (вызовы функций, f-строки с вызовами,
+    атрибуты), помечается как неразрешённое и в workflow не попадает.
+    """
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        if node.id in symbols:
+            return symbols[node.id]
+        return _UNRESOLVED
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        items = []
+        for element in node.elts:
+            value = _eval_node(element, symbols)
+            if value is _UNRESOLVED:
+                return _UNRESOLVED
+            items.append(value)
+        if isinstance(node, ast.Tuple):
+            return tuple(items)
+        if isinstance(node, ast.Set):
+            return set(items)
+        return items
+    if isinstance(node, ast.Dict):
+        result: dict[Any, Any] = {}
+        for key_node, value_node in zip(node.keys, node.values):
+            if key_node is None:
+                return _UNRESOLVED
+            key = _eval_node(key_node, symbols)
+            value = _eval_node(value_node, symbols)
+            if key is _UNRESOLVED:
+                return _UNRESOLVED
+            # Неразрешённое значение (например random.randint для seed) НЕ
+            # обнуляет весь словарь: оставляем маркер, проверки его пропустят.
+            if value is _UNRESOLVED:
+                value = _UNRESOLVED
+            result[key] = value
+        return result
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        operand = _eval_node(node.operand, symbols)
+        if operand is _UNRESOLVED or not isinstance(operand, (int, float)):
+            return _UNRESOLVED
+        return -operand if isinstance(node.op, ast.USub) else +operand
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div)):
+        left = _eval_node(node.left, symbols)
+        right = _eval_node(node.right, symbols)
+        if left is _UNRESOLVED or right is _UNRESOLVED:
+            return _UNRESOLVED
+        try:
+            if isinstance(node.op, ast.Add):
+                return left + right
+            if isinstance(node.op, ast.Sub):
+                return left - right
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            return left / right
+        except (TypeError, ZeroDivisionError):
+            return _UNRESOLVED
+    if isinstance(node, ast.JoinedStr):
+        # f-строка: собираем из статических частей и константных подстановок.
+        parts: list[str] = []
+        for value_node in node.values:
+            if isinstance(value_node, ast.Constant) and isinstance(value_node.value, str):
+                parts.append(value_node.value)
+                continue
+            if isinstance(value_node, ast.FormattedValue):
+                inner = _eval_node(value_node.value, symbols)
+                if inner is _UNRESOLVED or not isinstance(inner, (str, int, float)):
+                    return _UNRESOLVED
+                parts.append(str(inner))
+                continue
+            return _UNRESOLVED
+        return "".join(parts)
+    return _UNRESOLVED
+
+
 def extract_workflow_from_script(path: str | Path) -> dict[str, Any]:
     """Вытащить зашитый в python-скрипт workflow.
 
@@ -148,12 +260,17 @@ def extract_workflow_from_script(path: str | Path) -> dict[str, Any]:
     except SyntaxError as exc:
         raise WorkflowLoadError(f"{file_path}: не разбирается как python ({exc})") from exc
 
+    # Символьная таблица модуля: имя -> значение для простых присваиваний.
+    # Реальные скрипты рендера собирают workflow из переменных
+    # (``"prompt": prompt, "width": width``), поэтому одного ast.literal_eval
+    # мало: он падает на любом Name-ссылке.
+    symbols = _collect_module_symbols(tree)
+
     candidates: list[dict[str, Any]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Dict):
-            try:
-                value = ast.literal_eval(node)
-            except (ValueError, SyntaxError):
+            value = _eval_node(node, symbols)
+            if not isinstance(value, dict):
                 continue
             if _looks_like_workflow(value):
                 candidates.append(value)
@@ -338,6 +455,12 @@ def _check_length(result: PreflightResult, node_id: str, inputs: dict[str, Any])
     if length is None:
         result.error(f"узел {node_id}: не задан 'length'")
         return
+    if _is_unresolved(length):
+        result.warn(
+            f"узел {node_id}: 'length' не удалось вычислить статически — "
+            "проверка длины пропущена"
+        )
+        return
     if not C.is_valid_length(length):
         valid = ", ".join(
             f"{value} ({C.length_to_seconds(value)}s)" for value in C.VALID_LENGTHS
@@ -426,7 +549,7 @@ def _check_shifts(result: PreflightResult, workflow: dict[str, Any]) -> None:
 def _check_loras(
     result: PreflightResult,
     workflow: dict[str, Any],
-    lora_dir: Path | None,
+    lora_dirs: Sequence[Path] | None,
     positive: str,
 ) -> None:
     """Каждая LoRA должна существовать и быть H3-совместимой."""
@@ -447,16 +570,30 @@ def _check_loras(
             if float(strength) == 0.0:
                 result.warn(f"узел {node_id}: {lora_name} подключена с strength_model=0 (не действует)")
 
-        if lora_dir is None:
+        if not lora_dirs:
+            # lora_dirs может быть None (каталоги недоступны) или пустым списком.
             result.warn(
                 f"узел {node_id}: каталог LoRA недоступен — файл {lora_name} "
                 "и его совместимость с H3 не проверены (укажите --lora-dir)"
             )
             continue
 
-        lora_path = lora_dir / lora_name
-        if not lora_path.is_file():
-            result.error(f"узел {node_id}: файл LoRA не найден: {lora_path}")
+        # LoRA разложены по двум каталогам, и ComfyUI принимает имя файла,
+        # а не путь, — ищем по всем доступным каталогам.
+        lora_path = next(
+            (
+                d / lora_name
+                for d in lora_dirs
+                if d is not None and (d / lora_name).is_file()
+            ),
+            None,
+        )
+        if lora_path is None:
+            searched = ", ".join(str(d) for d in lora_dirs)
+            result.error(
+                f"узел {node_id}: файл LoRA не найден: {lora_name} "
+                f"(искали в: {searched})"
+            )
             continue
 
         compat = check_lora_compatibility(lora_path)
@@ -531,7 +668,7 @@ def _check_last_frame(result: PreflightResult, node_id: str, inputs: dict[str, A
 
 def run_preflight(
     workflow: dict[str, Any],
-    lora_dir: Path | None = None,
+    lora_dirs: Sequence[Path] | None = None,
     source_ar: float | None = None,
 ) -> PreflightResult:
     """Прогнать все проверки и вернуть накопленные ошибки/предупреждения."""
@@ -554,7 +691,7 @@ def run_preflight(
         _check_last_frame(result, node_id, inputs, positive)
 
     _check_shifts(result, workflow)
-    _check_loras(result, workflow, lora_dir, positive)
+    _check_loras(result, workflow, lora_dirs, positive)
     _check_camera_conflict(result, positive, negative)
 
     return result
@@ -710,7 +847,7 @@ def run_selftest(stream: TextIO | None = None) -> int:
         passed = 0
         print("h3_preflight selftest", file=out)
         for name, workflow, expect_ok in cases:
-            result = run_preflight(workflow, lora_dir=lora_dir, source_ar=source_ar)
+            result = run_preflight(workflow, lora_dirs=[lora_dir], source_ar=source_ar)
             verdict = "OK" if result.ok else "FAILED"
             matched = result.ok == expect_ok
             passed += int(matched)
@@ -734,10 +871,16 @@ def run_selftest(stream: TextIO | None = None) -> int:
 # --------------------------------------------------------------------------- #
 
 
-def _resolve_lora_dir(raw: str | None) -> Path | None:
-    """Вернуть каталог LoRA, если он доступен на этой машине."""
-    candidate = Path(raw) if raw else Path(C.LORA_DIR)
-    return candidate if candidate.is_dir() else None
+def _resolve_lora_dirs(raw: str | None) -> list[Path]:
+    """Вернуть список доступных каталогов LoRA.
+
+    Без явного --lora-dir берутся все каталоги из ``C.LORA_DIRS`` — на хосте их два,
+    и facial-realism LoRA лежит не в том же, что NSGIRL.
+    """
+    if raw:
+        candidate = Path(raw)
+        return [candidate] if candidate.is_dir() else []
+    return [Path(d) for d in C.LORA_DIRS if Path(d).is_dir()]
 
 
 def _resolve_source_ar(args: argparse.Namespace) -> float | None:
@@ -764,7 +907,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--from-script", help="Python-скрипт, в который зашит workflow.")
     parser.add_argument(
         "--lora-dir",
-        help=f"Каталог LoRA для проверки файлов (по умолчанию {C.LORA_DIR}).",
+        help=(
+            "Каталог LoRA для проверки файлов. По умолчанию — все доступные "
+            f"каталоги из LORA_DIRS: {', '.join(C.LORA_DIRS)}"
+        ),
     )
     parser.add_argument("--source-image", help="Исходник I2V — AR берётся из его PNG/JPEG-заголовка.")
     parser.add_argument("--source-size", help="Размер исходника в формате WxH, например 896x1280.")
@@ -806,11 +952,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    lora_dir = _resolve_lora_dir(args.lora_dir)
-    if lora_dir is None and args.lora_dir:
+    lora_dirs = _resolve_lora_dirs(args.lora_dir)
+    if not lora_dirs and args.lora_dir:
         print(f"warning: каталог LoRA не найден: {args.lora_dir}", file=sys.stderr)
 
-    result = run_preflight(workflow, lora_dir=lora_dir, source_ar=source_ar)
+    result = run_preflight(workflow, lora_dirs=lora_dirs, source_ar=source_ar)
 
     if args.json:
         print(
