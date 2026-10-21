@@ -34,6 +34,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+try:
+    from scripts.windows_console import decode_console_output
+except ImportError:  # pragma: no cover - direct script execution
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    from windows_console import decode_console_output
+
 LOGGER = logging.getLogger("worktree_orchestrator")
 
 GIT_TIMEOUT = 60
@@ -681,21 +689,22 @@ def scheduled_task_names() -> Tuple[Optional[List[str]], Optional[str]]:
         proc = subprocess.run(
             ["schtasks", "/query", "/fo", "csv", "/nh"],
             capture_output=True,
-            text=True,
             timeout=GIT_TIMEOUT,
             shell=False,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return None, f"Scheduled Tasks check failed: {exc}"
+    stdout = decode_console_output(proc.stdout)
+    stderr = decode_console_output(proc.stderr)
     if proc.returncode != 0:
         return None, (
             "Scheduled Tasks check failed: "
-            f"{(proc.stderr or proc.stdout).strip() or proc.returncode}"
+            f"{(stderr or stdout).strip() or proc.returncode}"
         )
 
     names: List[str] = []
-    for row in csv.reader((proc.stdout or "").splitlines()):
+    for row in csv.reader(stdout.splitlines()):
         if row and row[0].strip():
             names.append(row[0].strip().lstrip("\\"))
     return names, None

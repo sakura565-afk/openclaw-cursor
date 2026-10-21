@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import threading
 import argparse
 import json
 import sys
@@ -346,6 +347,38 @@ class Orchestrator:
         return self.cache.stats()
 
 
+#: Process-wide cache shared by the module-level :func:`orchestrate` helper.
+#:
+#: Without it every call built a fresh Orchestrator with a fresh empty
+#: LRUTTLCache, so the cache layer never produced a hit and the whole
+#: "cache -> classifier -> executor -> judge" pipeline paid the API cost
+#: twice for an identical prompt.
+_SHARED_CACHE: Optional[LRUTTLCache] = None
+_SHARED_CACHE_LOCK = threading.Lock()
+
+
+def shared_cache(config: Optional[RouterConfig] = None) -> LRUTTLCache:
+    """Return the process-wide cache, creating it on first use."""
+    global _SHARED_CACHE
+    with _SHARED_CACHE_LOCK:
+        if _SHARED_CACHE is None:
+            cfg = config or load_config()
+            _SHARED_CACHE = LRUTTLCache(
+                max_size=cfg.cache_size,
+                ttl_sec=cfg.cache_ttl_sec,
+                path=cfg.cache_file,
+                persist=cfg.cache_persist,
+            )
+        return _SHARED_CACHE
+
+
+def reset_shared_cache() -> None:
+    """Drop the process-wide cache (used by tests and by long-lived daemons)."""
+    global _SHARED_CACHE
+    with _SHARED_CACHE_LOCK:
+        _SHARED_CACHE = None
+
+
 def orchestrate(
     prompt: str,
     task: str = "general",
@@ -354,12 +387,19 @@ def orchestrate(
     *,
     config: Optional[RouterConfig] = None,
     transport: Any = None,
+    cache: Optional[LRUTTLCache] = None,
 ) -> OrchestrationResult:
-    """Одноразовый вызов оркестратора с настройками по умолчанию."""
+    """One-shot call to the orchestrator with the default settings.
 
-    return Orchestrator(config=config, transport=transport).orchestrate(
-        prompt, task=task, image=image, criteria=criteria
-    )
+    The cache is shared process-wide, so repeated identical prompts are served
+    from the LRU/TTL cache instead of hitting the API again.
+    """
+
+    return Orchestrator(
+        config=config,
+        transport=transport,
+        cache=cache if cache is not None else shared_cache(config),
+    ).orchestrate(prompt, task=task, image=image, criteria=criteria)
 
 
 # --- selftest ---

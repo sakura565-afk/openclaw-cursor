@@ -37,6 +37,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
+try:
+    from scripts.windows_console import decode_console_output
+except ImportError:  # pragma: no cover - direct script execution
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    from windows_console import decode_console_output
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -416,19 +424,12 @@ def parse_schtasks_csv(csv_text: str) -> list[str]:
 # default) raises UnicodeDecodeError and the whole registry fails with
 # "schtasks не вернул ни одной задачи". The output is therefore captured as
 # bytes and decoded explicitly, trying the likely code pages in order.
-SCHTASKS_ENCODINGS: tuple[str, ...] = ("cp866", "cp1251", "utf-8")
+SCHTASKS_ENCODINGS: tuple[str, ...] = ("cp866", "cp1251", "cp437", "utf-8")
 
 
 def decode_schtasks_output(raw: bytes | str) -> str:
     """Decode raw ``schtasks`` bytes using the console OEM code page."""
-    if isinstance(raw, str):
-        return raw
-    for encoding in SCHTASKS_ENCODINGS:
-        try:
-            return raw.decode(encoding)
-        except UnicodeDecodeError:
-            continue
-    return raw.decode(SCHTASKS_ENCODINGS[0], errors="replace")
+    return decode_console_output(raw)
 
 
 def query_scheduled_tasks(
