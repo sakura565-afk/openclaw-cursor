@@ -185,6 +185,22 @@ class Registry:
         return tuple(task.name for task in self.tasks)
 
 
+@dataclass(frozen=True)
+class SchtaskFact:
+    """What Windows itself reports about a scheduled task.
+
+    ``schtasks`` knows the real last-run time and the real exit code — this is
+    the ground truth. The registry's state files are only a secondary signal,
+    because most of the OpenClaw tasks never write one.
+    """
+
+    name: str
+    last_run: str | None = None
+    last_result: int | None = None
+    status: str | None = None
+    next_run: str | None = None
+
+
 @dataclass
 class TaskHealth:
     name: str
@@ -203,6 +219,10 @@ class TaskHealth:
     log_age_hours: float | None = None
     log_last_line: str | None = None
     log_exit_code: int | None = None
+    # Ground truth straight from Windows Task Scheduler.
+    scheduled_last_run: str | None = None
+    scheduled_last_result: int | None = None
+    scheduled_status: str | None = None
     detail: str = ""
 
     @property
@@ -391,6 +411,26 @@ def parse_schtasks_csv(csv_text: str) -> list[str]:
     return names
 
 
+# ``schtasks`` writes its output in the console OEM code page (cp866 on a
+# Russian Windows), NOT in UTF-8. Reading it with ``text=True`` (utf-8 by
+# default) raises UnicodeDecodeError and the whole registry fails with
+# "schtasks не вернул ни одной задачи". The output is therefore captured as
+# bytes and decoded explicitly, trying the likely code pages in order.
+SCHTASKS_ENCODINGS: tuple[str, ...] = ("cp866", "cp1251", "utf-8")
+
+
+def decode_schtasks_output(raw: bytes | str) -> str:
+    """Decode raw ``schtasks`` bytes using the console OEM code page."""
+    if isinstance(raw, str):
+        return raw
+    for encoding in SCHTASKS_ENCODINGS:
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode(SCHTASKS_ENCODINGS[0], errors="replace")
+
+
 def query_scheduled_tasks(
     *,
     run_command: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
@@ -402,7 +442,6 @@ def query_scheduled_tasks(
         completed = run_command(
             cmd,
             capture_output=True,
-            text=True,
             check=False,
             timeout=timeout,
         )
@@ -411,14 +450,165 @@ def query_scheduled_tasks(
     except (OSError, subprocess.SubprocessError) as exc:
         raise SchtasksError(f"не удалось выполнить schtasks: {exc}") from exc
 
+    stdout = decode_schtasks_output(getattr(completed, "stdout", b"") or b"")
+    stderr = decode_schtasks_output(getattr(completed, "stderr", b"") or b"")
+
     if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout or "").strip()[:300]
+        detail = (stderr or stdout).strip()[:300]
         raise SchtasksError(f"schtasks вернул код {completed.returncode}: {detail or 'без вывода'}")
 
-    names = parse_schtasks_csv(completed.stdout or "")
+    names = parse_schtasks_csv(stdout)
     if not names:
         raise SchtasksError("schtasks не вернул ни одной задачи (пустой CSV)")
     return names
+
+
+
+# Localized schtasks CSV headers (Russian Windows) and the English ones.
+# The columns are identified by substring match so the same code works on
+# both locales without a translation table.
+_SCHTASKS_COLUMN_KEYS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("name", ("имя задачи", "taskname", "task name")),
+    ("status", ("состояние", "status")),
+    ("last_run", ("время прошлого запуска", "last run time", "last run")),
+    ("last_result", ("прошлый результат", "last result")),
+    ("next_run", ("время следующего запуска", "next run time", "next run")),
+)
+
+
+def _column_index(header: list[str], keys: tuple[str, ...]) -> int | None:
+    lowered = [cell.casefold() for cell in header]
+    for key in keys:
+        for index, cell in enumerate(lowered):
+            if key in cell:
+                return index
+    return None
+
+
+def parse_schtasks_facts(csv_text: str) -> dict[str, SchtaskFact]:
+    """Parse ``schtasks /Query /FO CSV /V`` into per-task ground-truth facts.
+
+    Unlike :func:`parse_schtasks_csv` this keeps the last-run time, the exit
+    code and the scheduler state, which is the only reliable "is this task
+    alive?" signal for tasks that never write a state file.
+    """
+    reader = csv.reader(io.StringIO(csv_text or ""))
+    facts: dict[str, SchtaskFact] = {}
+    header: list[str] | None = None
+    indexes: dict[str, int | None] = {}
+    for row in reader:
+        if not row:
+            continue
+        cells = [cell.strip().strip('"') for cell in row]
+        lowered = [cell.casefold() for cell in cells]
+        if "taskname" in lowered or "имя задачи" in lowered:
+            header = lowered
+            indexes = {
+                key: _column_index(header, keys) for key, keys in _SCHTASKS_COLUMN_KEYS
+            }
+            continue
+        if header is None:
+            header = lowered
+            indexes = {
+                key: _column_index(header, keys) for key, keys in _SCHTASKS_COLUMN_KEYS
+            }
+            continue
+        if lowered == header:
+            continue
+
+        name_index = indexes.get("name")
+        if name_index is None or name_index >= len(cells):
+            continue
+        name = cells[name_index]
+        if not name:
+            continue
+        key = _normalize_task_name(name)
+        if not key or key in facts:
+            continue
+
+        def _cell(field: str) -> str | None:
+            index = indexes.get(field)
+            if index is None or index >= len(cells):
+                return None
+            value = cells[index].strip()
+            return value or None
+
+        result_text = _cell("last_result")
+        result_code: int | None = None
+        if result_text is not None:
+            try:
+                result_code = int(result_text)
+            except ValueError:
+                result_code = None
+
+        facts[key] = SchtaskFact(
+            name=name,
+            last_run=_cell("last_run"),
+            last_result=result_code,
+            status=_cell("status"),
+            next_run=_cell("next_run"),
+        )
+    return facts
+
+
+def query_schtasks(
+    *,
+    run_command: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    timeout: float = 120.0,
+) -> tuple[list[str], dict[str, SchtaskFact]]:
+    """Query Windows Task Scheduler once and return names + ground-truth facts.
+
+    A single ``schtasks`` call is enough for both: the names tell whether the
+    registry entry still exists, the facts tell when it last ran and with
+    which exit code.
+    """
+    cmd = ["schtasks", "/Query", "/FO", "CSV", "/V"]
+    try:
+        completed = run_command(cmd, capture_output=True, check=False, timeout=timeout)
+    except FileNotFoundError as exc:
+        raise SchtasksError(f"schtasks не найден: {exc}") from exc
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SchtasksError(f"не удалось выполнить schtasks: {exc}") from exc
+
+    stdout = decode_schtasks_output(getattr(completed, "stdout", b"") or b"")
+    stderr = decode_schtasks_output(getattr(completed, "stderr", b"") or b"")
+
+    if completed.returncode != 0:
+        detail = (stderr or stdout).strip()[:300]
+        raise SchtasksError(f"schtasks вернул код {completed.returncode}: {detail or 'без вывода'}")
+
+    names = parse_schtasks_csv(stdout)
+    facts = parse_schtasks_facts(stdout)
+    if not names and not facts:
+        raise SchtasksError("schtasks не вернул ни одной задачи (пустой CSV)")
+    return names, facts
+
+
+def query_scheduled_task_facts(
+    *,
+    run_command: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    timeout: float = 120.0,
+) -> dict[str, SchtaskFact]:
+    """Run ``schtasks`` and return the ground truth for every task it reports."""
+    cmd = ["schtasks", "/Query", "/FO", "CSV", "/V"]
+    try:
+        completed = run_command(cmd, capture_output=True, check=False, timeout=timeout)
+    except FileNotFoundError as exc:
+        raise SchtasksError(f"schtasks не найден: {exc}") from exc
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SchtasksError(f"не удалось выполнить schtasks: {exc}") from exc
+
+    stdout = decode_schtasks_output(getattr(completed, "stdout", b"") or b"")
+    stderr = decode_schtasks_output(getattr(completed, "stderr", b"") or b"")
+
+    if completed.returncode != 0:
+        detail = (stderr or stdout).strip()[:300]
+        raise SchtasksError(f"schtasks вернул код {completed.returncode}: {detail or 'без вывода'}")
+
+    facts = parse_schtasks_facts(stdout)
+    if not facts:
+        raise SchtasksError("schtasks не вернул ни одной задачи (пустой CSV)")
+    return facts
 
 
 # --------------------------------------------------------------------------- #
@@ -651,6 +841,7 @@ class CronRegistry:
         *,
         system_tasks: Sequence[str] | None = None,
         registry: Registry | None = None,
+        facts: dict[str, SchtaskFact] | None = None,
     ) -> list[TaskHealth]:
         """Compute health for every registry entry, sorted by severity."""
         reg = registry or self.load()
@@ -661,7 +852,8 @@ class CronRegistry:
             else None
         )
         results = [
-            self._check_task(task, moment, known, reg.stale_factor) for task in reg.tasks
+            self._check_task(task, moment, known, reg.stale_factor, facts)
+            for task in reg.tasks
         ]
         return sort_health(results)
 
@@ -671,6 +863,7 @@ class CronRegistry:
         now: datetime,
         known_tasks: set[str] | None,
         default_factor: float,
+        facts: dict[str, SchtaskFact] | None = None,
     ) -> TaskHealth:
         threshold = spec.stale_after_hours(default_factor)
         health = TaskHealth(
@@ -682,6 +875,13 @@ class CronRegistry:
             log_pattern=spec.log_file,
         )
         problems: list[str] = []
+
+        # Ground truth from Windows Task Scheduler.
+        fact = (facts or {}).get(_normalize_task_name(spec.name))
+        if fact is not None:
+            health.scheduled_last_run = fact.last_run
+            health.scheduled_last_result = fact.last_result
+            health.scheduled_status = fact.status
 
         state_path = self.resolve_pattern(spec.state_file)
         if state_path is not None:
@@ -715,7 +915,7 @@ class CronRegistry:
             health.detail = "задачи нет в Scheduled Tasks (реестр ссылается на несуществующую)"
             return health
 
-        if not spec.state_file and not spec.log_file:
+        if not spec.state_file and not spec.log_file and fact is None:
             health.status = STATUS_UNKNOWN_TASK
             health.detail = "в реестре не задан ни state_file, ни log_file — наблюдать нечего"
             return health
@@ -726,6 +926,19 @@ class CronRegistry:
         log_failing = health.log_exit_code is not None and health.log_exit_code != 0
         if log_failing:
             problems.append(f"последний запуск в логе завершился с exit={health.log_exit_code}")
+
+        # The scheduler's own exit code is the most reliable failure signal:
+        # 0 = success, 1 = script error, 0x80070xxx = Windows-level failure.
+        scheduled_failing = (
+            health.scheduled_last_result is not None
+            and health.scheduled_last_result != 0
+        )
+        if scheduled_failing:
+            code = health.scheduled_last_result
+            hexed = f"0x{code & 0xFFFFFFFF:08X}"
+            problems.append(
+                f"Scheduled Tasks: последний запуск завершился с кодом {code} ({hexed})"
+            )
 
         age = health.age_hours
         is_stale = age is not None and age > threshold
@@ -738,11 +951,19 @@ class CronRegistry:
             )
 
         if spec.state_file and state_path is None:
-            problems.append(f"нет state-файла по шаблону {spec.state_file}")
+            if fact is not None:
+                problems.append(
+                    f"нет state-файла по шаблону {spec.state_file} "
+                    "(но Scheduled Tasks подтверждает запуск)"
+                )
+            else:
+                problems.append(f"нет state-файла по шаблону {spec.state_file}")
 
-        if state_failing or log_failing:
+        if state_failing or log_failing or scheduled_failing:
             health.status = STATUS_FAILING
-        elif spec.state_file and state_path is None:
+        elif spec.state_file and state_path is None and fact is None:
+            # No state file is only a problem when the scheduler gives us
+            # nothing to fall back on.
             health.status = STATUS_MISSING_STATE
         elif is_stale:
             health.status = STATUS_STALE
@@ -967,13 +1188,21 @@ class CronRegistry:
 
     def render_table(self, health: Sequence[TaskHealth]) -> str:
         """ASCII table of every registry entry (cp1251-safe console output)."""
-        headers = ("TASK", "STATUS", "AGE", "PERIOD", "STALE>", "STATE", "DETAIL")
+        headers = ("TASK", "STATUS", "RC", "AGE", "PERIOD", "STALE>", "STATE", "DETAIL")
         rows: list[tuple[str, ...]] = []
         for item in health:
+            code = item.scheduled_last_result
+            if code is None:
+                rc = "-"
+            elif code == 0:
+                rc = "0"
+            else:
+                rc = f"{code} (0x{code & 0xFFFFFFFF:08X})"
             rows.append(
                 (
                     item.name,
                     item.status,
+                    rc,
                     _format_hours(item.age_hours),
                     _format_hours(item.period_hours),
                     _format_hours(item.stale_after_hours),
@@ -1084,18 +1313,28 @@ class CronRegistry:
             return 2
 
         system_tasks: list[str] | None = None
+        facts: dict[str, SchtaskFact] | None = None
         validation: list[str] = []
-        if validate:
-            try:
-                system_tasks = query_scheduled_tasks(run_command=run_command)
-            except SchtasksError as exc:
+        # One schtasks call gives both the task list and the ground truth
+        # (last run + exit code). The scheduler is the only source that knows
+        # the real exit code of tasks that never write a state file.
+        try:
+            system_tasks, facts = query_schtasks(run_command=run_command)
+        except SchtasksError as exc:
+            if validate:
                 validation.append(f"[error] {exc}")
-            else:
+        else:
+            if validate:
                 validation = self.validate_against_schtasks(
                     system_tasks=system_tasks, registry=registry
                 )
 
-        current = self.check(moment, system_tasks=system_tasks, registry=registry)
+        # The "does the task still exist" check only runs when validation was
+        # requested; the exit codes are always useful ground truth.
+        known_for_check = system_tasks if validate else None
+        current = self.check(
+            moment, system_tasks=known_for_check, registry=registry, facts=facts
+        )
         changes = self.diff(self.load_last_run(), current) if diff else []
         digest = self.render_digest(
             changes, now=moment, validation=validation if validate else None
