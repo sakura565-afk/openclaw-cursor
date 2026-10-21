@@ -30,3 +30,11 @@ memory/MEMORY_sync_index.md
 data/llm_cache.json
 data/llm_router_telemetry.jsonl
 data/llm_router_telemetry/
+
+# Per-agent git worktrees + their registry (scripts/worktree_orchestrator.py)
+.worktrees/
+data/worktrees.json
+
+# cron_registry per-machine snapshot of the previous health check
+data/cron_registry_last.json
+data/cron_registry_last.json.tmp
