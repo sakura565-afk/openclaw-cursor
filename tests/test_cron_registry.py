@@ -744,7 +744,15 @@ def test_shipped_registry_is_valid() -> None:
     loaded = registry.load()
 
     assert loaded.version == 1
-    assert len(loaded.tasks) == 6
+    # The registry covers every OpenClaw-owned scheduled task on the host.
+    assert len(loaded.tasks) >= 6
+    names = {task.name for task in loaded.tasks}
+    assert {
+        "Cursor-CloudAgent-Poll",
+        "Ollama-Health-Daily",
+        "HF-Trending-Daily",
+        "Metrika-Daily-Telegram",
+    } <= names
     for task in loaded.tasks:
         assert task.period_hours > 0
         # A task without a state/log artifact is still valid: its liveness is
@@ -759,7 +767,8 @@ def test_shipped_registry_check_does_not_touch_real_state(tmp_path: Path) -> Non
 
     report = registry.check(NOW)
 
-    assert len(report) == 6
+    assert len(report) == len(loaded_tasks := cr.CronRegistry().load().tasks)
+    assert len(report) == len(loaded_tasks)
     # The real workspace state must not leak into the report: every task is
     # judged against the empty tmp_path. A task that has no state/log file
     # at all has nothing to observe, so it is reported as unknown_task.
@@ -840,3 +849,34 @@ def test_scheduled_success_is_not_a_missing_state_failure(tmp_path: Path) -> Non
 
     assert health.status != cr.STATUS_FAILING
     assert health.scheduled_last_result == 0
+
+
+def test_running_exit_code_is_not_a_failure() -> None:
+    """0x41301 means "the task is running right now", not "the task failed".
+
+    Long-running daemons registered as scheduled tasks always report it, so
+    treating it as a failure would mark a healthy watchdog as broken.
+    """
+    assert cr.is_schtasks_failure(cr.SCHTASKS_RESULT_RUNNING) is False
+    assert cr.is_schtasks_failure(cr.SCHTASKS_RESULT_NOT_RUNNING) is False
+    assert cr.is_schtasks_failure(0) is False
+    assert cr.is_schtasks_failure(None) is False
+    assert cr.is_schtasks_failure(1) is True
+    assert cr.is_schtasks_failure(-2147024894) is True
+
+
+def test_running_task_is_reported_as_ok(tmp_path: Path) -> None:
+    registry = build(
+        tmp_path,
+        [{"name": "A", "period_hours": 24, "state_file": "data/a.json"}],
+    )
+    facts = {
+        "a": cr.SchtaskFact(
+            name="A", last_result=cr.SCHTASKS_RESULT_RUNNING, last_run="21.10.2026 9:00:00"
+        )
+    }
+
+    health = registry.check(NOW, facts=facts)[0]
+
+    assert health.status != cr.STATUS_FAILING
+    assert health.scheduled_last_result == cr.SCHTASKS_RESULT_RUNNING

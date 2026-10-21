@@ -426,6 +426,30 @@ def parse_schtasks_csv(csv_text: str) -> list[str]:
 # bytes and decoded explicitly, trying the likely code pages in order.
 SCHTASKS_ENCODINGS: tuple[str, ...] = ("cp866", "cp1251", "cp437", "utf-8")
 
+# Exit codes reported by Task Scheduler that do NOT mean "the task failed".
+#
+# 0x00041301 (267009) = SCHED_S_TASK_RUNNING — the task is running right now.
+#   Long-running daemons registered as scheduled tasks (e.g. the exec health
+#   watchdog) always report this, so treating it as a failure would mark a
+#   perfectly healthy daemon as broken.
+# 0x00041303 (267011) = SCHED_S_TASK_NOT_RUNNING — the task was not started
+#   (e.g. it was skipped or the start was refused because an instance was
+#   already running).
+SCHTASKS_RESULT_RUNNING = 267009
+SCHTASKS_RESULT_NOT_RUNNING = 267011
+SCHTASKS_NON_FAILURE_RESULTS = frozenset(
+    {SCHTASKS_RESULT_RUNNING, SCHTASKS_RESULT_NOT_RUNNING}
+)
+
+
+def is_schtasks_failure(code: int | None) -> bool:
+    """True when the scheduler's exit code means the last run did not succeed."""
+    if code is None:
+        return False
+    if code in SCHTASKS_NON_FAILURE_RESULTS:
+        return False
+    return code != 0
+
 
 def decode_schtasks_output(raw: bytes | str) -> str:
     """Decode raw ``schtasks`` bytes using the console OEM code page."""
@@ -930,10 +954,7 @@ class CronRegistry:
 
         # The scheduler's own exit code is the most reliable failure signal:
         # 0 = success, 1 = script error, 0x80070xxx = Windows-level failure.
-        scheduled_failing = (
-            health.scheduled_last_result is not None
-            and health.scheduled_last_result != 0
-        )
+        scheduled_failing = is_schtasks_failure(health.scheduled_last_result)
         if scheduled_failing:
             code = health.scheduled_last_result
             hexed = f"0x{code & 0xFFFFFFFF:08X}"
