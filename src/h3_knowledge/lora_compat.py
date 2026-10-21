@@ -32,7 +32,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from src.h3_knowledge.constants import H3_COMPATIBLE_LORA_KEY_PREFIX
+from src.h3_knowledge.constants import (
+    H3_COMPATIBLE_LORA_KEY_PREFIX,
+    H3_SHORT_KEY_PREFIX,
+)
 
 # Защита от битого/чужого файла: заголовок safetensors реально занимает единицы
 # мегабайт, поэтому всё, что больше, читать не нужно.
@@ -71,6 +74,17 @@ ARCHITECTURE_RULES: tuple[_ArchRule, ...] = (
         base_model=H3_BASE_MODEL,
         compatible=True,
         reason="ключи diffusion_model.blocks.* — раскладка MiniMax H3 (fl2va)",
+    ),
+    # Вторая H3-раскладка: ключи без префикса "diffusion_model.".
+    # Проверено на хосте: minimax-h3-facial-realism-closeup-cp2000.safetensors
+    # имеет ключи blocks.N.attn.* и в метаданных base_model=MiniMax/MiniMax-H3.
+    # NSGIRL и h3-realism-people используют diffusion_model.blocks.*.
+    _ArchRule(
+        marker=H3_SHORT_KEY_PREFIX,
+        substring=False,
+        base_model=H3_BASE_MODEL,
+        compatible=True,
+        reason="ключи blocks.* — раскладка MiniMax H3 (короткая, без diffusion_model.)",
     ),
     _ArchRule(
         marker="transformer.single_transformer_blocks.",
@@ -227,6 +241,70 @@ def _metadata_architecture(header: dict[str, Any]) -> str | None:
             return value.strip()
     return None
 
+
+def check_lora_compatibility_from_header(
+    header: dict[str, Any],
+    *,
+    name: str = "<header>",
+) -> LoraCompat:
+    """Определить совместимость по уже прочитанному заголовку.
+
+    Вынесено из :func:`check_lora_compatibility`, чтобы правила совместимости
+    можно было проверять без файла на диске — в тестах и в CLI-режиме.
+    """
+    keys = tensor_keys(header)
+    prefixes = key_prefixes(keys)
+    metadata_arch = _metadata_architecture(header)
+
+    if not keys:
+        return LoraCompat(
+            path=Path(name),
+            name=name,
+            compatible=False,
+            base_model=metadata_arch,
+            key_prefixes=prefixes,
+            tensor_count=0,
+            reason="в заголовке нет тензоров — файл не является LoRA",
+        )
+
+    hits = {
+        rule.marker: sum(1 for key in keys if rule.matches(key))
+        for rule in ARCHITECTURE_RULES
+    }
+    best = max(
+        ARCHITECTURE_RULES,
+        key=lambda rule: (hits[rule.marker], -ARCHITECTURE_RULES.index(rule)),
+    )
+
+    if hits[best.marker] == 0:
+        return LoraCompat(
+            path=Path(name),
+            name=name,
+            compatible=False,
+            base_model=metadata_arch,
+            key_prefixes=prefixes,
+            tensor_count=len(keys),
+            reason=(
+                "архитектура не опознана: нет ни одного известного префикса ключей "
+                f"(найдено: {', '.join(prefixes[:5]) or 'ничего'}). "
+                f"Для H3 требуется {H3_COMPATIBLE_LORA_KEY_PREFIX}* "
+                f"или {H3_SHORT_KEY_PREFIX}*"
+            ),
+        )
+
+    reason = best.reason
+    if metadata_arch:
+        reason = f"{reason}; __metadata__ сообщает '{metadata_arch}'"
+
+    return LoraCompat(
+        path=Path(name),
+        name=name,
+        compatible=best.compatible,
+        base_model=best.base_model,
+        key_prefixes=prefixes,
+        tensor_count=len(keys),
+        reason=reason,
+    )
 
 def check_lora_compatibility(path: str | Path) -> LoraCompat:
     """Определить, подходит ли LoRA к MiniMax H3, по префиксам ключей тензоров.

@@ -120,3 +120,63 @@ back» H3 читает как сдвиг цвета и уводит фон в с
 **Фикс.** Явный позитив
 `backdrop stays exactly the same vivid red, no fading, no grey background`
 плюс расширенный негатив на `fading backdrop, grey background, desaturated background`.
+
+---
+
+## Дополнения, найденные при проверке на реальных файлах хоста (21.10.2026)
+
+### Две H3-раскладки LoRA, а не одна
+
+H3-совместимая LoRA бывает с двумя разными раскладками ключей:
+
+| раскладка | файлы на хосте |
+|---|---|
+| `diffusion_model.blocks.*` | `NSGIRL-MiniMax-H3-LoRA-By-MM744` (416 тензоров), `h3-realism-people-t2v-i2v-r2v` (208), `minimax_h3_turbo_4step_ema_pruned` (416) |
+| `blocks.*` (короткая, без `diffusion_model.`) | `minimax-h3-facial-realism-closeup-cp2000` (200 тензоров, `__metadata__` base_model = `MiniMax/MiniMax-H3`) |
+
+Проверка, принимающая только `diffusion_model.blocks.*`, заваливает рабочую
+`minimax-h3-facial-realism-closeup-cp2000` — а она подключалась в каждом
+боевом рендере. И наоборот: все 7 Flux/SDXL-LoRA (`NSFW_master`,
+`nsfw_flux_lora_v1`, `flux2klein_nsfw`, `undressing-PN`,
+`aidmaNSFWunlock-FLUX-V0.2`, `epiCRealismXL-KiSSEnhancer_Lora`,
+`faceid.plusv2.sdxl.lora`) отвергаются корректно.
+
+### Два каталога LoRA, а не один
+
+LoRA разложены по двум путям, и ComfyUI принимает **имя файла**, а не путь:
+
+- `E:/AI/models/comfyui/loras/` — NSGIRL, h3-realism-people, весь Flux/SDXL-шум
+- `C:/Users/user/comfyui/ComfyUI_windows_portable/ComfyUI/models/loras/` — facial-realism, turbo-4step, faceid
+
+Искать LoRA надо по обоим каталогам, иначе facial-realism «не найдена».
+
+### H3 video VAE lossy на ~18-21%
+
+Roundtrip исходного фото через H3 video VAE (encode → decode, без диффузии):
+12.65 → 10.48 по high-frequency энергии кожи. Причём одинаково на коже
+(-17.9%), бёдрах (-19.7%) и пампасе (-21.5%) — это общий lossy-характер VAE,
+а не замыливание кожи. Диффузия поверх этого текстуру почти не портит.
+Альтернативного H3 VAE на хосте нет.
+
+### Числовой hf-замер слеп на динамичных брифах
+
+На статичных сценах замер текстуры работает и различает реальное фото (12.7-14.3)
+от заведомо размытого (1.7). На **движущихся** снятиях фиксированный экранный
+кроп не попадает на кожу стабильно — все конфиги дают одинаковые ~3.0-3.3, и
+vision подтверждает, что кроп показывает другую часть тела. На динамике мерить
+текстуру только глазами (vision по целым кадрам), числовой замер — на статике.
+
+### Маркер "camera" в промте — это не всегда движение камеры
+
+`"her gaze stays at the camera"` (взгляд в объектив) не означает наезд. Проверка
+на наличие маркеров движения камеры в позитиве даёт ложное предупреждение,
+если маркером служит голое слово `camera`. Рабочий набор маркеров: `zoom in`,
+`push in`, `dolly in`, `camera moves closer`, `close-up of`, `camera pushes`.
+
+### Промт-парсер: workflow из реальных скриптов собран из переменных
+
+Рабочие H3-скрипты строят workflow как `{"prompt": prompt, "width": width}`, и
+seed берётся из `random.randint(...)`. Наивный `ast.literal_eval` такой словарь
+не разбирает — валидатор обязан разрешать Name-ссылки через символьную таблицу
+модуля и оставлять невычислимые значения (например seed) маркером, а не
+обнулять весь workflow. Проверено на всех 34 рабочих скриптах в `F:/AI/comfyui-qwen`.

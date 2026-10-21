@@ -29,11 +29,33 @@ COMFYUI_URL = f"http://127.0.0.1:{COMFYUI_PORT}"
 # База H3, под которую подобраны все остальные константы.
 BASE_MODEL = "x_h3_nvfp4_awq.safetensors"
 
-# Каталог LoRA на хосте (Windows-путь, на других машинах задаётся через CLI).
-LORA_DIR = r"E:\AI\models\comfyui\loras"
+# Каталоги LoRA на хосте. Их ДВА, и они разные — проверено на диске.
+# ComfyUI принимает имя файла, а не путь, поэтому искать надо по всем каталогам.
+#
+#   E:/AI/models/comfyui/loras/
+#       NSGIRL-MiniMax-H3-LoRA-By-MM744.safetensors   (анатомия)
+#       h3-realism-people-t2v-i2v-r2v.safetensors      (реализм тела/кожи)
+#       + Flux/SDXL-шум: NSFW_master, nsfw_flux_lora_v1, flux2klein_nsfw,
+#         undressing-PN, aidmaNSFWunlock-FLUX-V0.2, epiCRealismXL-KiSSEnhancer_Lora,
+#         faceid.plusv2.sdxl.lora
+#   C:/Users/user/comfyui/ComfyUI_windows_portable/ComfyUI/models/loras/
+#       minimax-h3-facial-realism-closeup-cp2000.safetensors  (реализм лица)
+#       minimax_h3_turbo_4step_ema_pruned.safetensors
+#       faceid.plusv2.sdxl.lora.safetensors
+LORA_DIRS: tuple[str, ...] = (
+    r"E:\AI\models\comfyui\loras",
+    r"C:\Users\user\comfyui\ComfyUI_windows_portable\ComfyUI\models\loras",
+)
+
+# Оставлено для обратной совместимости: первый каталог как "основной".
+LORA_DIR = LORA_DIRS[0]
 
 # H3 всегда отдаёт 24 fps; длительность клипа = length / FPS.
 FPS = 24
+
+# Итоговые файлы после RIFE-интерполяции — 60 fps.
+# RIFE: minterpolate=fps=60:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1
+RIFE_FPS = 60
 
 # --------------------------------------------------------------------------- #
 # Длина клипа
@@ -125,6 +147,11 @@ SHIFT_AUDIO_HARD_RANGE = (0.5, 15.0)
 # Всё остальное (Flux/SDXL-раскладки) H3 либо игнорирует, либо ломает.
 H3_COMPATIBLE_LORA_KEY_PREFIX = "diffusion_model.blocks."
 
+# Вторая H3-раскладка — короткая, без префикса "diffusion_model.".
+# Проверено на хосте: minimax-h3-facial-realism-closeup-cp2000.safetensors
+# (base_model в метаданных: MiniMax/MiniMax-H3, 200 тензоров).
+H3_SHORT_KEY_PREFIX = "blocks."
+
 # LoRA, проверенные на хосте.
 #
 # Формат записи: strength_model / strength_clip — рекомендуемые силы,
@@ -132,8 +159,10 @@ H3_COMPATIBLE_LORA_KEY_PREFIX = "diffusion_model.blocks."
 # ``verified_filename`` отмечает, что имя файла подтверждено на хосте.
 KNOWN_LORAS: dict[str, dict[str, Any]] = {
     "NSGIRL-MiniMax-H3-LoRA-By-MM744.safetensors": {
-        "strength_model": 0.85,
-        "strength_clip": 1.0,
+        # Проверенные боевые значения (run_h3_panties_off_v7_nsgirl.py):
+        #   strength_model 0.9, strength_clip 0.5
+        "strength_model": 0.9,
+        "strength_clip": 0.5,
         "trigger": "nsgirl",
         "purpose": (
             "Генитальная анатомия (labia majora/minora, отверстие). "
@@ -150,8 +179,9 @@ KNOWN_LORAS: dict[str, dict[str, Any]] = {
         ),
     },
     "h3-realism-people-t2v-i2v-r2v.safetensors": {
-        "strength_model": 0.6,
-        "strength_clip": 1.0,
+        # Проверено в run_h3_butt_pushin_v1.py: strength_model 0.7
+        "strength_model": 0.7,
+        "strength_clip": 0.6,
         "trigger": None,
         "purpose": "Фотореализм кожи для людей (t2v/i2v/r2v).",
         "strength_range": (0.5, 0.7),
@@ -161,17 +191,22 @@ KNOWN_LORAS: dict[str, dict[str, Any]] = {
         # при этом не чинит. Оставлена в каталоге, чтобы агент не «открывал» её заново.
         "notes": "НЕ использовать вместе с NSGIRL: ломает анатомию и не чинит кожу.",
     },
-    "h3-facial-realism-t2v-i2v-r2v.safetensors": {
+    "minimax-h3-facial-realism-closeup-cp2000.safetensors": {
         # Типичная сила 0.45: выше — лицо «пластилинится» и уезжает от исходника.
         "strength_model": 0.45,
-        "strength_clip": 1.0,
+        "strength_clip": 0.35,
         "trigger": None,
         "purpose": "Фотореализм лица (facial realism), мелкая кожная текстура лица.",
         "strength_range": (0.4, 0.5),
         "avoid_with": (),
-        # Имя файла на хосте стоит сверить перед использованием: в каталоге
-        # встречались переименованные копии этой LoRA.
-        "verified_filename": False,
+        # Имя сверено с диском хоста:
+        #   ComfyUI/models/loras/minimax-h3-facial-realism-closeup-cp2000.safetensors
+        # и с рабочими скриптами, которые реально рендерили:
+        #   F:/AI/comfyui-qwen/run_h3_panties_off_v7_nsgirl.py
+        #   F:/AI/comfyui-qwen/run_h3_panties_off_v6b.py
+        #   F:/AI/comfyui-qwen/run_h3_legs_open_v1.py
+        #   F:/AI/comfyui-qwen/run_h3_pose_slow_v1.py
+        "verified_filename": True,
         "notes": "Сила 0.45 — проверенная рабочая точка, выше 0.5 лицо уходит от исходника.",
     },
 }
@@ -190,13 +225,25 @@ KNOWN_INCOMPATIBLE_LORAS: tuple[str, ...] = (
 # --------------------------------------------------------------------------- #
 
 # Маркеры наезда камеры в позитивном промте.
+#
+# ВАЖНО: маркер "camera" здесь НЕ используется — он ловит "gaze stays at the
+# camera" (взгляд в объектив), а это не движение камеры. На реальных рабочих
+# скриптах (run_h3_panties_off_v7_nsgirl.py) такой маркер давал ложное
+# предупреждение о конфликте.
 CAMERA_PUSH_IN_MARKERS: tuple[str, ...] = (
-    "zoom",
+    "zoom in",
+    "zooming in",
     "push in",
     "push-in",
+    "pushes in",
     "dolly in",
     "camera moves closer",
-    "camera",
+    "camera moves in closer",
+    "closer to her",
+    "close-up of",
+    "closeup of",
+    "camera pushes",
+    "camera closes in",
 )
 
 # Термины в негативе, которые убивают наезд камеры: стандартный набор
