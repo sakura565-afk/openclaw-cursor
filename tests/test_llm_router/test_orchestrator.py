@@ -168,3 +168,56 @@ def test_attempts_are_serializable(tmp_path: Path) -> None:
     assert isinstance(payload["attempts"], list)
     assert payload["attempts"][0]["ok"] is True
     assert payload["classification"]["strategy"] == "rule"
+
+
+def test_module_level_orchestrate_shares_one_cache(tmp_path: Path) -> None:
+    """The one-shot ``orchestrate()`` helper must reuse a single cache.
+
+    Before the fix every call built a fresh Orchestrator with a fresh empty
+    LRUTTLCache, so the cache layer never produced a hit and identical
+    prompts paid the API cost twice.
+    """
+    from src.llm_router import orchestrator as orchestrator_module
+
+    orchestrator_module.reset_shared_cache()
+
+    config = RouterConfig(
+        classifier_strategy="rule",
+        cache_size=16,
+        cache_ttl_sec=600.0,
+        max_attempts=1,
+        telemetry_path=str(tmp_path / "telemetry.jsonl"),
+        telemetry_archive_dir=str(tmp_path / "archive"),
+    )
+    transport = StubTransport(
+        "Готовый ответ модели с числом 42 и достаточной длиной текста.",
+        config=config,
+    )
+    shared = LRUTTLCache(max_size=config.cache_size, ttl_sec=config.cache_ttl_sec)
+    prompt = "Что такое TTL в кеше?"
+
+    first = orchestrator_module.orchestrate(
+        prompt, config=config, transport=transport, cache=shared
+    )
+    second = orchestrator_module.orchestrate(
+        prompt, config=config, transport=transport, cache=shared
+    )
+
+    assert first.cache_hit is False
+    assert second.cache_hit is True
+    assert first.text == second.text
+    # The second call must not have reached the transport.
+    assert len(transport.calls) == 1
+
+    orchestrator_module.reset_shared_cache()
+
+
+def test_shared_cache_is_created_once_and_reused() -> None:
+    from src.llm_router import orchestrator as orchestrator_module
+
+    orchestrator_module.reset_shared_cache()
+    first = orchestrator_module.shared_cache()
+    second = orchestrator_module.shared_cache()
+
+    assert first is second
+    orchestrator_module.reset_shared_cache()
