@@ -880,3 +880,32 @@ def test_running_task_is_reported_as_ok(tmp_path: Path) -> None:
 
     assert health.status != cr.STATUS_FAILING
     assert health.scheduled_last_result == cr.SCHTASKS_RESULT_RUNNING
+
+
+def test_running_task_with_refused_previous_run_is_healthy(tmp_path: Path) -> None:
+    """A daemon that is running right now is healthy.
+
+    The scheduler refuses to start a second instance and records
+    0x800710E0 for the refused start, while the task itself keeps running.
+    Reading only the last result would flag a healthy daemon as broken.
+    """
+    registry = build(
+        tmp_path,
+        [{"name": "Watchdog", "period_hours": 0.0833, "state_file": ""}],
+    )
+    facts = {
+        "watchdog": cr.SchtaskFact(
+            name="Watchdog",
+            last_result=-2147020576,
+            last_run="21.10.2026 11:47:13",
+            status="Выполняется",
+        )
+    }
+
+    health = registry.check(NOW, facts=facts)[0]
+
+    assert health.status != cr.STATUS_FAILING
+    assert cr.is_schtasks_running("Выполняется") is True
+    assert cr.is_schtasks_running("Running") is True
+    assert cr.is_schtasks_running("Готово") is False
+    assert cr.is_schtasks_running(None) is False
