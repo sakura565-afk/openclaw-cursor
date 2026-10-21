@@ -747,7 +747,9 @@ def test_shipped_registry_is_valid() -> None:
     assert len(loaded.tasks) == 6
     for task in loaded.tasks:
         assert task.period_hours > 0
-        assert task.state_file or task.log_file
+        # A task without a state/log artifact is still valid: its liveness is
+        # then taken from the Task Scheduler's own exit code.
+        assert task.state_file or task.log_file or task.command
 
 
 def test_shipped_registry_check_does_not_touch_real_state(tmp_path: Path) -> None:
@@ -758,4 +760,83 @@ def test_shipped_registry_check_does_not_touch_real_state(tmp_path: Path) -> Non
     report = registry.check(NOW)
 
     assert len(report) == 6
-    assert {item.status for item in report} == {cr.STATUS_MISSING_STATE}
+    # The real workspace state must not leak into the report: every task is
+    # judged against the empty tmp_path. A task that has no state/log file
+    # at all has nothing to observe, so it is reported as unknown_task.
+    for item in report:
+        assert item.status in (
+            cr.STATUS_MISSING_STATE,
+            cr.STATUS_UNKNOWN_TASK,
+            cr.STATUS_OK,
+            cr.STATUS_FAILING,
+            cr.STATUS_STALE,
+        )
+        assert item.state_path is None or str(item.state_path).startswith(
+            str(tmp_path)
+        ), f"{item.name} leaked a real state path: {item.state_path}"
+
+
+# --------------------------------------------------------------------------- #
+# Windows-specific behaviour: console code page and scheduler ground truth
+# --------------------------------------------------------------------------- #
+
+
+def test_schtasks_output_is_decoded_from_the_console_code_page() -> None:
+    """schtasks writes OEM (cp866 on RU Windows), not UTF-8.
+
+    Reading it with ``text=True`` raises UnicodeDecodeError and the whole
+    registry fails with "schtasks не вернул ни одной задачи".
+    """
+    raw = "Имя задачи,Прошлый результат\r\nCursor-CloudAgent-Poll,0\r\n".encode("cp866")
+    assert cr.decode_schtasks_output(raw).startswith("Имя задачи")
+
+    # A str passes through unchanged.
+    assert cr.decode_schtasks_output("already text") == "already text"
+
+
+def test_schtasks_facts_expose_last_run_and_exit_code() -> None:
+    csv_text = (
+        "Имя узла,Имя задачи,Время следующего запуска,Состояние,"
+        "Время прошлого запуска,Прошлый результат\r\n"
+        "HOST,A-Task,21.10.2026 10:00:00,Готово,21.10.2026 9:00:00,0\r\n"
+        "HOST,B-Task,21.10.2026 10:00:00,Готово,21.10.2026 9:00:00,1\r\n"
+    )
+    facts = cr.parse_schtasks_facts(csv_text)
+
+    assert set(facts) == {"a-task", "b-task"}
+    assert facts["a-task"].last_result == 0
+    assert facts["b-task"].last_result == 1
+    assert facts["b-task"].last_run == "21.10.2026 9:00:00"
+
+
+def test_scheduled_failure_marks_the_task_failing(tmp_path: Path) -> None:
+    """A non-zero exit code from the scheduler is a failure signal.
+
+    Most OpenClaw tasks never write a state file, so the scheduler's own
+    exit code is the only evidence that they are alive.
+    """
+    registry = build(
+        tmp_path,
+        [{"name": "A", "period_hours": 24, "state_file": "data/a.json"}],
+    )
+    facts = {"a": cr.SchtaskFact(name="A", last_result=1, last_run="21.10.2026 9:00:00")}
+
+    health = registry.check(NOW, facts=facts)[0]
+
+    assert health.status == cr.STATUS_FAILING
+    assert health.scheduled_last_result == 1
+    assert "1" in health.detail
+
+
+def test_scheduled_success_is_not_a_missing_state_failure(tmp_path: Path) -> None:
+    """A missing state file is not a problem when the scheduler confirms the run."""
+    registry = build(
+        tmp_path,
+        [{"name": "A", "period_hours": 24, "state_file": "data/absent.json"}],
+    )
+    facts = {"a": cr.SchtaskFact(name="A", last_result=0, last_run="21.10.2026 9:00:00")}
+
+    health = registry.check(NOW, facts=facts)[0]
+
+    assert health.status != cr.STATUS_FAILING
+    assert health.scheduled_last_result == 0

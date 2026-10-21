@@ -19,13 +19,13 @@
     {
       "name": "Cursor-CloudAgent-Poll",
       "enabled": true,
-      "command": "python C:\\Users\\user\\.openclaw\\workspace\\scripts\\check_cursor_agent_status.py",
+      "command": "\"C:\\Users\\user\\AppData\\Local\\Programs\\Python\\Python312\\python.exe\" \"C:\\Users\\user\\.openclaw\\workspace\\scripts\\cursor_cloud_agent_poll.py\"",
       "schedule": "every 15 minutes",
       "period_hours": 0.25,
-      "state_file": "data/cursor_agent_status.json",
-      "log_file": "logs/cursor_agent_*.out.log",
+      "state_file": "scripts/cursor_seen_agents.json",
+      "log_file": "",
       "alert": "telegram",
-      "notes": "Poller lives outside cursor-repo (check_cursor_agent_status.py / check_cursor_agent.py); state path taken from the task sheet, not verified against the repo. Run --validate on the host to confirm."
+      "notes": "Скрипт перенесён из temp/openclaw-cursor (папка могла быть удалена) в workspace/scripts 21.10.2026. Регистрация требует ПОЛНЫЙ путь к python.exe: schtasks /TR 'python ...' не ищет в PATH и даёт 0x80070002. Ключ берётся из ~/.openclaw/credentials/cursor_api_key, т.к. задача с InteractiveToken не наследует user-scope env. Проверено: LastTaskResult=0."
     },
     {
       "name": "HF-Trending-Daily",
@@ -36,18 +36,18 @@
       "state_file": "data/hf_seen.json",
       "log_file": "logs/hf_trending_*.out.log",
       "alert": "telegram",
-      "notes": "State name verified in scripts/hf_trending.py (state_path() -> data/hf_seen.json), NOT data/hf_trending_state.json."
+      "notes": "state_file проверен на диске: workspace/data/hf_seen.json, обновляется ежедневно в 08:00."
     },
     {
       "name": "Metrika-Daily-Telegram",
       "enabled": true,
-      "command": "python C:\\Users\\user\\.openclaw\\workspace\\scripts\\_analyze_metrika.py",
+      "command": "cmd /c \"C:\\Users\\user\\.openclaw\\workspace\\scripts\\_metrika_daily_task.cmd\"",
       "schedule": "daily",
       "period_hours": 24,
-      "state_file": "data/metrika_state.json",
-      "log_file": "logs/metrika_*.out.log",
+      "state_file": "",
+      "log_file": "logs/metrika_daily_task.log",
       "alert": "telegram",
-      "notes": "_analyze_metrika.py / _append_metrika_report.py live outside cursor-repo; state path taken from the task sheet, not verified. The in-repo scripts/metrika_costs_margin.py keeps no state file."
+      "notes": "21.10.2026: задача переведена на cmd-обёртку scripts/_metrika_daily_task.cmd — раньше вывод уходил в никуда, не оставалось ни лога, ни state-файла. В обёртке python.exe указан полным путём: schtasks /TR 'python ...' не ищет в PATH и даёт 0x80070002. Скрипт metrika_telegram_daily.py больше не ссылается на временную папку temp/openclaw-cursor — путь переведён на workspace/cursor-repo."
     },
     {
       "name": "Ollama-Health-Daily",
@@ -58,7 +58,7 @@
       "state_file": "data/ollama_health_*.json",
       "log_file": "logs/ollama_health_*.out.log",
       "alert": "telegram",
-      "notes": "State name verified in scripts/ollama_daily_smoke.py (health_path_for_date -> data/ollama_health_YYYY-MM-DD.json); glob resolves to the newest file by mtime."
+      "notes": "state_file проверен: workspace/data/ollama_health_YYYY-MM-DD.json. 21.10.2026 исправлено: (1) ollama_chain.py потерял публичную run_model() -> ollama_daily_smoke.py падал с ImportError каждую ночь; (2) DEFAULT_CHAIN целиком устарел (402 Payment Required + retired 15.07/25.09.2026) -> заменён на 6 проверенных моделей; (3) таймаут 15s -> 30s (локальные модели на RTX 3060 отвечают 15-22s); (4) ps1 ищет python по абсолютному пути. Проверено: 6/6 ok, exit=0."
     },
     {
       "name": "Ollama-Upgrade",
@@ -66,10 +66,10 @@
       "command": "powershell -ExecutionPolicy Bypass -File C:\\Users\\user\\.openclaw\\workspace\\scripts\\ollama-upgrade.ps1",
       "schedule": "one-shot / every ~7 days",
       "period_hours": 168,
-      "state_file": "data/ollama_upgrade_state.json",
-      "log_file": "logs/ollama_upgrade_*.out.log",
+      "state_file": "",
+      "log_file": "logs/ollama-upgrade-*.log",
       "alert": "telegram",
-      "notes": "One-shot task; period_hours=168 means 'silent for more than 10.5 days is suspicious'. Script and state live outside cursor-repo, paths not verified."
+      "notes": "Пишет лог в ~/.openclaw/logs/ollama-upgrade-*.log (не в workspace/logs). state-файла нет."
     },
     {
       "name": "Ollama AI Server",
@@ -77,10 +77,10 @@
       "command": "python C:\\Users\\user\\.openclaw\\workspace\\scripts\\ollama_bridge.py",
       "schedule": "daemon, heartbeat ~5 minutes",
       "period_hours": 0.25,
-      "state_file": "data/ollama_server_state.json",
-      "log_file": "logs/ollama_*.out.log",
+      "state_file": "",
+      "log_file": "",
       "alert": "telegram",
-      "notes": "Daemon watched by scripts/ollama_monitor.py; heartbeat is ~5 min but period_hours=0.25 keeps the stale window at ~22 min to avoid flapping. State path from the task sheet, not verified."
+      "notes": "ollama.exe serve — сервис без state-файла. Живость определяется по коду возврата и времени последнего запуска в Scheduled Tasks."
     }
   ]
 }
