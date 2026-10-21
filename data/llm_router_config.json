@@ -1,0 +1,47 @@
+{
+  "_comment": "Конфиг LLM-роутера. Секретов здесь быть не должно: токен берётся из MINIMAX_ACCESS_TOKEN или из hermes auth.json (providers.minimax-oauth.access_token). Любые переопределения доступны через env LLM_ROUTER_<FIELD>.",
+  "default_model": "MiniMax-M3.1-Flash",
+  "deep_model": "MiniMax-M3.1-Flash",
+  "vision_model": "MiniMax-Vision-32B",
+  "classifier_model": "MiniMax-M3.1-Flash",
+  "api_url": "https://api.minimax.io/anthropic/v1/messages",
+  "anthropic_version": "2023-06-01",
+  "auth_provider": "minimax-oauth",
+
+  "default_effort": "medium",
+  "fast_effort": "low",
+  "deep_effort": "high",
+  "effort_profiles": {
+    "low": { "max_tokens": 1024 },
+    "medium": { "max_tokens": 4096 },
+    "high": { "max_tokens": 8192 }
+  },
+
+  "request_timeout": 60.0,
+  "classifier_timeout": 15.0,
+  "vision_timeout": 120.0,
+  "max_attempts": 2,
+  "retry_backoff_sec": 1.0,
+  "retry_backoff_factor": 2.0,
+  "parallel_workers": 4,
+
+  "cache_size": 256,
+  "cache_ttl_sec": 3600.0,
+  "cache_persist": false,
+  "cache_path": "data/llm_cache.json",
+
+  "classifier_strategy": "cascade",
+  "classifier_min_confidence": 0.65,
+  "rule_deep_length": 400,
+
+  "escalation_threshold": 0.6,
+  "cascade_min_confidence": 0.5,
+  "candidate_models": ["MiniMax-M3.1-Flash", "MiniMax-M3.1-Flash"],
+
+  "vision_max_tokens": 6000,
+
+  "telemetry_path": "data/llm_router_telemetry.jsonl",
+  "telemetry_archive_dir": "data/llm_router_telemetry",
+  "telemetry_max_bytes": 5242880,
+  "telemetry_enabled": true
+}
