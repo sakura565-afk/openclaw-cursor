@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
 import argparse
 import concurrent.futures
 import json
@@ -40,6 +41,17 @@ class PromptResult:
             "attempts": self.attempts,
             "error": self.error,
         }
+
+
+def _ollama_binary() -> str:
+    """Путь к бинарнику ollama.
+
+    Переопределение через ``OLLAMA_BIN`` нужно для тестов: на Windows
+    ``CreateProcess`` ищет только ``ollama.exe``, поэтому подложить фейк
+    переименованием файла или ``.bat``-шимом нельзя — фейк обязан быть
+    вызван по явному пути.
+    """
+    return os.environ.get("OLLAMA_BIN") or "ollama"
 
 
 def positive_int(value: str) -> int:
@@ -179,7 +191,7 @@ def run_prompt(
     for attempt in range(1, max_retries + 2):
         try:
             completed = run_command(
-                ["ollama", "run", model, prompt],
+                [_ollama_binary(), "run", model, prompt],
                 capture_output=True,
                 text=True,
                 timeout=timeout,
