@@ -145,3 +145,38 @@ winner is always deterministic.
 
 Worktree isolation prefers `scripts/worktree_orchestrator.py` (Task 12) when it
 is importable and otherwise falls back to a minimal `git worktree add` wrapper.
+
+## Video assembler (`video_assembler.py`)
+
+The editing layer between `scene_composer.py` (still PNG → MP4 with camera
+motion) and the finished promo reel: unify clips, hard-concat them, pick a music
+window that fits the reel, normalise loudness, mux, and check the seams.
+
+```bash
+python scripts/video_assembler.py probe clip.mp4
+python scripts/video_assembler.py concat clip_a.mp4 clip_b.mp4 --output reel.mp4
+python scripts/video_assembler.py rife clip.mp4 clip60.mp4 --fps 60
+python scripts/video_assembler.py trim-music track.mp3 bed.m4a --duration 11.75
+python scripts/video_assembler.py mux reel.mp4 bed.m4a final.mp4
+python scripts/video_assembler.py seam-report final.mp4 --at 5.875
+python scripts/video_assembler.py assemble a.mp4 b.mp4 --music track.mp3 -o promo.mp4
+```
+
+### Rules the module enforces
+
+| Rule | Why |
+| --- | --- |
+| Every path reaches ffmpeg through `ffmpeg_path()` (`\` → `/`) | On Windows a backslash is an escape: ffmpeg can exit `0` and write nothing. Existence is then checked in native form via `native_path()`. |
+| AAC re-encodes always pass `-ar 48000 -ac 2` | Without them the sample rate drifts down (we measured 44.1 kHz → mono out of `scene_composer`) and the audio ends up slowed and noisy. |
+| `ffprobe` after every ffmpeg call (`validate()`) | The `moov` atom is written at the *end* of the file, so an interrupted encode leaves a non-empty but unreadable MP4. |
+| Hard concat, never `xfade` | `xfade` ghosts the furniture (a translucent offset copy) and jumps brightness by 15-25 % on the transition frame. |
+| Clips are scaled + padded to one resolution/fps/SAR before concat | The concat demuxer needs identical parameters, otherwise black bars, stretching or an aspect error. |
+| Seams are judged on per-channel `std`, not mean RGB | Two frames can share a mean and still differ wildly in contrast. A `std` delta above ~8 units is visible. |
+| Music windows come from an RMS envelope (0.5 s bins) + spectral flux | A window is rejected outright if any bin sits more than 6 dB below the track level, which skips quiet intros and mid-track dips. |
+| Short fragments are measured with RMS bins, not `ebur128` | `ebur128` is correct on a full track but reports a meaningless -70 LUFS on a few seconds of audio. |
+
+Target loudness is -14 LUFS (`loudnorm=I=-14:TP=-1.5:LRA=11`) with a 0.6 s
+fade-in and a 1.0 s fade-out. `scene_composer.py` imports `AUDIO_SAMPLE_RATE`,
+`AUDIO_CHANNELS` and `ffmpeg_path` from here so both tools emit the same format.
+
+Dependencies: ffmpeg/ffprobe on `PATH` (or `imageio-ffmpeg`) plus numpy.
