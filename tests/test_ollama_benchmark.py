@@ -212,10 +212,20 @@ class OllamaBenchmarkTests(unittest.TestCase):
             path = bin_dir / name
             path.write_text(script, encoding="utf-8")
             path.chmod(0o755)
+            if os.name == "nt":
+                # Windows не исполняет файл без расширения, нужен .bat-шим.
+                path.with_suffix(".bat").write_text(
+                    f'@echo off\r\n"{sys.executable}" "{path}" %*\r\n', encoding="utf-8"
+                )
 
         env = os.environ.copy()
-        env["PATH"] = f"{bin_dir}:{env['PATH']}"
+        env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
         env["PYTHONPATH"] = str(ROOT)
+        # На Windows CreateProcess ищет только ollama.exe, поэтому фейк нельзя
+        # подложить переименованием — его надо вызвать по явному пути.
+        fake_ollama = bin_dir / ("ollama.bat" if os.name == "nt" else "ollama")
+        if fake_ollama.exists():
+            env["OLLAMA_BIN"] = str(fake_ollama)
 
         run_result = subprocess.run(
             [sys.executable, "-m", "scripts.ollama_benchmark", "--log-dir", "logs", "run"],

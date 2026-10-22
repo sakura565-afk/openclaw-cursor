@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
 import argparse
 import json
 import re
@@ -57,6 +58,17 @@ STANDARD_PROMPTS: tuple[BenchmarkPrompt, ...] = (
         keywords=("hot",),
     ),
 )
+
+
+def _ollama_binary() -> str:
+    """Путь к бинарнику ollama.
+
+    Переопределение через ``OLLAMA_BIN`` нужно для тестов: на Windows
+    ``CreateProcess`` ищет только ``ollama.exe``, поэтому подложить фейк
+    переименованием файла или ``.bat``-шимом нельзя — фейк обязан быть
+    вызван по явному пути.
+    """
+    return os.environ.get("OLLAMA_BIN") or "ollama"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -158,7 +170,7 @@ def render_markdown_table(rows: list[dict[str, Any]], columns: list[tuple[str, s
 
 
 def list_models() -> list[str]:
-    result = run_command(["ollama", "list"])
+    result = run_command([_ollama_binary(), "list"])
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "Failed to list Ollama models.")
 
@@ -232,7 +244,7 @@ def safe_delta(after: int | None, before: int | None) -> int | None:
 
 def benchmark_prompt(model_name: str, prompt: BenchmarkPrompt) -> dict[str, Any]:
     started = time.perf_counter()
-    result = run_command(["ollama", "run", model_name, prompt.prompt])
+    result = run_command([_ollama_binary(), "run", model_name, prompt.prompt])
     elapsed = max(time.perf_counter() - started, 1e-9)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or f"`ollama run {model_name}` failed.")
