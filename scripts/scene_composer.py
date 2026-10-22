@@ -41,6 +41,15 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+try:  # single source of truth for the audio output format and path handling
+    from scripts.video_assembler import AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, ffmpeg_path
+except ImportError:  # pragma: no cover - direct script execution
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    from video_assembler import AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, ffmpeg_path
+
 try:  # pyyaml is optional; sensible built-in presets are used as a fallback.
     import yaml
 except ImportError:  # pragma: no cover - exercised only when pyyaml missing
@@ -399,7 +408,9 @@ class SceneComposer:
             "pipe:0",
         ]
         if music is not None:
-            cmd += ["-i", str(music)]
+            # Forward slashes only: ffmpeg treats a backslash as an escape and
+            # then silently writes nothing (see video_assembler.ffmpeg_path).
+            cmd += ["-i", ffmpeg_path(music)]
         cmd += [
             "-c:v",
             "libx264",
@@ -413,20 +424,25 @@ class SceneComposer:
             "+faststart",
         ]
         if music is not None:
+            # -ar/-ac are mandatory on an AAC re-encode: without them the sample
+            # rate drifts down (we saw 32 kHz) and the channel count is not
+            # guaranteed, so the bed ends up slowed down and mono.
             cmd += [
                 "-c:a",
                 "aac",
                 "-b:a",
                 "128k",
                 "-ar",
-                "44100",
+                str(AUDIO_SAMPLE_RATE),
+                "-ac",
+                str(AUDIO_CHANNELS),
                 "-af",
                 "volume=-12dB",  # mix the music bed in at -12 dB.
                 "-shortest",
             ]
         else:
             cmd += ["-an"]
-        cmd.append(str(tmp_path))
+        cmd.append(ffmpeg_path(tmp_path))
 
         payload = b"".join(frame.tobytes() for frame in frames)
         LOGGER.debug("ffmpeg cmd: %s", " ".join(cmd))

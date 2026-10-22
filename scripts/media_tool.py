@@ -19,6 +19,26 @@ class ResizeError(RuntimeError):
     """Raised when an image cannot be resized to fit the target limit."""
 
 
+def ffmpeg_path(path: os.PathLike[str] | str) -> str:
+    """Вернуть путь в форме, которую понимает ffmpeg (только ``/``).
+
+    На Windows ``str(Path)`` даёт ``C:\\Users\\...``, а обратный слэш ffmpeg
+    трактует как escape-последовательность: вход/выход не находится, код
+    возврата при этом может остаться нулевым, и файла на диске просто нет.
+    Windows принимает ``/`` в путях наравне с ``\\``, поэтому преобразование
+    безусловное.
+    """
+    return str(path).replace("\\", "/")
+
+
+def native_path(path: os.PathLike[str] | str) -> str:
+    """Вернуть путь в нативной форме ОС — для проверок существования."""
+    text = str(path)
+    if os.sep != "/":
+        text = text.replace("/", os.sep)
+    return text
+
+
 @dataclass
 class PreparedFile:
     """Represents a media file prepared for upload."""
@@ -100,14 +120,14 @@ def ensure_photo_size_under_limit(
             "-loglevel",
             "error",
             "-i",
-            str(source),
+            ffmpeg_path(source),
             "-vf",
             scale_filter,
             "-frames:v",
             "1",
             "-q:v",
             str(quality),
-            str(output_path),
+            ffmpeg_path(output_path),
         ]
         reporter(
             "Trying resized variant "
@@ -122,7 +142,16 @@ def ensure_photo_size_under_limit(
                 output_path.unlink()
             continue
 
+        # ffmpeg может вернуть 0 и не записать ничего (например, если путь был
+        # передан с обратными слэшами). Пустой файл — не результат.
+        if not os.path.exists(native_path(output_path)):
+            last_error = f"ffmpeg finished without writing {output_path}"
+            continue
         candidate_size = output_path.stat().st_size
+        if candidate_size == 0:
+            last_error = f"ffmpeg wrote an empty file: {output_path}"
+            output_path.unlink()
+            continue
         reporter(
             f"Generated candidate {output_path.name} ({candidate_size} bytes)."
         )
