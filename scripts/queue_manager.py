@@ -22,10 +22,28 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Callable
 
-API_KEY = os.environ.get(
-    "CURSOR_API_KEY",
-    "crsr_8451e2fa232a5ca1982fd0876a5b5eb0632e24bd4e34680142b4a9c26be8c685",
-)
+def _read_api_key() -> str:
+    """Ключ Cursor API из окружения или из credentials-файла.
+
+    Раньше здесь был зашит настоящий ключ. Это плохо по трём причинам:
+    ключ попадает в git (и в историю), он виден всем, кто клонировал
+    репозиторий, и его нужно отзывать при каждой ротации.
+
+    Порядок поиска: переменная окружения ``CURSOR_API_KEY``, затем файл
+    ``~/.openclaw/credentials/cursor_api_key`` (тот же путь, что и у
+    cursor_launch.py в рабочем пространстве).
+    """
+    value = os.environ.get("CURSOR_API_KEY")
+    if value:
+        return value.strip()
+    credentials = Path.home() / ".openclaw" / "credentials" / "cursor_api_key"
+    try:
+        return credentials.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+API_KEY = _read_api_key()
 REPO = "https://github.com/sakura565-afk/openclaw-cursor"
 REF = "main"
 BATCH_SIZE = 5
