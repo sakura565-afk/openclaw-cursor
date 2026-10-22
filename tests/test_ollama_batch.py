@@ -77,6 +77,11 @@ class OllamaBatchTests(unittest.TestCase):
             ),
         )
         script.chmod(0o755)
+        if os.name == "nt":
+            bat = script.with_suffix(".bat")
+            bat.write_text(
+                f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n', encoding="utf-8"
+            )
         return script
 
     def base_env(self) -> dict[str, str]:
@@ -84,6 +89,11 @@ class OllamaBatchTests(unittest.TestCase):
         env["PYTHONPATH"] = str(ROOT)
         env["FAKE_OLLAMA_STATE"] = str(self.root / "ollama_state.json")
         env["PATH"] = f"{self.root / 'bin'}{os.pathsep}{env.get('PATH', '')}"
+        # На Windows CreateProcess ищет только ollama.exe, поэтому фейк нельзя
+        # подложить переименованием — его надо вызвать по явному пути.
+        fake = self.root / "bin" / ("ollama.bat" if os.name == "nt" else "ollama")
+        if fake.exists():
+            env["OLLAMA_BIN"] = str(fake)
         return env
 
     def test_load_prompts_supports_text_and_json(self) -> None:
