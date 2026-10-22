@@ -199,3 +199,19 @@ def test_summarize_counts(host: P.HostPaths) -> None:
     )
     counts = V.summarize(results)
     assert counts[V.Verdict.NOT_FOUND.value] == 2
+
+
+def test_no_available_roots_gives_unverifiable_not_not_found() -> None:
+    """На машине без корней нельзя опровергать — только признать непроверяемым.
+
+    Иначе на CI без хоста каждый кандидат объявлялся бы опровергнутым.
+    """
+    empty = P.HostPaths(
+        lora_roots=(), comfy_roots=(), bin_roots=(),
+        workspace_roots=(), repo_roots=(),
+    )
+    result = V.verify_claim(
+        C.Claim(kind=C.ClaimKind.FILENAME, value="whatever.safetensors"), empty
+    )
+    assert result.verdict is V.Verdict.UNVERIFIABLE
+    assert "корн" in result.evidence
