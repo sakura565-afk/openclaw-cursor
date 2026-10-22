@@ -103,6 +103,10 @@ def verify_claim(
     ``live=False`` — режим без доступа к диску: проверяются только
     секреты и синтаксические ошибки в пути. Используется в тестах и в
     CI, где хоста нет.
+
+    Важно: если корни недоступны (машина без нужных каталогов), проверка
+    файлов даёт ``unverifiable``, а **не** ``not_found`` — иначе на CI
+    без хоста каждый кандидат объявлялся бы опровергнутым.
     """
     paths = paths or default_paths()
 
@@ -126,6 +130,12 @@ def verify_claim(
                 claim=claim,
                 verdict=Verdict.UNVERIFIABLE,
                 evidence="проверка на диске отключена",
+            )
+        if not paths.existing_roots():
+            return CheckResult(
+                claim=claim,
+                verdict=Verdict.UNVERIFIABLE,
+                evidence="на этой машине нет ни одного доступного корня — проверить нельзя",
             )
         found = paths.find_file(claim.value)
         if found is not None:
