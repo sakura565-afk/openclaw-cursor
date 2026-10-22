@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-"""Daily Ollama chain health smoke test.
+"""Ежедневный smoke-тест здоровья цепочки Ollama.
 
-Walks ``DEFAULT_CHAIN`` from ``scripts.ollama_chain``, probes each model with a
-short prompt (15s timeout), writes ``data/ollama_health_YYYY-MM-DD.json`` (UTC),
-alerts via Telegram on unexpected failures, and prunes health files older than
-30 days.
+Обходит ``DEFAULT_CHAIN`` из ``scripts.ollama_chain``, пробует каждую модель
+коротким промптом (таймаут — персональный, см. ``model_timeout``), пишет
+``data/ollama_health_YYYY-MM-DD.json`` (дата UTC), шлёт Telegram-алерт на
+неожиданных падениях и удаляет отчёты старше 30 дней.
+
+Исход каждой пробы — один из статусов: ``ok``, ``timeout``, ``error``,
+``not_installed`` (локальной модели нет в ``ollama list``) и ``skipped``
+(нет ключа или платного плана). Последние два — не падения: отчёт пишется
+всегда, в том числе когда пропущены все модели.
 """
 
 from __future__ import annotations
@@ -24,13 +29,32 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.ollama_chain import DEFAULT_CHAIN, run_model  # noqa: E402
+from scripts.ollama_chain import (  # noqa: E402
+    DEFAULT_CHAIN,
+    DEFAULT_TIMEOUT_SECONDS,
+    STATUS_ERROR,
+    STATUS_NOT_INSTALLED,
+    STATUS_OK,
+    STATUS_SKIPPED,
+    STATUS_TIMEOUT,
+    is_cloud_model,
+    is_model_installed,
+    list_installed_models,
+    model_timeout,
+    provider_unavailable_reason,
+    run_model,
+)
 
 SMOKE_PROMPT = "2+2? Just the number, no explanation."
-MODEL_TIMEOUT_SECONDS = 15.0
+# Запасной таймаут для моделей, которых нет в MODEL_TIMEOUTS. Прежние жёсткие
+# 15 c локальным моделям на RTX 3060 не хватало: cold start (загрузка весов в
+# VRAM) занимает 15-22 c, и живая модель отмечалась как упавшая.
+MODEL_TIMEOUT_SECONDS = DEFAULT_TIMEOUT_SECONDS
 HEALTH_RETENTION_DAYS = 30
 PAID_XAI_MODELS = frozenset({"grok-4.5", "grok-4.5:latest", "grok-4.5:cloud"})
 ALERT_EXEMPT_MODELS = frozenset(PAID_XAI_MODELS)
+# Статусы, которые падением не считаются и алерт не поднимают.
+SKIP_STATUSES = frozenset({STATUS_SKIPPED, STATUS_NOT_INSTALLED})
 
 DEFAULT_TELEGRAM_SCRIPT = Path(
     r"C:\Users\user\.openclaw\skills\telegram-media-send\scripts\telegram_media_send_v2.py"
@@ -100,10 +124,21 @@ def should_skip_xai(model: str, env: dict[str, str] | None = None) -> bool:
     return is_paid_xai_model(model) and not environ.get("XAI_API_KEY")
 
 
+def mark_skipped(result: dict[str, Any], status: str, reason: str) -> dict[str, Any]:
+    """Пометить пробу как пропущенную: это штатный исход, а не падение."""
+    result["status"] = status
+    result["skipped"] = True
+    result["ok"] = True
+    result["error"] = reason
+    if result.get("latency_s") is None:
+        result["latency_s"] = 0.0
+    return result
+
+
 def is_alert_exempt(model: str, result: dict[str, Any]) -> bool:
     if model in ALERT_EXEMPT_MODELS or is_paid_xai_model(model):
         return True
-    if result.get("skipped"):
+    if result.get("skipped") or result.get("status") in SKIP_STATUSES:
         return True
     error = str(result.get("error") or "")
     if "403" in error and is_paid_xai_model(model):
@@ -115,15 +150,25 @@ def probe_model(
     model: str,
     *,
     prompt: str = SMOKE_PROMPT,
-    timeout: float = MODEL_TIMEOUT_SECONDS,
+    timeout: float | None = None,
     env: dict[str, str] | None = None,
     runner: Callable[..., tuple[int, str, str]] | None = None,
     time_fn: Callable[[], float] = time.monotonic,
+    installed: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Probe one model; returns a result dict with ok/latency/metrics/error."""
+    """Опробовать одну модель; вернуть словарь со статусом/латентностью/метриками.
+
+    ``timeout=None`` — персональный таймаут модели. ``installed`` — список из
+    ``ollama list``; ``None`` означает «список неизвестен», тогда модель
+    проверяется живым прогоном.
+    """
+    effective_timeout = model_timeout(model) if timeout is None else timeout
     result: dict[str, Any] = {
         "model": model,
         "ok": False,
+        "status": STATUS_ERROR,
+        "cloud": is_cloud_model(model),
+        "timeout_s": effective_timeout,
         "latency_s": None,
         "eval_count": None,
         "tokens_per_second": None,
@@ -133,16 +178,19 @@ def probe_model(
     }
 
     if should_skip_xai(model, env=env):
-        result["skipped"] = True
-        result["ok"] = True  # graceful skip — not an operational failure
-        result["error"] = "skipped: XAI_API_KEY missing"
-        result["latency_s"] = 0.0
-        return result
+        return mark_skipped(result, STATUS_SKIPPED, "skipped: XAI_API_KEY missing")
+
+    if not is_model_installed(model, installed):
+        return mark_skipped(
+            result,
+            STATUS_NOT_INSTALLED,
+            f"not installed locally: run `ollama pull {model}`",
+        )
 
     run = runner or run_model
     started = time_fn()
     try:
-        returncode, stdout, stderr = run(model, prompt, timeout=timeout)
+        returncode, stdout, stderr = run(model, prompt, timeout=effective_timeout)
         latency = max(0.0, time_fn() - started)
         result["latency_s"] = round(latency, 3)
 
@@ -161,33 +209,36 @@ def probe_model(
             round(float(tokens_per_second), 3) if tokens_per_second is not None else 0.0
         )
 
+        # Платный план и снятые с публикации модели — отказ провайдера по
+        # политике, а не поломка: такую пробу пропускаем, а не валим.
+        reason = provider_unavailable_reason(combined_err) or provider_unavailable_reason(preview)
+        if reason and not preview:
+            return mark_skipped(result, STATUS_SKIPPED, f"skipped: {reason}")
+
         if returncode != 0:
             result["error"] = combined_err or f"ollama exited with code {returncode}"
-            result["ok"] = False
             return result
 
         if not preview:
             result["error"] = "empty response"
-            result["ok"] = False
             return result
 
         result["ok"] = True
+        result["status"] = STATUS_OK
         return result
     except subprocess.TimeoutExpired:
         latency = max(0.0, time_fn() - started)
         result["latency_s"] = round(latency, 3)
-        result["error"] = f"timeout after {timeout}s"
-        result["ok"] = False
+        result["status"] = STATUS_TIMEOUT
+        result["error"] = f"timeout after {effective_timeout}s"
         return result
     except FileNotFoundError as exc:
         result["latency_s"] = round(max(0.0, time_fn() - started), 3)
         result["error"] = f"ollama not found: {exc}"
-        result["ok"] = False
         return result
     except OSError as exc:
         result["latency_s"] = round(max(0.0, time_fn() - started), 3)
         result["error"] = str(exc)
-        result["ok"] = False
         return result
 
 
@@ -339,25 +390,42 @@ def failing_results_for_alert(results: Iterable[dict[str, Any]]) -> list[dict[st
     return [r for r in results if not r.get("ok") and not is_alert_exempt(str(r.get("model") or ""), r)]
 
 
+def installed_model_names(
+    list_models: Callable[[], Sequence[str]] | None = None,
+) -> tuple[str, ...] | None:
+    """Модели из ``ollama list``; ``None``, когда список получить не удалось.
+
+    ``None`` — честное «не знаю»: демон мог не ответить, и в этом случае
+    локальные модели всё равно проверяются живым прогоном.
+    """
+    lister = list_models or list_installed_models
+    try:
+        return tuple(lister())
+    except Exception:
+        return None
+
+
 def run_smoke(
     *,
     models: Sequence[str] | None = None,
     root: Path | None = None,
     prompt: str = SMOKE_PROMPT,
-    timeout: float = MODEL_TIMEOUT_SECONDS,
+    timeout: float | None = None,
     send_alerts: bool = True,
     retention_days: int = HEALTH_RETENTION_DAYS,
     now: datetime | None = None,
     runner: Callable[..., tuple[int, str, str]] | None = None,
+    list_models: Callable[[], Sequence[str]] | None = None,
     telegram_script: Path | None = None,
     telegram_config: Path | None = None,
     run_command: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
     env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Run the full daily smoke and persist the health report."""
+    """Прогнать полный smoke по цепочке и сохранить отчёт о здоровье."""
     base = root or repo_root()
     stamp = (now or utc_now()).astimezone(timezone.utc)
     chain = tuple(models) if models is not None else DEFAULT_CHAIN
+    installed = installed_model_names(list_models)
 
     results: list[dict[str, Any]] = []
     for model in chain:
@@ -368,20 +436,31 @@ def run_smoke(
                 timeout=timeout,
                 env=env,
                 runner=runner,
+                installed=installed,
             )
         )
 
     deleted = cleanup_old_health_files(base, retention_days=retention_days, now=stamp)
 
     alert_failures = failing_results_for_alert(results)
+    status_counts: dict[str, int] = {}
+    for item in results:
+        status = str(item.get("status") or STATUS_ERROR)
+        status_counts[status] = status_counts.get(status, 0) + 1
+
     report: dict[str, Any] = {
         "date_utc": stamp.strftime("%Y-%m-%d"),
         "generated_at": stamp.replace(microsecond=0).isoformat(),
         "prompt": prompt,
         "timeout_s": timeout,
+        "installed_models": list(installed) if installed is not None else None,
         "model_count": len(chain),
-        "ok_count": sum(1 for r in results if r.get("ok")),
+        # ok + fail + skipped = model_count: пропуск не считается ни успехом,
+        # ни падением, но и не теряется из отчёта.
+        "ok_count": sum(1 for r in results if r.get("status") == STATUS_OK),
         "fail_count": sum(1 for r in results if not r.get("ok")),
+        "skipped_count": sum(1 for r in results if r.get("skipped")),
+        "status_counts": status_counts,
         "alert_failure_count": len(alert_failures),
         "results": results,
         "cleaned_up": deleted,
@@ -419,8 +498,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=MODEL_TIMEOUT_SECONDS,
-        help=f"Per-model timeout in seconds (default: {MODEL_TIMEOUT_SECONDS}).",
+        default=None,
+        help=(
+            "Per-model timeout in seconds. Default: the per-model value from "
+            f"ollama_chain.MODEL_TIMEOUTS (fallback {MODEL_TIMEOUT_SECONDS}s)."
+        ),
     )
     parser.add_argument(
         "--no-alert",
@@ -476,16 +558,16 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"Wrote {report.get('output_path')}")
         print(
-            f"ok={report.get('ok_count')}/{report.get('model_count')} "
-            f"fail={report.get('fail_count')} "
-            f"alertable={report.get('alert_failure_count')}"
+            f"ok={report.get('ok_count')}, fail={report.get('fail_count')}, "
+            f"skipped={report.get('skipped_count')}, "
+            f"alertable={report.get('alert_failure_count')} "
+            f"(models={report.get('model_count')})"
         )
         for item in report.get("results", []):
-            status = "OK" if item.get("ok") else "FAIL"
-            if item.get("skipped"):
-                status = "SKIP"
+            status = str(item.get("status") or "").upper() or "ERROR"
             print(
                 f"  [{status}] {item.get('model')} "
+                f"timeout_s={item.get('timeout_s')} "
                 f"latency_s={item.get('latency_s')} "
                 f"eval_count={item.get('eval_count')} "
                 f"tok/s={item.get('tokens_per_second')} "
