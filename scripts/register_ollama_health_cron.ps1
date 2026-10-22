@@ -4,23 +4,33 @@
 
 .DESCRIPTION
     Creates (or replaces) task "Ollama-Health-Daily" that runs every day at
-    06:00 MSK via:
+    -StartTime (06:00 MSK by default) via:
 
-        powershell -ExecutionPolicy Bypass -File C:\Users\user\.openclaw\workspace\scripts\ollama_daily_smoke.ps1
+        powershell -ExecutionPolicy Bypass -File <SmokePs1>
 
-    MSK is UTC+3. This script sets the task start time to 06:00 and applies
-    the Russian Standard Time zone when the host supports /TZ.
+    Both the wrapper path and the start time are parameters: by default the
+    wrapper is taken from the same scripts/ directory as this registrar, so a
+    fresh clone registers its own copy instead of a hardcoded host path.
+
+    MSK is UTC+3. The task start time is applied in the Russian Standard Time
+    zone when the host supports /TZ.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts\register_ollama_health_cron.ps1
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts\register_ollama_health_cron.ps1 -DryRun
+
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File scripts\register_ollama_health_cron.ps1 -SmokePs1 D:\repo\scripts\ollama_daily_smoke.ps1 -StartTime 04:30
 #>
 [CmdletBinding()]
 param(
     [string]$TaskName = "Ollama-Health-Daily",
-    [string]$SmokePs1 = "C:\Users\user\.openclaw\workspace\scripts\ollama_daily_smoke.ps1",
+    # Пусто = обёртка рядом с этим скриптом. Так регистратор не привязан к
+    # конкретной машине и работает из любого клона; конкретный путь можно
+    # задать параметром.
+    [string]$SmokePs1 = "",
     [string]$StartTime = "06:00",
     [string]$TimeZone = "Russian Standard Time",
     [switch]$DryRun
@@ -28,6 +38,11 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $SmokePs1) {
+    $SmokePs1 = Join-Path $ScriptDir "ollama_daily_smoke.ps1"
+}
 
 if (-not (Test-Path -LiteralPath $SmokePs1)) {
     Write-Warning "Smoke wrapper not found at: $SmokePs1 (task will still be registered)"
