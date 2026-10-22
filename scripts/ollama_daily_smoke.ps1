@@ -9,11 +9,22 @@
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File C:\Users\user\.openclaw\workspace\scripts\ollama_daily_smoke.ps1
+
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File scripts\ollama_daily_smoke.ps1 -PythonExe C:\Python312\python.exe -ModelTimeoutSeconds 60
 #>
 [CmdletBinding()]
 param(
     [string]$WorkspaceRoot = "",
-    [string]$PythonExe = "python",
+    # Полный путь, а не "python": в PATH планировщика задач первым идёт venv
+    # Hermes, и короткое "python" подхватывает чужой интерпретатор без
+    # зависимостей проекта. Параметр переопределяется из командной строки,
+    # а если указанного интерпретатора нет — падаем обратно на "python".
+    [string]$PythonExe = "C:\Users\user\AppData\Local\Programs\Python\Python312\python.exe",
+    # Таймаут одной модели в секундах. 30 c, а не прежние 15: локальным
+    # моделям на RTX 3060 нужно 15-22 c только на cold start (загрузка весов
+    # в VRAM). 0 — отдать выбор per-model таймаутам из ollama_chain.
+    [double]$ModelTimeoutSeconds = 30,
     [switch]$NoAlert
 )
 
@@ -22,13 +33,15 @@ $ErrorActionPreference = "Continue"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $WorkspaceRoot) {
-    $candidate = "C:\Users\user\.openclaw\workspace"
-    if (Test-Path -LiteralPath $candidate) {
-        $WorkspaceRoot = $candidate
-    }
-    else {
-        $WorkspaceRoot = Split-Path -Parent $ScriptDir
-    }
+    # Корень — родитель scripts/, то есть та копия, из которой нас запустили.
+    # Ни одного хостового пути: скрипт одинаково работает из workspace и из
+    # свежего клона репозитория.
+    $WorkspaceRoot = Split-Path -Parent $ScriptDir
+}
+
+if (-not (Test-Path -LiteralPath $PythonExe)) {
+    Write-Warning "Python not found at '$PythonExe'; falling back to 'python' from PATH"
+    $PythonExe = "python"
 }
 
 $PyScript = Join-Path $ScriptDir "ollama_daily_smoke.py"
@@ -44,6 +57,9 @@ $OutLog = Join-Path $LogDir "ollama_health_$Stamp.out.log"
 $ErrLog = Join-Path $LogDir "ollama_health_$Stamp.err.log"
 
 $pyArgs = @($PyScript, "--root", $WorkspaceRoot)
+if ($ModelTimeoutSeconds -gt 0) {
+    $pyArgs += @("--timeout", $ModelTimeoutSeconds.ToString([System.Globalization.CultureInfo]::InvariantCulture))
+}
 if ($NoAlert) {
     $pyArgs += "--no-alert"
 }
