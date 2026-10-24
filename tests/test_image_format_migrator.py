@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from PIL import Image
 
@@ -80,6 +83,33 @@ class ImageFormatMigratorTests(unittest.TestCase):
     def test_mutually_exclusive_mode_flags(self) -> None:
         with self.assertRaises(SystemExit):
             migrator.parse_args(["--single", "a.jpg", "--scan", "folder"])
+
+    def test_load_magic_skips_windows(self) -> None:
+        with mock.patch.object(sys, "platform", "win32"):
+            self.assertIsNone(migrator._load_magic())
+
+    def test_supported_image_without_magic_uses_extension_and_mimetypes(self) -> None:
+        source = self._create_image(self.root / "fallback.png", "PNG")
+        with mock.patch.object(migrator, "magic", None):
+            self.assertTrue(migrator.is_supported_image(source))
+            self.assertEqual(migrator.detect_mime(source), "image/png")
+
+    def test_module_imports_cleanly_without_magic_installed(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.path.insert(0, '.'); "
+                "import scripts.image_format_migrator; print('import OK')",
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, msg=result.stderr or result.stdout)
+        self.assertIn("import OK", result.stdout)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import socket
 import sys
 import tempfile
@@ -59,6 +60,13 @@ class OllamaMonitorTests(unittest.TestCase):
 
     def read_json(self, relative_path: str) -> dict:
         return json.loads((self.root / relative_path).read_text(encoding="utf-8"))
+
+    def test_is_pid_running(self) -> None:
+        self.assertTrue(ollama_monitor.is_pid_running(os.getpid()))
+        self.assertFalse(ollama_monitor.is_pid_running(999_999_999))
+        self.assertFalse(ollama_monitor.is_pid_running(0))
+        self.assertFalse(ollama_monitor.is_pid_running(None))
+        self.assertFalse(ollama_monitor.is_pid_running("not-a-pid"))
 
     def test_check_health_reports_connection_refused(self) -> None:
         with mock.patch.object(

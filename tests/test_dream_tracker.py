@@ -104,7 +104,13 @@ class DreamTrackerTests(unittest.TestCase):
         self.addCleanup(temp_dir.cleanup)
 
         env = dict(os.environ)
-        env["PYTHONPATH"] = "/workspace"
+        repo_root_path = Path(__file__).resolve().parents[1]
+        existing_pythonpath = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = (
+            str(repo_root_path)
+            if not existing_pythonpath
+            else os.pathsep.join([str(repo_root_path), existing_pythonpath])
+        )
 
         create_result = subprocess.run(
             [sys.executable, "-m", "src.dreams.dream_tracker", "create", "CLI dream"],

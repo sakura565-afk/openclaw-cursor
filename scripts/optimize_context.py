@@ -62,6 +62,15 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def display_path_for(resolved_file: Path, workspace_root: Path) -> str:
+    root = workspace_root.resolve()
+    file_path = resolved_file.resolve()
+    try:
+        return file_path.relative_to(root).as_posix()
+    except ValueError:
+        return file_path.as_posix()
+
+
 def resolve_candidate_path(candidate: str, workspace_root: Path, session_log_path: Path | None) -> Path | None:
     cleaned = candidate.strip().strip("'\"`").rstrip(".,:;)")
     if not cleaned or cleaned.startswith("http://") or cleaned.startswith("https://"):
@@ -96,14 +105,13 @@ def update_ref(
     if resolved is None:
         return
 
-    key = str(resolved)
+    resolved_abs = resolved.resolve()
+    key = str(resolved_abs)
     entry = refs.setdefault(
         key,
         {
             "path": key,
-            "display_path": resolved.relative_to(workspace_root).as_posix()
-            if resolved.is_relative_to(workspace_root)
-            else resolved.as_posix(),
+            "display_path": display_path_for(resolved_abs, workspace_root),
             "last_access_turn": turn,
             "mentions": 0,
             "embedded_content": None,
@@ -246,7 +254,7 @@ def content_fingerprint(text: str) -> str:
 
 
 def relative_display(path: Path, workspace_root: Path) -> str:
-    return path.relative_to(workspace_root).as_posix() if path.is_relative_to(workspace_root) else path.as_posix()
+    return display_path_for(path, workspace_root)
 
 
 def build_file_metrics(ref: dict, workspace_root: Path, current_turn: int) -> dict:

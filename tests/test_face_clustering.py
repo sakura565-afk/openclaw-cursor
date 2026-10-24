@@ -142,9 +142,13 @@ class FaceClusteringTests(unittest.TestCase):
 
         person_dir = export_dir / "person_001"
         self.assertTrue(person_dir.exists())
-        links = sorted(person_dir.iterdir())
-        self.assertEqual(len(links), 2)
-        self.assertTrue(all(item.is_symlink() for item in links))
+        exports = sorted(person_dir.iterdir())
+        self.assertEqual(len(exports), 2)
+        source_bytes = {
+            (self.scan_dir / name).read_bytes() for name in ("x1.jpg", "x2.jpg")
+        }
+        export_bytes = {item.read_bytes() for item in exports}
+        self.assertEqual(export_bytes, source_bytes)
 
     def test_pick_backend_auto_prefers_opencv_when_others_fail(self) -> None:
         chosen = FakeBackend({})

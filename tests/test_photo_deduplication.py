@@ -119,7 +119,7 @@ class PhotoDeduplicationTestCase(unittest.TestCase):
         record = photo_deduplication.hash_image(raw_path, "both")
         self.assertIsNotNone(record)
         assert record is not None
-        self.assertEqual(record.path, raw_path.resolve())
+        self.assertTrue(photo_deduplication.paths_equal(record.path, raw_path.resolve()))
         mock_decode.assert_called_once()
 
     def test_main_workers_parallel_path(self) -> None:
