@@ -198,6 +198,9 @@ def test_cases_each_change_one_variable_except_combo() -> None:
         if name == "unipc":
             assert overrides == {"scheduler": "unipc", "shift": 8.0}
             continue
+        if name in ("nb_pf2", "nb_pf4"):
+            assert "use_non_blocking" in overrides and "prefetch_blocks" in overrides
+            continue
         assert len(overrides) == 1, f"{name} should isolate one variable"
 
 
@@ -221,6 +224,69 @@ def test_parse_execution_metrics_span_and_cached() -> None:
     span, cached = ab.parse_execution_metrics(history)
     assert span == pytest.approx(81.6)
     assert cached == ["4", "5", "6", "9", "30", "31", "32", "33"]
+
+
+def test_block_swap_node_is_wan_video_block_swap(fixture_workflow: dict) -> None:
+    node = fixture_workflow[ab.NODE_BLOCK_SWAP]
+    assert node["class_type"] == "WanVideoBlockSwap"
+    assert fixture_workflow["1"]["inputs"]["block_swap_args"][0] == ab.NODE_BLOCK_SWAP
+    assert fixture_workflow["2"]["inputs"]["block_swap_args"][0] == ab.NODE_BLOCK_SWAP
+
+
+def test_apply_overrides_block_swap_levers() -> None:
+    out = ab.apply_overrides(
+        ab.BASELINE,
+        {
+            "use_non_blocking": True,
+            "prefetch_blocks": 2,
+            "blocks_to_swap": 20,
+            "vace_blocks_to_swap": 0,
+        },
+    )
+    bs = out[ab.NODE_BLOCK_SWAP]["inputs"]
+    assert bs["use_non_blocking"] is True
+    assert bs["prefetch_blocks"] == 2
+    assert bs["blocks_to_swap"] == 20
+    assert bs["vace_blocks_to_swap"] == 0
+    assert ab.BASELINE[ab.NODE_BLOCK_SWAP]["inputs"]["use_non_blocking"] is False
+
+
+def test_build_prompt_nb_pf2_sets_block_swap_inputs() -> None:
+    prompt = ab.build_prompt("nb_pf2")
+    bs = prompt[ab.NODE_BLOCK_SWAP]["inputs"]
+    assert bs["use_non_blocking"] is True
+    assert bs["prefetch_blocks"] == 2
+
+
+def test_build_prompt_control_leaves_block_swap_baseline() -> None:
+    prompt = ab.build_prompt("control")
+    assert (
+        prompt[ab.NODE_BLOCK_SWAP]["inputs"]
+        == ab.BASELINE[ab.NODE_BLOCK_SWAP]["inputs"]
+    )
+
+
+def test_build_prompt_nonblocking_and_prefetch2_cases() -> None:
+    nb = ab.build_prompt("nonblocking")
+    assert nb[ab.NODE_BLOCK_SWAP]["inputs"]["use_non_blocking"] is True
+    assert "prefetch_blocks" not in nb[ab.NODE_BLOCK_SWAP]["inputs"]
+
+    pf = ab.build_prompt("prefetch2")
+    assert pf[ab.NODE_BLOCK_SWAP]["inputs"]["prefetch_blocks"] == 2
+    assert pf[ab.NODE_BLOCK_SWAP]["inputs"]["use_non_blocking"] is False
+
+
+def test_cases_block_swap_matrix_definitions() -> None:
+    assert ab.CASES["nonblocking"] == {"use_non_blocking": True}
+    assert ab.CASES["prefetch2"] == {"prefetch_blocks": 2}
+    assert ab.CASES["nb_pf2"] == {
+        "use_non_blocking": True,
+        "prefetch_blocks": 2,
+    }
+    assert ab.CASES["nb_pf4"] == {
+        "use_non_blocking": True,
+        "prefetch_blocks": 4,
+    }
 
 
 def test_parse_execution_metrics_missing_timestamps() -> None:
@@ -317,3 +383,36 @@ def test_resolve_output_video_download_fallback(tmp_path: Path) -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+@pytest.fixture()
+def reset_benchmark_run_seq() -> None:
+    ab._RUN_SEQ[0] = 0
+    yield
+    ab._RUN_SEQ[0] = 0
+
+
+def test_assign_fresh_benchmark_seeds_changes_between_runs(
+    reset_benchmark_run_seq: None,
+) -> None:
+    first = ab.build_prompt("control")
+    second = ab.build_prompt("control")
+    seq1, seeds1 = ab.assign_fresh_benchmark_seeds(first)
+    seq2, seeds2 = ab.assign_fresh_benchmark_seeds(second)
+    assert seq1 == 1
+    assert seq2 == 2
+    assert seeds1 != seeds2
+    assert seeds1[ab.NODE_HIGH_SAMPLER] != seeds2[ab.NODE_HIGH_SAMPLER]
+
+
+def test_assign_fresh_benchmark_seeds_not_baseline_fixture_values(
+    reset_benchmark_run_seq: None,
+) -> None:
+    prompt = ab.build_prompt("control")
+    _seq, seeds = ab.assign_fresh_benchmark_seeds(prompt)
+    assert seeds[ab.NODE_HIGH_SAMPLER] != ab.BASELINE[ab.NODE_HIGH_SAMPLER]["inputs"]["seed"]
+    assert seeds[ab.NODE_LOW_SAMPLER] != ab.BASELINE[ab.NODE_LOW_SAMPLER]["inputs"]["seed"]
+    assert seeds[ab.NODE_FRAME_SAMPLE] != ab.BASELINE[ab.NODE_FRAME_SAMPLE]["inputs"]["seed"]
+    assert seeds[ab.NODE_HIGH_SAMPLER] == 42 + 1
+    assert seeds[ab.NODE_LOW_SAMPLER] == 43 + 1
+    assert seeds[ab.NODE_FRAME_SAMPLE] == 42 + 1

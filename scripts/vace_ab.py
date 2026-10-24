@@ -47,7 +47,16 @@ NODE_BLOCK_SWAP = "3"
 NODE_VAE = "9"
 NODE_DECODE = "10"
 NODE_RESIZE = "33"
+NODE_FRAME_SAMPLE = "31"
 NODE_SAVE = "41"
+
+# Baseline fixture seeds; bumped per harness run so ComfyUI cannot serve the full graph from cache.
+_BENCHMARK_SEED_BASE: dict[str, int] = {
+    NODE_HIGH_SAMPLER: 42,
+    NODE_LOW_SAMPLER: 43,
+    NODE_FRAME_SAMPLE: 42,
+}
+_RUN_SEQ: list[int] = [0]
 
 
 def _fixture_path() -> Path:
@@ -82,6 +91,10 @@ CASES: dict[str, dict[str, Any]] = {
         "scheduler": "unipc",
         "shift": 8.0,
     },
+    "nonblocking": {"use_non_blocking": True},
+    "prefetch2": {"prefetch_blocks": 2},
+    "nb_pf2": {"use_non_blocking": True, "prefetch_blocks": 2},
+    "nb_pf4": {"use_non_blocking": True, "prefetch_blocks": 4},
 }
 
 CASE_DESCRIPTIONS: dict[str, str] = {
@@ -95,6 +108,10 @@ CASE_DESCRIPTIONS: dict[str, str] = {
     "sdpa": "SDPA attention on both model loaders.",
     "noquant": "Quantization disabled on both loaders.",
     "combo": "CFG 5.0 + 20 steps / split 10 + UniPC + shift 8.0.",
+    "nonblocking": "WanVideoBlockSwap use_non_blocking=True.",
+    "prefetch2": "WanVideoBlockSwap prefetch_blocks=2.",
+    "nb_pf2": "use_non_blocking=True and prefetch_blocks=2 (headline speed config).",
+    "nb_pf4": "use_non_blocking=True and prefetch_blocks=4.",
 }
 
 
@@ -114,10 +131,36 @@ class CaseResult:
     seconds: float | None = None
     exec_span: float | None = None
     execution_cached: list[str] = field(default_factory=list)
+    run_seq: int | None = None
+    seeds: dict[str, int] = field(default_factory=dict)
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def assign_fresh_benchmark_seeds(
+    prompt: dict[str, dict[str, Any]],
+) -> tuple[int, dict[str, int]]:
+    """
+    Bump sampler / frame-sample seeds so repeated matrix runs are not fully cached.
+
+    Mutates prompt in place. Returns (run_seq, node_id -> seed applied).
+    """
+    _RUN_SEQ[0] += 1
+    seq = _RUN_SEQ[0]
+    applied: dict[str, int] = {}
+    for nid, base in _BENCHMARK_SEED_BASE.items():
+        node = prompt.get(nid)
+        if not node:
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict) or "seed" not in inputs:
+            continue
+        value = base + seq
+        inputs["seed"] = value
+        applied[nid] = value
+    return seq, applied
 
 
 def parse_execution_metrics(history: dict[str, Any]) -> tuple[float | None, list[str]]:
@@ -272,6 +315,21 @@ def apply_overrides(
     if "prefix" in overrides:
         out[NODE_SAVE]["inputs"]["filename_prefix"] = str(overrides["prefix"])
 
+    block_swap_keys = (
+        "use_non_blocking",
+        "prefetch_blocks",
+        "blocks_to_swap",
+        "vace_blocks_to_swap",
+    )
+    for key in block_swap_keys:
+        if key not in overrides:
+            continue
+        val = overrides[key]
+        if key == "use_non_blocking":
+            out[NODE_BLOCK_SWAP]["inputs"][key] = bool(val)
+        else:
+            out[NODE_BLOCK_SWAP]["inputs"][key] = int(val)
+
     return out
 
 
@@ -400,6 +458,9 @@ def run_case(
     result = CaseResult(case=case, overrides=dict(overrides))
     try:
         prompt = build_prompt(case)
+        run_seq, seeds = assign_fresh_benchmark_seeds(prompt)
+        result.run_seq = run_seq
+        result.seeds = seeds
         issues = validate_graph(prompt)
         if issues:
             raise RuntimeError(
@@ -474,6 +535,11 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list", action="store_true", help="List experiment cases.")
     parser.add_argument("--run", metavar="CASE", help="Queue one case on ComfyUI and score.")
     parser.add_argument("--matrix", action="store_true", help="Run every case sequentially.")
+    parser.add_argument(
+        "--only",
+        metavar="CASES",
+        help="Comma-separated case names to run with --matrix (default: all).",
+    )
     parser.add_argument("--report", action="store_true", help="Print saved report table.")
     parser.add_argument("--comfy-url", default=DEFAULT_COMFY_URL, dest="comfy_url")
     parser.add_argument("--report-path", type=Path, default=DEFAULT_REPORT_PATH)
@@ -516,8 +582,16 @@ def _main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.matrix:
+        if args.only:
+            case_names = [c.strip() for c in args.only.split(",") if c.strip()]
+            unknown = [c for c in case_names if c not in CASES]
+            if unknown:
+                print(f"Unknown case(s): {', '.join(unknown)}", file=sys.stderr)
+                return 1
+        else:
+            case_names = list(CASES)
         results: list[CaseResult] = []
-        for case in CASES:
+        for case in case_names:
             print(f"Running {case}...", file=sys.stderr)
             results.append(
                 run_case(
