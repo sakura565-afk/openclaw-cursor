@@ -52,9 +52,15 @@ The harness now records **`exec_span`** (seconds) alongside wall-clock **`second
 
 The recovered workflow uses **fixed seeds** (node **7** → 42, node **8** → 43, node **31** → 42). ComfyUI caches node outputs by input hash, so re-submitting the **same** graph can be served **entirely from cache** — the job finishes in ~**0.6 s** with the **samplers never executing**. One such run appeared in an early matrix as a bogus fast row.
 
-[`scripts/vace_ab.py`](../scripts/vace_ab.py) now **bumps those seeds on every `run_case`** (module run counter: `base + seq` per node). Reports record **`run_seq`** and the applied **`seeds`**. When benchmarking by hand, **change the seed** between runs and confirm **`execution_cached` does not list nodes 7 or 8**.
+[`scripts/vace_ab.py`](../scripts/vace_ab.py) now **bumps those seeds on every `run_case`** (`base + per-process offset + run counter`, wrapped into ComfyUI’s int32 seed range). The per-run counter alone is **not** enough: it resets to zero in every new process, so the **first** submission in process *N* can repeat the **first** seeds from process *N−1* and ComfyUI will serve the whole graph from cache. The harness therefore also draws a **per-process offset** (from `os.urandom`) at import time. Reports record **`run_seq`** and the applied **`seeds`**. A poisoned row shows up as an execution span of ~**0.01 s** with no error — the samplers never ran. When benchmarking by hand, **change the seed** between runs and confirm **`execution_cached` does not list nodes 7 or 8**.
 
 **Banding verdicts** are independent of timing: re-analyse the saved **`.mp4` on disk** with [`scripts/banding_detector.py`](../scripts/banding_detector.py). The ComfyUI **preview URL can 404** while the render succeeded; do not treat a missing preview as a failed run.
+
+### Output discovery
+
+On this ComfyUI build, the WanVideoWrapper **`SaveVideo`** node reports finished files under the **`images`** key in history (not **`gifs`** or **`videos`**), with an **`animated`** sibling on the node output. The harness collects **`gifs`**, **`videos`**, and **`images`**, and prefers an entry whose **`type`** is **`output`** so the graph’s **`LoadVideo`** input (`type: input`) is never scored as the result.
+
+If the `.mp4` is not present under a local **`ComfyUI/`** tree or **`--output-dir`**, the harness downloads it from the instance via **`GET /view?filename=…&subfolder=…&type=…`** into a temporary file before banding analysis. **`--output-dir`** is only a local mirror fallback, not the ComfyUI install path.
 
 ## Recommended configuration (quality + speed)
 
