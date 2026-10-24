@@ -201,3 +201,25 @@ def test_parity_test_fails_if_fixture_drifted() -> None:
     drifted = copy.deepcopy(ab.BASELINE)
     drifted["6"]["inputs"]["strength"] = 0.99
     assert drifted != ab.BASELINE
+
+
+def test_parse_execution_metrics_span_and_cached() -> None:
+    history = {
+        "status": {
+            "messages": [
+                ["execution_start", {"timestamp": 1_000_000}],
+                ["execution_cached", ["4", "5", "6", "9", "30", "31", "32", "33"]],
+                ["execution_success", {"timestamp": 1_081_600}],
+            ]
+        }
+    }
+    span, cached = ab.parse_execution_metrics(history)
+    assert span == pytest.approx(81.6)
+    assert cached == ["4", "5", "6", "9", "30", "31", "32", "33"]
+
+
+def test_parse_execution_metrics_missing_timestamps() -> None:
+    history = {"status": {"messages": [["execution_cached", ["4"]]]}}
+    span, cached = ab.parse_execution_metrics(history)
+    assert span is None
+    assert cached == ["4"]

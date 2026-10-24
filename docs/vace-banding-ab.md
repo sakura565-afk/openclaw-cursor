@@ -30,15 +30,26 @@ were `clean`. Details, timings, and `python scripts/verify_wan_vace_checkpoints.
 
 ## Measuring the output
 
+### Banding (quality)
+
 `scripts/vace_ab.py` may consult ComfyUI’s **preview** URL when building the report. That
 URL **404s for some successful runs**, so the JSON can show a missing path or `None` for
 banding even though `ComfyUI/output/` (or `output/vace_ab/`) contains a valid MP4. The
-harness now prefers a harness-named `vace_ab_*.mp4` and falls back to the history path,
-but **always treat the file on disk as authoritative**: re-score with
+harness prefers a harness-named `vace_ab_*.mp4` and falls back to the history path, but
+**always treat the file on disk as authoritative**: re-score with
 
 ```bash
 python scripts/banding_detector.py path/to/render.mp4
 ```
+
+### Speed (timing)
+
+**Do not use wall-clock submit → complete while other jobs are queued.** The harness
+records both wall `seconds` and ComfyUI **`exec_span`** (from `execution_start` /
+`execution_success` timestamps in `status.messages`, in milliseconds). Compare **`exec_span`**
+only. It also records **`execution_cached`** (pre-processing nodes 4–6, 9, 30–33 in this
+graph; samplers 7–8 are never cached). Details and the 2026-10-24 paired matrix are in
+[`vace-speed-and-corruption.md`](vace-speed-and-corruption.md#how-to-measure-speed-read-this-before-the-table).
 
 ## Running the harness
 
@@ -89,7 +100,7 @@ output prefix.
 
 | Case | Isolates |
 |------|----------|
-| `control` | Recovered baseline settings (no overrides). With a **verified** checkpoint, expect `clean` (~200 s at 6 steps on the 4070 Ti SUPER matrix; corrupt high-noise weights produced `periodic` stripes). |
+| `control` | Recovered baseline settings (no overrides). With a **verified** checkpoint, expect `clean` (~**131 s** `exec_span` median at 6 steps on the 4070 Ti SUPER; corrupt high-noise weights produced `periodic` stripes). |
 | `cfg5` | CFG 5.0 on both samplers. |
 | `steps20` | 20 steps, high/low split at 10. |
 | `unipc` | UniPC scheduler + shift 8.0. |
