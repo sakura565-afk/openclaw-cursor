@@ -80,6 +80,10 @@ CASES: dict[str, dict[str, Any]] = {
         "scheduler": "unipc",
         "shift": 8.0,
     },
+    "nonblocking": {"use_non_blocking": True},
+    "prefetch2": {"prefetch_blocks": 2},
+    "nb_pf2": {"use_non_blocking": True, "prefetch_blocks": 2},
+    "nb_pf4": {"use_non_blocking": True, "prefetch_blocks": 4},
 }
 
 CASE_DESCRIPTIONS: dict[str, str] = {
@@ -93,6 +97,10 @@ CASE_DESCRIPTIONS: dict[str, str] = {
     "sdpa": "SDPA attention on both model loaders.",
     "noquant": "Quantization disabled on both loaders.",
     "combo": "CFG 5.0 + 20 steps / split 10 + UniPC + shift 8.0.",
+    "nonblocking": "WanVideoBlockSwap use_non_blocking=True.",
+    "prefetch2": "WanVideoBlockSwap prefetch_blocks=2.",
+    "nb_pf2": "use_non_blocking=True and prefetch_blocks=2 (headline speed config).",
+    "nb_pf4": "use_non_blocking=True and prefetch_blocks=4.",
 }
 
 
@@ -270,6 +278,21 @@ def apply_overrides(
     if "prefix" in overrides:
         out[NODE_SAVE]["inputs"]["filename_prefix"] = str(overrides["prefix"])
 
+    block_swap_keys = (
+        "use_non_blocking",
+        "prefetch_blocks",
+        "blocks_to_swap",
+        "vace_blocks_to_swap",
+    )
+    for key in block_swap_keys:
+        if key not in overrides:
+            continue
+        val = overrides[key]
+        if key == "use_non_blocking":
+            out[NODE_BLOCK_SWAP]["inputs"][key] = bool(val)
+        else:
+            out[NODE_BLOCK_SWAP]["inputs"][key] = int(val)
+
     return out
 
 
@@ -416,6 +439,11 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list", action="store_true", help="List experiment cases.")
     parser.add_argument("--run", metavar="CASE", help="Queue one case on ComfyUI and score.")
     parser.add_argument("--matrix", action="store_true", help="Run every case sequentially.")
+    parser.add_argument(
+        "--only",
+        metavar="CASES",
+        help="Comma-separated case names to run with --matrix (default: all).",
+    )
     parser.add_argument("--report", action="store_true", help="Print saved report table.")
     parser.add_argument("--comfy-url", default=DEFAULT_COMFY_URL, dest="comfy_url")
     parser.add_argument("--report-path", type=Path, default=DEFAULT_REPORT_PATH)
@@ -450,8 +478,16 @@ def _main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.matrix:
+        if args.only:
+            case_names = [c.strip() for c in args.only.split(",") if c.strip()]
+            unknown = [c for c in case_names if c not in CASES]
+            if unknown:
+                print(f"Unknown case(s): {', '.join(unknown)}", file=sys.stderr)
+                return 1
+        else:
+            case_names = list(CASES)
         results: list[CaseResult] = []
-        for case in CASES:
+        for case in case_names:
             print(f"Running {case}...", file=sys.stderr)
             results.append(
                 run_case(
