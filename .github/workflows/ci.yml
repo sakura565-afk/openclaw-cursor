@@ -58,7 +58,13 @@ jobs:
             grep -E '^(FAILED|ERROR) ' pytest-output.txt 2>/dev/null || echo "(none matched)"
             echo '```'
             echo ""
-            SUMMARY_LINE=$(grep -E '^=+ .* (passed|failed|error).* =+$' pytest-output.txt 2>/dev/null | tail -1)
+            SUMMARY_LINE=$(
+              {
+                grep -E '^=+ .* (passed|failed|error).* =+$' pytest-output.txt 2>/dev/null
+                grep -E '^[0-9].* (passed|failed|error).* in [0-9]' pytest-output.txt 2>/dev/null
+                grep -E '^no tests ran in [0-9]' pytest-output.txt 2>/dev/null
+              } | tail -1
+            )
             if [ -n "$SUMMARY_LINE" ]; then
               echo "### Short summary"
               echo "\`${SUMMARY_LINE}\`"
