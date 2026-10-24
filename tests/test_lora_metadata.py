@@ -281,3 +281,97 @@ def test_scan_dir_finds_nested_safetensors(tmp_path: Path) -> None:
     records = scan_dir(tmp_path)
     assert len(records) == 1
     assert records[0]["trigger_words"] == ["kid"]
+
+
+def test_ss_tag_frequency_explicit_trigger(tmp_path: Path) -> None:
+    freq = json.dumps({"10_undressing": {"undressing": 121, "1girl": 120}})
+    header = {METADATA_KEY: {"ss_tag_frequency": freq}, "w": {}}
+    path = _write_lora(tmp_path / "undressing-PN.safetensors", header)
+    record = normalize_record(path)
+    assert record["trigger_source"] == "explicit"
+    assert record["trigger_words"] == ["undressing"]
+    assert record["must_be_last"] is True
+    assert build_negative(record) == "fabric not removed"
+
+
+def test_ss_tag_frequency_trigger_with_spaces(tmp_path: Path) -> None:
+    freq = json.dumps(
+        {"2_undressing woman": {"undressing a woman in a white lingerie posing for a picture": 1}}
+    )
+    header = {METADATA_KEY: {"ss_tag_frequency": freq}, "w": {}}
+    path = _write_lora(tmp_path / "undressing-PN_ggrue_565222.safetensors", header)
+    record = normalize_record(path)
+    assert record["trigger_words"] == ["undressing woman"]
+    assert record["trigger_source"] == "explicit"
+    assert record["must_be_last"] is True
+    suffix = build_prompt_suffix(record, weight=0.85, prompt="woman in dress")
+    assert suffix.endswith("undressing woman :0.85")
+
+
+def test_derive_priority_filename_over_training_names(tmp_path: Path) -> None:
+    header = {
+        METADATA_KEY: {
+            "name": "epoch_1",
+            "ss_output_name": "training_4958664-20260919165509962",
+        },
+        "w": {},
+    }
+    path = _write_lora(tmp_path / "2Girls_2Handed_HJ.safetensors", header)
+    record = normalize_record(path)
+    assert record["trigger_source"] == "derived"
+    assert record["trigger_words"][0] == "2girls"
+    for bad in ("training", "epoch", "safetensors"):
+        assert bad not in record["trigger_words"]
+
+
+def test_derived_never_emits_training_run_noise(tmp_path: Path) -> None:
+    header = {
+        METADATA_KEY: {
+            "name": "Rick Sanchez x Alcaitiff x Chuck Norris: multiverse",
+            "ss_output_name": "rick_x_alcaitiff_x_chuck_collab_v9000",
+        },
+        "w": {},
+    }
+    path = _write_lora(tmp_path / "Detail Slider - MinimaxH3.safetensors", header)
+    record = normalize_record(path)
+    derived = record["trigger_words"]
+    for bad in ("training", "epoch", "safetensors", "norris", "multiverse", "alcaitiff"):
+        assert bad not in derived
+    assert "detail" in derived
+    assert "slider" in derived
+
+
+def test_comma_list_splits_into_separate_tokens() -> None:
+    tokens = tokenize_lora_name("jiggle,grab,massage,bounce")
+    assert tokens[:4] == ["jiggle", "grab", "massage", "bounce"]
+
+
+def test_tokenization_drops_noise_fragments() -> None:
+    tokens = tokenize_lora_name("Ass jiggle (I2V) - FL2VA & I2V - MinimaxH3 - 0.8-1str")
+    assert "(i" not in tokens
+    assert "i2v" not in tokens
+    assert "0.8" not in tokens
+    assert "1str" not in tokens
+    assert "jiggle" in tokens
+
+    motion_tokens = tokenize_lora_name("Better Motion - 720x1280,15-30steps,0.2-0.4str")
+    assert "1280,15" not in motion_tokens
+    assert "steps,0" not in motion_tokens
+    assert "1280" not in motion_tokens
+    assert "720x1280" not in motion_tokens
+
+    plus_tokens = tokenize_lora_name("+8 -8")
+    assert "8" not in plus_tokens
+    assert "+8" not in plus_tokens
+
+    cumouf = tokenize_lora_name("CUMOUF,0.4str,use eros max beta6,10seconds videos")
+    assert "cumouf" in cumouf
+    assert "seconds" not in cumouf
+    assert "cumouf,0" not in cumouf
+
+
+def test_chunk_preferred_over_subtoken() -> None:
+    tokens = tokenize_lora_name("2Girls_2Handed")
+    assert tokens[0] == "2girls"
+    assert "girls" in tokens
+    assert tokens.index("2girls") < tokens.index("girls")
