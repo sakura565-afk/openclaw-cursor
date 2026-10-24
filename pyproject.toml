@@ -1,0 +1,9 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "error::UserWarning",
+    "ignore:.*:UserWarning:PIL",
+    "ignore:.*:UserWarning:matplotlib",
+    "ignore:.*:UserWarning:seaborn",
+    "ignore:.*:UserWarning:cv2",
+]
