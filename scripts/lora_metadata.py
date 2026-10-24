@@ -61,6 +61,7 @@ _NOISE_TOKENS: frozenset[str] = frozenset(
         "ref2va",
         "fl2va",
         "fl2v",
+        "fl2va",
         "flf",
         "i2v",
         "t2v",
@@ -325,9 +326,13 @@ def tokenize_lora_name(text: str) -> list[str]:
         if not part:
             continue
         whole = _normalize_chunk_token(part)
-        if whole and not _is_junk_token(whole) and whole not in seen_wholes:
+        chunk_is_junk = not whole or _is_junk_token(whole)
+        if not chunk_is_junk and whole not in seen_wholes:
             seen_wholes.add(whole)
             wholes.append(whole)
+
+        if chunk_is_junk:
+            continue
 
         expanded = _CAMEL_BOUNDARY_RE.sub(" ", part)
         expanded = _DIGIT_BOUNDARY_RE.sub(" ", expanded)
