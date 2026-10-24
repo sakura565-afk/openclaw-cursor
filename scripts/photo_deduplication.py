@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import imagehash
+import os
 from PIL import Image, UnidentifiedImageError
 from tqdm import tqdm
 
@@ -86,6 +87,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Parallel worker processes for hashing (1 = sequential).",
     )
     return parser.parse_args(argv)
+
+
+def canonical_image_path(path: Path) -> Path:
+    if os.name == "nt":
+        return Path(os.path.normcase(os.path.realpath(path)))
+    return path.resolve()
+
+
+def paths_equal(left: Path, right: Path) -> bool:
+    return canonical_image_path(left) == canonical_image_path(right)
 
 
 def iter_image_paths(root: Path) -> list[Path]:
@@ -193,6 +204,8 @@ def process_duplicates(scan_root: Path, groups: list[list[HashRecord]], dry_run:
     for group in groups:
         original = group[0]
         for duplicate in group[1:]:
+            if paths_equal(original.path, duplicate.path):
+                continue
             action = "dry-run"
             target_path = ""
             if not dry_run:

@@ -21,6 +21,8 @@ from typing import Any
 
 import yaml
 
+from scripts.lora_metadata import catalog_index, enrich_loras, lookup_record, scan_dir
+
 # Optional pretty output. The tool degrades gracefully when rich is not
 # installed. JSON on stdout is always emitted via stdlib json so it stays
 # machine-readable/parseable regardless of rich.
@@ -185,14 +187,63 @@ def _match_keywords(prompt: str, keywords: list[str]) -> list[str]:
 class LoRASelector:
     """Selects LoRA stacks + sampler settings from a text prompt."""
 
-    def __init__(self, presets_path: Path, models_root: Path) -> None:
+    def __init__(
+        self,
+        presets_path: Path,
+        models_root: Path,
+        lora_scan_dir: Path | None = None,
+    ) -> None:
         self.presets_path = Path(presets_path)
         self.models_root = Path(models_root)
         data = self._load_yaml(self.presets_path)
         self._presets_raw: dict[str, Any] = data.get("presets", {}) or {}
         self._checkpoints: dict[str, Any] = data.get("checkpoints", {}) or {}
+        self._metadata_overrides: dict[str, Any] = data.get("metadata_overrides") or {}
+        self._lora_catalog_index: dict[str, dict[str, Any]] = {}
+        if lora_scan_dir is not None:
+            records = scan_dir(lora_scan_dir)
+            self._lora_catalog_index = catalog_index(records)
+            self._apply_metadata_overrides()
         if not self._presets_raw:
             raise ValueError(f"No presets found in {self.presets_path}")
+
+    def _apply_metadata_overrides(self) -> None:
+        """Merge optional ``metadata_overrides`` entries into the scanned catalogue."""
+        if not self._metadata_overrides:
+            return
+        for name, override in self._metadata_overrides.items():
+            if not isinstance(override, dict):
+                continue
+            rec = self._lora_catalog_index.get(name)
+            if rec is None:
+                rec = {
+                    "name": name,
+                    "path": name,
+                    "trigger_words": [],
+                    "base_model": None,
+                    "description": "",
+                    "source": "none",
+                    "_embedded": {},
+                    "_sidecar": override,
+                }
+                self._lora_catalog_index[name] = rec
+                self._lora_catalog_index[Path(name).name] = rec
+                continue
+            merged = dict(rec)
+            merged["_sidecar"] = {**(rec.get("_sidecar") or {}), **override}
+            if override.get("trigger_words") or override.get("triggers"):
+                triggers = override.get("trigger_words") or override.get("triggers") or []
+                if isinstance(triggers, str):
+                    triggers = [triggers]
+                if triggers:
+                    merged["trigger_words"] = list(triggers)
+                    merged["source"] = "sidecar"
+            for key in ("base_model", "description"):
+                if override.get(key):
+                    merged[key] = override[key]
+            self._lora_catalog_index[name] = merged
+            self._lora_catalog_index[Path(name).name] = merged
+            self._lora_catalog_index[str(Path(merged.get("path", name)))] = merged
 
     @staticmethod
     def _load_yaml(path: Path) -> dict[str, Any]:
@@ -344,7 +395,43 @@ class LoRASelector:
             if not full.exists():
                 missing.append(str(full))
 
+        if self._lora_catalog_index:
+            for lora in preset.loras:
+                rel = str(lora.get("path", ""))
+                rec = lookup_record(rel, self._lora_catalog_index)
+                if rec is None:
+                    warnings.append(f"No scanned metadata for LoRA path: {rel}")
+                elif not rec.get("trigger_words"):
+                    warnings.append(f"Scanned LoRA has no trigger words: {rel}")
+
         return ValidationReport(ok=not missing, missing=missing, warnings=warnings)
+
+    def merge_scanned_metadata(
+        self, preset: Preset, prompt: str = ""
+    ) -> tuple[Preset, dict[str, Any]]:
+        """Attach scanned trigger metadata to preset LoRAs (no-op without --scan-dir)."""
+        if not self._lora_catalog_index:
+            return preset, {}
+        enriched_loras, scan_warnings, prompt_suffix, extra_negative = enrich_loras(
+            preset.loras, self._lora_catalog_index, prompt=prompt
+        )
+        merged = Preset(
+            preset_id=preset.preset_id,
+            description=preset.description,
+            checkpoint=preset.checkpoint,
+            loras=enriched_loras,
+            sampler=preset.sampler,
+            negative=preset.negative,
+            warnings=list(preset.warnings) + scan_warnings,
+            approved_poses=list(preset.approved_poses),
+            forbidden_poses=list(preset.forbidden_poses),
+        )
+        extras: dict[str, Any] = {}
+        if prompt_suffix:
+            extras["prompt_suffix"] = prompt_suffix
+        if extra_negative:
+            extras["negative_additions"] = extra_negative
+        return merged, extras
 
 
 def _emit_json(payload: Any) -> None:
@@ -352,7 +439,12 @@ def _emit_json(payload: Any) -> None:
 
 
 def build_selector(args: argparse.Namespace) -> LoRASelector:
-    return LoRASelector(presets_path=Path(args.presets), models_root=Path(args.models_root))
+    scan_dir_path = Path(args.scan_dir) if getattr(args, "scan_dir", None) else None
+    return LoRASelector(
+        presets_path=Path(args.presets),
+        models_root=Path(args.models_root),
+        lora_scan_dir=scan_dir_path,
+    )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -384,6 +476,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--patch",
         action="store_true",
         help="Emit only the deep-mergeable workflow patch instead of the full preset.",
+    )
+    parser.add_argument(
+        "--scan-dir",
+        metavar="DIR",
+        help="Scan LoRA safetensors in DIR and merge trigger metadata into output/validation.",
     )
     return parser.parse_args(argv)
 
@@ -426,6 +523,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     preset = selector.select(args.prompt, checkpoint=args.model)
+    scan_extras: dict[str, Any] = {}
+    if args.scan_dir:
+        preset, scan_extras = selector.merge_scanned_metadata(preset, prompt=args.prompt)
     patch = selector.to_workflow_patch(preset)
     if args.patch:
         _emit_json(patch)
@@ -433,6 +533,7 @@ def main(argv: list[str] | None = None) -> int:
 
     output = preset.to_dict()
     output["workflow_patch"] = patch
+    output.update(scan_extras)
     _emit_json(output)
     return 0
 

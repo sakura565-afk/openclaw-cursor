@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest tests/ -q 2>&1 | tee pytest-output.txt
+
+      - name: Comment failing tests on PR
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUNNER_OS_LABEL: ${{ matrix.os }}
+        run: |
+          set +e
+          COMMENT_FILE=$(mktemp)
+          {
+            echo "## CI test failure on \`${RUNNER_OS_LABEL}\`"
+            echo ""
+            echo "### Failing test ids"
+            echo '```'
+            grep -E '^(FAILED|ERROR) ' pytest-output.txt 2>/dev/null || echo "(none matched)"
+            echo '```'
+            echo ""
+            SUMMARY_LINE=$(grep -E '^=+ .* (passed|failed|error).* =+$' pytest-output.txt 2>/dev/null | tail -1)
+            if [ -n "$SUMMARY_LINE" ]; then
+              echo "### Short summary"
+              echo "\`${SUMMARY_LINE}\`"
+              echo ""
+            fi
+            BLOCK=$(awk '/^=+ (FAILURES|ERRORS) =+/,/^=+ .* (passed|failed).* =+/' pytest-output.txt 2>/dev/null)
+            if [ -n "$BLOCK" ]; then
+              echo "### Failure details"
+              echo '```'
+              echo "$BLOCK"
+              echo '```'
+            fi
+          } > "$COMMENT_FILE"
+
+          echo "--- PR comment body ---"
+          cat "$COMMENT_FILE"
+          echo "--- end ---"
+
+          {
+            echo "### PR comment (test failure on ${RUNNER_OS_LABEL})"
+            cat "$COMMENT_FILE"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          if [ -z "$PR_NUMBER" ]; then
+            PR_NUMBER=$(gh pr view --json number -q .number 2>/dev/null) || true
+          fi
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr comment "$PR_NUMBER" --body-file "$COMMENT_FILE" || echo "Warning: gh pr comment failed (non-fatal)"
+          else
+            echo "No PR number found; skipping PR comment."
+          fi
+
+      - name: Publish test summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### pytest result"
+            echo '```'
+            tail -n 60 pytest-output.txt 2>/dev/null || echo "pytest-output.txt missing"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload pytest output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-output-${{ matrix.os }}
+          path: pytest-output.txt

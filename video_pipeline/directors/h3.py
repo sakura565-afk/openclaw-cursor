@@ -14,8 +14,11 @@ from typing import Any
 import requests
 from loguru import logger
 
+from PIL import Image
+
 from video_pipeline.config import OutputSpec
 from video_pipeline.director_base import Director, JobSpec, VideoResult
+from video_pipeline.resolution import apply_resolution, resolve_resolution
 
 DEFAULT_COMFY_URL = "http://127.0.0.1:8183"
 DEFAULT_WORKFLOW_PATH = Path("workflows/minimax_h3_hero_short.json")
@@ -147,9 +150,20 @@ class H3Director(Director):
         prompt_text = self._build_prompt(output_spec)
         length_frames = self._length_frames(output_spec.duration_sec)
 
+        with Image.open(source_image) as img:
+            src_w, src_h = img.size
+        resolved = resolve_resolution(src_w, src_h, length_frames=length_frames)
+        logger.info(
+            "Resolved H3 resolution {}x{} (AR diff {:.2f}%, rule={}, budget={})",
+            resolved.width,
+            resolved.height,
+            resolved.ar_diff_pct,
+            resolved.rule,
+            resolved.pixel_budget,
+        )
+
         workflow["7"]["inputs"]["prompt"] = prompt_text
-        workflow["7"]["inputs"]["width"] = fmt["width"]
-        workflow["7"]["inputs"]["height"] = fmt["height"]
+        apply_resolution(workflow, resolved.width, resolved.height)
         workflow["7"]["inputs"]["length"] = length_frames
         workflow["8"]["inputs"]["noise_seed"] = random.randint(1, 2**31 - 1)
 
@@ -166,8 +180,8 @@ class H3Director(Director):
             workflow=workflow,
             output_path=output_path,
             prompt_text=prompt_text,
-            width=fmt["width"],
-            height=fmt["height"],
+            width=resolved.width,
+            height=resolved.height,
             length_frames=length_frames,
             extra={"uploaded_name": uploaded_name, "filename_prefix": prefix},
         )

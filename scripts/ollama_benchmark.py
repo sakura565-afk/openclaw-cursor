@@ -5,6 +5,7 @@ import os
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -188,13 +189,19 @@ def list_models() -> list[str]:
 
 
 def read_vram_usage_mb() -> int | None:
-    result = run_command(
-        [
-            "nvidia-smi",
-            "--query-gpu=memory.used",
-            "--format=csv,noheader,nounits",
-        ]
-    )
+    nvidia_smi = shutil.which("nvidia-smi")
+    if not nvidia_smi:
+        return None
+    try:
+        result = run_command(
+            [
+                nvidia_smi,
+                "--query-gpu=memory.used",
+                "--format=csv,noheader,nounits",
+            ]
+        )
+    except FileNotFoundError:
+        return None
     if result.returncode != 0:
         return None
 
