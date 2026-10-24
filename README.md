@@ -2,6 +2,22 @@
 
 OpenClaw orchestration via Cursor Cloud Agent.
 
+## Tests
+
+Run the full suite from the repository root (CI uses the same command):
+
+```bash
+python -m pytest tests/ -q
+```
+
+A successful run ends with a one-line summary, for example:
+
+```text
+851 passed, 8 subtests passed in 59.92s
+```
+
+You can also run without `-q` for more verbose output; the same summary line is printed at the end.
+
 ## Ollama Model Manager
 
 `python -m scripts.ollama_model_manager` provides a stdlib-only CLI for managing local Ollama models used by OpenClaw.
