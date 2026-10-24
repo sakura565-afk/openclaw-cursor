@@ -23,7 +23,7 @@ ffmpeg on `PATH` for scoring.
 
 ```bash
 python scripts/vace_ab.py --list
-python scripts/vace_ab.py --run baseline
+python scripts/vace_ab.py --run control
 python scripts/vace_ab.py --matrix
 python scripts/vace_ab.py --report
 ```
@@ -36,28 +36,41 @@ it does not start ComfyUI or touch GPUs.
 
 ## Baseline and matrix design
 
-The baseline prompt (`vace_ab.BASELINE`) is the ComfyUI **API prompt** recovered
-from the history entry that produced the striped `wv_vace_final_*.mp4` clips. The
-frozen copy lives in `tests/fixtures/vace_defective_workflow.json`.
+The baseline is the ComfyUI **API prompt** recovered from the history entry that
+produced the striped `wv_vace_final_*.mp4` clips. `scripts/vace_ab.py` loads it
+from `tests/fixtures/vace_defective_workflow.json` (single source of truth). Tests
+pin both the raw file SHA-256 and the canonical JSON hash so the fixture cannot
+drift silently.
 
-Each matrix case changes **one** override relative to that baseline (CFG, steps,
-high/low split, scheduler, shift, VACE strength/end, resize `divisible_by`,
-attention mode, or quantization on both loaders).
+Recovered graph (node ids):
+
+| Node | Role |
+|------|------|
+| `1` / `2` | `WanVideoModelLoader` — `wan2.2_fun_vace_*_noise_14B_fp8_scaled` (no separate `vace_model`; weights are merged Fun VACE checkpoints) |
+| `6` | `WanVideoVACEEncode` — 480×832, 29 frames, strength 1.0, VACE window 0–100% |
+| `7` / `8` | `WanVideoSampler` — 6 steps, CFG 1.0, shift 5.0, `dpm++_sde`, split at step 3 |
+| `30` → `31` → `32` → `33` | `LoadVideo` (`vace_test.mp4`) → `VideoFrameSample` → `GetVideoComponents` → `ImageResizeKJ` (`divisible_by` 16) |
+| `40` / `41` | `CreateVideo` (16 fps) → `SaveVideo` (`filename_prefix` `wv_vace_final`) |
+
+No `WanVideoImageToVideoEncode` and no `VHS_*` nodes (native ComfyUI video I/O).
+
+Each matrix case changes **one** override relative to that baseline, except `combo`
+(which stacks the main sampler knobs). Overrides touch CFG, steps/split, scheduler,
+shift, VACE strength/end, resize `divisible_by`, attention mode, quantization, or
+output prefix.
 
 | Case | Isolates |
 |------|----------|
-| `baseline` | Recovered defective settings (control). |
-| `cfg_1` | CFG = 1.0 on both samplers. |
-| `cfg_3_5` | Higher CFG on both samplers. |
-| `steps_8` | More denoise steps. |
-| `split_4` | Earlier handoff from high to low sampler. |
-| `scheduler_euler` | Euler scheduler. |
-| `shift_5` | Lower flow shift. |
-| `vace_strength_0_75` | Weaker VACE conditioning. |
-| `vace_end_0_8` | Shorter VACE active window. |
-| `divisible_32` | Coarser resize divisibility. |
-| `attention_sdpa` | SDPA instead of sageattn on loaders. |
-| `quant_fp8_e4m3fn` | Different fp8 quantization on loaders. |
+| `control` | Recovered defective settings (no overrides). Reproduces the defect in ~200 s at 6 steps (score ~71). |
+| `cfg5` | CFG 5.0 on both samplers. |
+| `steps20` | 20 steps, high/low split at 10. |
+| `unipc` | UniPC scheduler + shift 8.0. |
+| `strength07` | VACE strength 0.7. |
+| `vace_end08` | VACE end percent 0.8. |
+| `div32` | Resize `divisible_by` 32. |
+| `sdpa` | SDPA attention on both loaders. |
+| `noquant` | Quantization disabled on both loaders. |
+| `combo` | CFG 5.0 + 20 steps / split 10 + UniPC + shift 8.0. |
 
 **Interpretation:** treat a case as a fix only when the banding verdict becomes
 `clean` or `geometry` **and** green dominance drops below about **+5**. A lower
