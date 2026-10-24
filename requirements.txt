@@ -10,7 +10,6 @@ pillow
 tqdm
 matplotlib
 seaborn
-python-magic
 numpy
 imagehash
 opencv-python-headless>=4.8.0

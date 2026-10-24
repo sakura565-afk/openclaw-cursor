@@ -1,6 +1,10 @@
 # Optional / heavy dependencies - NOT installed by CI (see requirements.txt).
 #
 # These packages often lack Windows wheels or need native libraries:
+#   python-magic    - libmagic bindings for MIME sniffing (optional). On Windows,
+#                     needs a matching native libmagic; importing an incompatible
+#                     libmagic on PATH can abort the process (access violation).
+#                     scripts/image_format_migrator.py skips this import on win32.
 #   pyheif          - HEIC/HEIF decoding (no Windows wheels; used optionally by
 #                     scripts/image_format_migrator.py behind a try/except import)
 #   rawpy           - RAW camera files (libraw)
@@ -11,6 +15,7 @@
 # On Windows install Microsoft C++ Build Tools before:
 #   pip install -r requirements-heavy.txt
 # On Linux you may need build-essential and libraw-dev (for rawpy).
+python-magic
 pyheif
 rawpy
 onnxruntime>=1.16.0
