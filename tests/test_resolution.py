@@ -11,6 +11,7 @@ from video_pipeline.resolution import (
     SAMPLER_NODE_ID,
     VALID_H3_RESOLUTIONS,
     apply_resolution,
+    is_h3_resolution_ok,
     pixel_budget,
     resolve_resolution,
 )
@@ -55,7 +56,7 @@ def _reference_resolve(
     for width, height, oclass in VALID_H3_RESOLUTIONS:
         if oclass not in allowed:
             continue
-        if width % 16 != 0 or height % 16 != 0:
+        if not is_h3_resolution_ok(width, height):
             continue
         if width * height > budget:
             continue
@@ -108,8 +109,7 @@ def _assert_invariants(
         forced = orientation.strip().lower()  # type: ignore[assignment]
     allowed = _allowed_orientations(source_ar, forced)
 
-    assert result_w % 16 == 0
-    assert result_h % 16 == 0
+    assert is_h3_resolution_ok(result_w, result_h)
     assert result_w * result_h <= budget
     ref_w, ref_h = _reference_resolve(
         src_w, src_h, length_frames=length_frames, max_pixels=max_pixels, orientation=orientation
@@ -122,8 +122,8 @@ class TestPixelBudget:
         assert pixel_budget(100) == 1_400_000
 
     def test_long_clip_budget(self) -> None:
-        assert pixel_budget(175) == 1_000_000
-        assert pixel_budget(240) == 1_000_000
+        assert pixel_budget(175) == 1_048_576
+        assert pixel_budget(240) == 1_048_576
 
 
 class TestResolveResolution:
@@ -138,7 +138,23 @@ class TestResolveResolution:
         assert resolved.ar_diff_pct <= 2.0
         assert _orientation_for(resolved.width, resolved.height) in {"landscape", "square"}
         _assert_invariants(1920, 1080, resolved.width, resolved.height, length_frames=100)
-        assert (resolved.width, resolved.height) in {(1024, 576), (1280, 720)}
+        assert (resolved.width, resolved.height) in {
+            (1024, 576),
+            (1024, 672),
+            (1216, 704),
+        }
+
+    def test_landscape_1920x1080_length_175_h3_safe(self) -> None:
+        resolved = resolve_resolution(1920, 1080, length_frames=175)
+        assert resolved.ar_diff_pct <= 2.0
+        assert is_h3_resolution_ok(resolved.width, resolved.height)
+        assert (resolved.width, resolved.height) != (1280, 720)
+        assert (resolved.width, resolved.height) in {
+            (1024, 576),
+            (1024, 672),
+            (1216, 704),
+        }
+        _assert_invariants(1920, 1080, resolved.width, resolved.height, length_frames=175)
 
     def test_square_1024x1024(self) -> None:
         resolved = resolve_resolution(1024, 1024, length_frames=100)
@@ -146,9 +162,15 @@ class TestResolveResolution:
         assert (resolved.width, resolved.height) in {(1024, 1024), (1280, 1280)}
         _assert_invariants(1024, 1024, resolved.width, resolved.height, length_frames=100)
 
+    def test_square_1024x1024_length_175_exact_match(self) -> None:
+        resolved = resolve_resolution(1024, 1024, length_frames=175)
+        assert (resolved.width, resolved.height) == (1024, 1024)
+        assert resolved.ar_diff_pct == 0.0
+        _assert_invariants(1024, 1024, resolved.width, resolved.height, length_frames=175)
+
     def test_budget_enforced_at_240_frames(self) -> None:
         resolved = resolve_resolution(776, 1280, length_frames=240)
-        assert resolved.width * resolved.height <= 1_000_000
+        assert resolved.width * resolved.height <= 1_048_576
         assert (resolved.width, resolved.height) != (1024, 1536)
         _assert_invariants(776, 1280, resolved.width, resolved.height, length_frames=240)
 
@@ -172,15 +194,40 @@ class TestResolveResolution:
         _assert_invariants(1920, 1080, resolved.width, resolved.height, orientation="portrait")
 
     def test_fallback_when_portrait_exceeds_budget(self) -> None:
-        resolved = resolve_resolution(776, 1280, max_pixels=900_000)
+        # Below smallest portrait (704×1024); forces landscape/square fallback.
+        resolved = resolve_resolution(776, 1280, max_pixels=700_000)
         assert resolved.rule == "fallback"
-        assert resolved.width * resolved.height <= 900_000
-        _assert_invariants(776, 1280, resolved.width, resolved.height, max_pixels=900_000)
+        assert resolved.width * resolved.height <= 700_000
+        _assert_invariants(776, 1280, resolved.width, resolved.height, max_pixels=700_000)
 
-    def test_all_table_entries_are_multiples_of_16(self) -> None:
-        for width, height, _ in VALID_H3_RESOLUTIONS:
-            assert width % 16 == 0
-            assert height % 16 == 0
+    @pytest.mark.parametrize(
+        ("width", "height", "oclass"),
+        [(w, h, o) for w, h, o in VALID_H3_RESOLUTIONS],
+        ids=[f"{w}x{h}" for w, h, _ in VALID_H3_RESOLUTIONS],
+    )
+    def test_valid_h3_resolution_entry_is_h3_ok(
+        self, width: int, height: int, oclass: Orientation
+    ) -> None:
+        assert is_h3_resolution_ok(width, height)
+
+    def test_1280x720_not_in_valid_table(self) -> None:
+        assert (1280, 720) not in {(w, h) for w, h, _ in VALID_H3_RESOLUTIONS}
+
+    def test_736x992_in_valid_table(self) -> None:
+        assert (736, 992, "portrait") in VALID_H3_RESOLUTIONS
+
+
+class TestIsH3ResolutionOk:
+    def test_multiples_of_32(self) -> None:
+        assert is_h3_resolution_ok(1024, 576)
+        assert is_h3_resolution_ok(736, 992)
+
+    def test_rejects_1280x720(self) -> None:
+        assert not is_h3_resolution_ok(1280, 720)
+
+    def test_rejects_known_bad_examples(self) -> None:
+        assert not is_h3_resolution_ok(720, 960)
+        assert not is_h3_resolution_ok(768, 1080)
 
 
 class TestApplyResolution:

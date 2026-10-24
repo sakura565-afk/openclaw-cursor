@@ -15,19 +15,30 @@ SAMPLER_NODE_ID = "7"
 Orientation = Literal["landscape", "portrait", "square"]
 
 VALID_H3_RESOLUTIONS: tuple[tuple[int, int, Orientation], ...] = (
+    (704, 1024, "portrait"),
+    (736, 992, "portrait"),
     (768, 512, "landscape"),
+    (768, 1024, "portrait"),
     (768, 1280, "portrait"),
+    (800, 1216, "portrait"),
+    (832, 672, "landscape"),
     (1024, 576, "landscape"),
+    (1024, 672, "landscape"),
     (1024, 768, "landscape"),
     (1024, 1024, "square"),
     (1024, 1280, "portrait"),
     (1024, 1536, "portrait"),
-    (1280, 720, "landscape"),
+    (1216, 704, "landscape"),
     (1280, 768, "landscape"),
     (1280, 1024, "landscape"),
     (1280, 1280, "square"),
     (1536, 1024, "landscape"),
 )
+
+
+def is_h3_resolution_ok(w: int, h: int) -> bool:
+    """True when H3 MiniMax can run width×height (both dimensions divisible by 32)."""
+    return w % 32 == 0 and h % 32 == 0
 
 
 @dataclass(frozen=True)
@@ -45,7 +56,8 @@ class Resolution:
 def pixel_budget(length_frames: int) -> int:
     """Return max output pixels (width * height) for a clip length."""
     if length_frames >= 175:
-        return 1_000_000
+        # Pixel budget (not a round "million"): 1_048_576 = 1024×1024 so square sources fit.
+        return 1_048_576
     return 1_400_000
 
 
@@ -119,7 +131,7 @@ def resolve_resolution(
     for width, height, oclass in VALID_H3_RESOLUTIONS:
         if oclass not in allowed:
             continue
-        if width % 16 != 0 or height % 16 != 0:
+        if not is_h3_resolution_ok(width, height):
             continue
         area = width * height
         if area > budget:
