@@ -120,10 +120,9 @@ def hash_image(path: Path, hash_type: str) -> HashRecord | None:
     except (UnidentifiedImageError, OSError, ValueError, RuntimeError):
         return None
 
-    canonical = canonical_image_path(path)
     stat = path.stat()
     return HashRecord(
-        path=canonical,
+        path=path,
         perceptual_hash=perceptual_hash,
         average_hash=average_hash,
         file_size=stat.st_size,
