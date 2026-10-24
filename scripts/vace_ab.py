@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 import sys
+import tempfile
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -32,7 +34,8 @@ def _analyze_video(path: Path, fps: float = 2.0) -> dict[str, Any]:
 
 DEFAULT_COMFY_URL = "http://127.0.0.1:8188"
 DEFAULT_REPORT_PATH = Path("memory/vace_ab_report.json")
-DEFAULT_OUTPUT_DIR = Path("output/vace_ab")
+# Local mirror only; ComfyUI may live elsewhere. Missing files are fetched via /view.
+DEFAULT_OUTPUT_DIR = Path(tempfile.gettempdir()) / "vace_ab"
 
 # ComfyUI prompt node ids (recovered defective Wan2.2 Fun VACE workflow).
 NODE_HIGH_LOADER = "1"
@@ -54,7 +57,34 @@ _BENCHMARK_SEED_BASE: dict[str, int] = {
     NODE_LOW_SAMPLER: 43,
     NODE_FRAME_SAMPLE: 42,
 }
+_SEED_MOD = 2**32
 _RUN_SEQ: list[int] = [0]
+
+
+def _fresh_process_seed_offset() -> int:
+    """Per-process offset so the first run in a new process cannot match a prior process."""
+    return int.from_bytes(os.urandom(4), "big")
+
+
+_PROCESS_SEED_OFFSET: int = _fresh_process_seed_offset()
+
+
+def reset_benchmark_seed_state(
+    *,
+    run_seq: int = 0,
+    process_seed_offset: int | None = None,
+) -> None:
+    """
+    Reset harness seed state (for tests or a fresh logical process).
+
+    When process_seed_offset is omitted, draws a new per-process offset like a real import.
+    """
+    global _PROCESS_SEED_OFFSET
+    _RUN_SEQ[0] = run_seq
+    if process_seed_offset is None:
+        _PROCESS_SEED_OFFSET = _fresh_process_seed_offset()
+    else:
+        _PROCESS_SEED_OFFSET = process_seed_offset % _SEED_MOD
 
 
 def _fixture_path() -> Path:
@@ -155,7 +185,7 @@ def assign_fresh_benchmark_seeds(
         inputs = node.get("inputs")
         if not isinstance(inputs, dict) or "seed" not in inputs:
             continue
-        value = base + seq
+        value = (base + _PROCESS_SEED_OFFSET + seq) % _SEED_MOD
         inputs["seed"] = value
         applied[nid] = value
     return seq, applied
@@ -370,17 +400,75 @@ class ComfyRunner:
         raise TimeoutError(f"timed out waiting for prompt {prompt_id}")
 
     def find_output_video(self, history: dict[str, Any]) -> Path | None:
+        """Return the best video path from ComfyUI history outputs, or None."""
         outputs = history.get("outputs", {})
+        ranked: list[tuple[int, Path]] = []
         for node_out in outputs.values():
-            for key in ("gifs", "videos"):
+            for key in ("gifs", "videos", "images"):
                 for item in node_out.get(key, []) or []:
                     filename = item.get("filename")
                     if not filename:
                         continue
-                    subfolder = item.get("subfolder", "")
+                    subfolder = item.get("subfolder", "") or ""
                     folder_type = item.get("type", "output")
-                    return Path(folder_type) / subfolder / filename
-        return None
+                    if folder_type == "output":
+                        rank = 0
+                    elif folder_type == "input":
+                        rank = 2
+                    else:
+                        rank = 1
+                    rel = Path(folder_type) / subfolder / filename
+                    ranked.append((rank, rel))
+        if not ranked:
+            return None
+        ranked.sort(key=lambda pair: pair[0])
+        if ranked[0][0] >= 2:
+            return None
+        return ranked[0][1]
+
+    @staticmethod
+    def _split_output_rel(rel: Path) -> tuple[str, str, str]:
+        parts = rel.parts
+        if len(parts) < 2:
+            raise ValueError(f"invalid ComfyUI output path: {rel}")
+        folder_type = parts[0]
+        filename = parts[-1]
+        subfolder = str(Path(*parts[1:-1])) if len(parts) > 2 else ""
+        return folder_type, subfolder, filename
+
+    def download_output_video(
+        self, filename: str, subfolder: str = "", folder_type: str = "output"
+    ) -> Path:
+        """Fetch a rendered file from ComfyUI /view into a temporary path."""
+        params = {
+            "filename": filename,
+            "subfolder": subfolder,
+            "type": folder_type,
+        }
+        response = self._request("GET", "/view", params=params)
+        suffix = Path(filename).suffix or ".mp4"
+        handle, raw_path = tempfile.mkstemp(prefix="vace_ab_", suffix=suffix)
+        dest = Path(raw_path)
+        try:
+            with open(handle, "wb") as out:
+                out.write(response.content)
+        except Exception:
+            dest.unlink(missing_ok=True)
+            raise
+        return dest
+
+    def resolve_output_video(self, rel: Path, output_dir: Path) -> Path:
+        """
+        Locate the rendered video on disk, or download it from ComfyUI /view.
+
+        Tries ComfyUI/ relative to cwd, then output_dir (local mirror fallback).
+        """
+        local_candidates = [Path("ComfyUI") / rel, output_dir / rel.name]
+        for candidate in local_candidates:
+            if candidate.is_file():
+                return candidate
+        folder_type, subfolder, filename = self._split_output_rel(rel)
+        return self.download_output_video(filename, subfolder, folder_type)
 
 
 def score_video(path: Path, fps: float = 2.0) -> dict[str, Any]:
@@ -418,9 +506,7 @@ def run_case(
         rel = runner.find_output_video(history)
         if rel is None:
             raise RuntimeError("no video output in ComfyUI history")
-        video_path = Path("ComfyUI") / rel
-        if not video_path.is_file():
-            video_path = output_dir / rel.name
+        video_path = runner.resolve_output_video(rel, output_dir)
         result.video_path = str(video_path)
         result.banding = score_video(video_path, fps=fps)
     except Exception as exc:  # noqa: BLE001 - surfaced in report JSON
@@ -485,7 +571,15 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report", action="store_true", help="Print saved report table.")
     parser.add_argument("--comfy-url", default=DEFAULT_COMFY_URL, dest="comfy_url")
     parser.add_argument("--report-path", type=Path, default=DEFAULT_REPORT_PATH)
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR,
+        help=(
+            "Local ComfyUI output mirror (fallback before downloading via /view). "
+            f"Default: {DEFAULT_OUTPUT_DIR}"
+        ),
+    )
     parser.add_argument("--fps", type=float, default=2.0, help="Banding detector video FPS.")
     args = parser.parse_args(argv)
 

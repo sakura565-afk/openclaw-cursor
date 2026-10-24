@@ -5,7 +5,12 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import shutil
+import subprocess
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -291,11 +296,104 @@ def test_parse_execution_metrics_missing_timestamps() -> None:
     assert cached == ["4"]
 
 
+def _expected_benchmark_seed(base: int, seq: int, process_offset: int) -> int:
+    return (base + process_offset + seq) % (2**32)
+
+
+def test_find_output_video_prefers_savevideo_images_output() -> None:
+    history = {
+        "outputs": {
+            "41": {
+                "images": [
+                    {
+                        "filename": "wv_vace_final_00010_.mp4",
+                        "subfolder": "",
+                        "type": "output",
+                    }
+                ],
+                "animated": [True],
+            },
+            "30": {
+                "images": [
+                    {"filename": "vace_test.mp4", "subfolder": "", "type": "input"}
+                ],
+                "animated": [True],
+            },
+        }
+    }
+    runner = ab.ComfyRunner("http://127.0.0.1:8188")
+    rel = runner.find_output_video(history)
+    assert rel is not None
+    assert rel.name == "wv_vace_final_00010_.mp4"
+    assert "vace_test.mp4" not in rel.name
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_resolve_output_video_download_fallback(tmp_path: Path) -> None:
+    video = tmp_path / "wv_vace_final_00010_.mp4"
+    proc = subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=0x788088:s=320x64:d=1",
+            "-t",
+            "1",
+            "-r",
+            "2",
+            str(video),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        pytest.skip(f"ffmpeg lavfi failed: {proc.stderr.strip()}")
+    payload = video.read_bytes()
+
+    class ViewHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            parsed = urlparse(self.path)
+            if parsed.path != "/view":
+                self.send_error(404)
+                return
+            query = parse_qs(parsed.query)
+            if query.get("filename", [""])[0] != video.name:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), ViewHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    base_url = f"http://{host}:{port}"
+
+    try:
+        runner = ab.ComfyRunner(base_url)
+        rel = Path("output") / video.name
+        resolved = runner.resolve_output_video(rel, tmp_path / "missing_mirror")
+        assert resolved.is_file()
+        assert resolved.read_bytes() == payload
+        banding = ab.score_video(resolved, fps=2.0)
+        assert banding.get("verdict") == "clean"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 @pytest.fixture()
 def reset_benchmark_run_seq() -> None:
-    ab._RUN_SEQ[0] = 0
+    ab.reset_benchmark_seed_state(run_seq=0, process_seed_offset=1_000_000)
     yield
-    ab._RUN_SEQ[0] = 0
+    ab.reset_benchmark_seed_state(run_seq=0, process_seed_offset=1_000_000)
 
 
 def test_assign_fresh_benchmark_seeds_changes_between_runs(
@@ -319,6 +417,39 @@ def test_assign_fresh_benchmark_seeds_not_baseline_fixture_values(
     assert seeds[ab.NODE_HIGH_SAMPLER] != ab.BASELINE[ab.NODE_HIGH_SAMPLER]["inputs"]["seed"]
     assert seeds[ab.NODE_LOW_SAMPLER] != ab.BASELINE[ab.NODE_LOW_SAMPLER]["inputs"]["seed"]
     assert seeds[ab.NODE_FRAME_SAMPLE] != ab.BASELINE[ab.NODE_FRAME_SAMPLE]["inputs"]["seed"]
-    assert seeds[ab.NODE_HIGH_SAMPLER] == 42 + 1
-    assert seeds[ab.NODE_LOW_SAMPLER] == 43 + 1
-    assert seeds[ab.NODE_FRAME_SAMPLE] == 42 + 1
+    offset = 1_000_000
+    assert seeds[ab.NODE_HIGH_SAMPLER] == _expected_benchmark_seed(42, 1, offset)
+    assert seeds[ab.NODE_LOW_SAMPLER] == _expected_benchmark_seed(43, 1, offset)
+    assert seeds[ab.NODE_FRAME_SAMPLE] == _expected_benchmark_seed(42, 1, offset)
+
+
+def test_assign_fresh_benchmark_seeds_unique_across_simulated_processes() -> None:
+    ab.reset_benchmark_seed_state(run_seq=0, process_seed_offset=0)
+    first_process_prompt = ab.build_prompt("control")
+    _seq_a, seeds_a = ab.assign_fresh_benchmark_seeds(first_process_prompt)
+
+    ab.reset_benchmark_seed_state(run_seq=0, process_seed_offset=9_876_543)
+    second_process_prompt = ab.build_prompt("control")
+    _seq_b, seeds_b = ab.assign_fresh_benchmark_seeds(second_process_prompt)
+
+    assert _seq_a == 1 and _seq_b == 1
+    assert seeds_a != seeds_b
+    assert seeds_a[ab.NODE_HIGH_SAMPLER] == _expected_benchmark_seed(42, 1, 0)
+    assert seeds_b[ab.NODE_HIGH_SAMPLER] == _expected_benchmark_seed(42, 1, 9_876_543)
+    assert seeds_b[ab.NODE_HIGH_SAMPLER] != seeds_a[ab.NODE_HIGH_SAMPLER]
+
+
+def test_assign_fresh_benchmark_seeds_within_int32_range(
+    reset_benchmark_run_seq: None,
+) -> None:
+    prompt = ab.build_prompt("control")
+    for _ in range(5):
+        _seq, seeds = ab.assign_fresh_benchmark_seeds(prompt)
+        for value in seeds.values():
+            assert 0 <= value < 2**32
+
+    ab.reset_benchmark_seed_state(run_seq=0, process_seed_offset=2**32 - 10)
+    wrap_prompt = ab.build_prompt("control")
+    _seq, wrap_seeds = ab.assign_fresh_benchmark_seeds(wrap_prompt)
+    for value in wrap_seeds.values():
+        assert 0 <= value < 2**32
