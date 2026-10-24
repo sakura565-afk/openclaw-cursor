@@ -6,26 +6,47 @@ Hardware for the 2026-10-24 matrix: **RTX 4070 Ti SUPER** (16 GB VRAM, sm_89), 6
 
 ## Root cause of horizontal green stripes
 
-The horizontal green/teal stripes were **not** caused by quantization mode, attention backend, or other sampler/loader knobs.
+The horizontal green/teal stripes were **not** caused by quantization mode, attention backend, VAE, codec settings, or other sampler/loader knobs. The failure was a **corrupt checkpoint file** on disk.
 
-The high-noise checkpoint file **`wan2.2_fun_vace_high_noise_14B_fp8_scaled.safetensors`** was **corrupt on disk**: a **duplicated ~20 MiB chunk** inside the safetensors container meant **422 of 2322 tensors** were read with a **shifted byte offset**, producing periodic garbage in the decoded video.
+The high-noise checkpoint **`wan2.2_fun_vace_high_noise_14B_fp8_scaled.safetensors`** contained a **duplicated 20 MiB chunk** at byte offset **2 608 857 088** (`X0`). The safetensors JSON header still described the official tensor layout, but every byte after the splice was shifted by exactly **20 971 520** bytes when tensors were read:
 
-The file was **repaired on 2026-10-24 18:11:09** and is now **byte-identical** to the official Comfy-Org release:
+```text
+local[0 : X0]                 == official[0 : X0]              (identical)
+local[X0 : X0+20MiB]          == <duplicated 20 MiB chunk>     (the corruption)
+local[X0+20MiB : EOF]         == official[X0 : EOF]            (rest shifted)
+```
 
-| Field | Value |
-|-------|-------|
-| File | `wan2.2_fun_vace_high_noise_14B_fp8_scaled.safetensors` |
-| Size | 17 346 056 104 bytes |
-| SHA-256 | `23130f30207f6c8697a5bead113ddc9904cfbb5e8fa51a550df3cee4d21fb54c` |
+**422 of 2322** tensors were loaded from the wrong offset, including:
+
+- **all 8** `vace_blocks.*` injection layers (VACE conditioning path),
+- **`head.head.weight`**,
+- **33 of 40** `blocks.*` transformer blocks.
+
+Garbage in the **VACE injection layers** produces structured, periodic errors in the latent field that decode as **horizontal green/teal bands** — not a uniform blur, because the corruption is spatially periodic along the shifted read pattern.
+
+| | SHA-256 | Size (bytes) |
+|---|---------|----------------|
+| **Corrupt** (2026-10-24 18:06) | `2e3b47e2b0596c95fd73d29a334750162c7ff71bcb6cec7a068f39b791c1df6d` | 17 367 027 624 |
+| **Repaired / official** (18:56, unchanged since) | `23130f30207f6c8697a5bead113ddc9904cfbb5e8fa51a550df3cee4d21fb54c` | 17 346 056 104 |
 
 Source: [Comfy-Org/Wan_2.2_ComfyUI_Repackaged](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged) → `split_files/diffusion_models/`.
 
+**ComfyUI does not catch this.** [Comfy-Org/ComfyUI#15459](https://github.com/Comfy-Org/ComfyUI/issues/15459) only errors on **truncated** safetensors; a file with **extra** bytes and a still-valid header loads silently. Verify checkpoints **before** wiring the model into a graph.
+
+A plain size check against the official byte count would have failed here, but the corrupt file was only **0.12 %** larger than official (17 367 027 624 vs 17 346 056 104) — easy to miss if you do not have the reference size. The **local header probe** catches duplication in seconds without hashing 17 GB: for any `.safetensors` file, require `header_start + max(data_offsets[1]) == file_size` (8-byte little-endian header length, then JSON header, then tensor payload). When a chunk is duplicated, payload bytes no longer line up with the header.
+
 **After repair, every re-checked render was clean** — **43/43** matrix runs re-analysed from the `.mp4` files on disk. The earlier hypothesis that `quantization="fp8_e4m3fn_scaled"` (or switching to `fp8_e4m3fn_scaled_fast`) caused the stripes is **refuted**; `fp8_e4m3fn_scaled_fast` was clean in every run and is **not** flaky.
 
-Verify local copies anytime:
+Verify local copies (header probe, official size, and SHA-256):
 
 ```bash
 python scripts/verify_wan_vace_checkpoints.py
+```
+
+Header/payload extent only (no 17 GB hash):
+
+```bash
+python scripts/verify_wan_vace_checkpoints.py --header-probe
 ```
 
 Re-download with size + SHA-256 verification (same conventions as [`scripts/dl_verified.py`](../scripts/dl_verified.py)):
@@ -33,6 +54,12 @@ Re-download with size + SHA-256 verification (same conventions as [`scripts/dl_v
 ```bash
 python scripts/verify_wan_vace_checkpoints.py --print-urls
 ```
+
+### Two upstream behaviours that change how an A/B matrix must be read
+
+**`vace_end_percent` is per-stage, not global.** In ComfyUI-WanVideoWrapper `nodes_sampler.py` (~line 1188), `current_step_percentage = idx / len(timesteps)` uses the timestep list **already sliced for the current stage**. The low-noise stage therefore **restarts at 0.0**. With a two-stage schedule, `vace_end_percent=0.3` activates VACE on global steps **[0–3]** and again **[10–13]**, not **[0–5]**. An earlier “`vace_end_percent` didn’t help” experiment was mis-specified.
+
+**`quantization="fp8_e4m3fn_scaled"` double-quantizes an already `fp8_scaled` checkpoint.** All 495 quantized weights expose a valid scalar `scale_weight`, but the loader wrapper applies a second quantization pass. In `custom_linear.py` (lines 256–260), the branch `weight.numel() < input.numel()` puts the scale on the **input** instead of the weight. For a **scalar** `scale_weight` the two branches are algebraically identical on a single matmul (measured relative error ~1.8e‑07), but **LoRA is merged into `weight` after that branch**. In the input-scaled path, the LoRA delta is applied to the **unscaled** weight while the input still carries the scale, so the LoRA contribution is ~**3200×** too weak. Irrelevant for the LoRA-free VACE graph documented here; **critical** for H3/LoRA pipelines.
 
 ## How to measure speed (read this before the table)
 
