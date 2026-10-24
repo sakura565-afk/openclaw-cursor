@@ -31,11 +31,62 @@ MAX_HEADER_BYTES = 64 * 1024 * 1024
 # Clothing-removal LoRAs use this negative addition in our stack.
 CLOTHING_REMOVAL_NEGATIVE = "fabric not removed"
 
+# Concepts that imply clothing-removal LoRAs (negative prompt + last-token trigger).
+CLOTHING_REMOVAL_CONCEPTS: tuple[str, ...] = (
+    "undressing",
+    "undress",
+    "nude",
+    "naked",
+    "nudity",
+    "topless",
+    "strip",
+    "stripping",
+    "clothing removal",
+    "clothes off",
+)
+
 _CLOTHING_REMOVAL_RE = re.compile(
-    r"(clothing\s+removal|remove\s+clothing|undress|undressing|strip\s+clothes|"
+    r"(clothing\s+removal|clothes\s+off|remove\s+clothing|undress|undressing|"
+    r"nude|naked|nudity|topless|strip(?:ping)?|strip\s+clothes|"
     r"fabric\s+not\s+removed|take\s+off\s+clothes)",
     re.IGNORECASE,
 )
+
+# Tokens stripped when deriving triggers from filenames / ss_output_name.
+_NOISE_TOKENS: frozenset[str] = frozenset(
+    {
+        "minimax",
+        "h3",
+        "h3v",
+        "ref2va",
+        "fl2va",
+        "i2v",
+        "t2v",
+        "lora",
+        "lycoris",
+        "sdxl",
+        "sd15",
+        "flux",
+        "pony",
+        "v",
+        "v2",
+        "v3",
+        "str",
+        "steps",
+        "size",
+        "px",
+        "resolution",
+        "trigger",
+        "nsfw",
+        "sfw",
+        "h",
+    }
+)
+
+_CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+_DIGIT_BOUNDARY_RE = re.compile(r"(?<=\d)(?=[A-Za-z])|(?<=[A-Za-z])(?=\d)")
+_SEPARATOR_SPLIT_RE = re.compile(r"[-_\s.]+")
+_WEIGHT_LIKE_RE = re.compile(r"^\d+(\.\d+)?$|^\d+str$", re.IGNORECASE)
 _DESCRIPTION_TRIGGERS_RE = re.compile(
     r"^\s*triggers?\s*:\s*(.+)$",
     re.IGNORECASE | re.MULTILINE,
@@ -85,7 +136,18 @@ def read_safetensors_metadata(path: str | Path) -> tuple[dict[str, Any], int]:
     if not isinstance(metadata, dict):
         metadata = {}
     tensor_count = sum(1 for key in header if key != METADATA_KEY)
-    return dict(metadata), tensor_count
+    structured = {
+        "civitai_hash": _coerce_optional_str(metadata.get("sshs_model_hash")),
+        "base_model_version": _coerce_optional_str(metadata.get("ss_base_model_version")),
+    }
+    return dict(metadata), tensor_count, structured
+
+
+def _coerce_optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def build_safetensors_fixture(header: dict[str, Any]) -> bytes:
@@ -102,6 +164,101 @@ def _split_trigger_tokens(raw: str) -> list[str]:
         if token:
             out.append(token)
     return out
+
+
+def tokenize_lora_name(text: str) -> list[str]:
+    """Split a LoRA display name or filename stem into lowercase concept tokens."""
+    if not text:
+        return []
+    expanded = _CAMEL_BOUNDARY_RE.sub(" ", text)
+    expanded = _DIGIT_BOUNDARY_RE.sub(" ", expanded)
+    raw_parts = _SEPARATOR_SPLIT_RE.split(expanded)
+    tokens: list[str] = []
+    for part in raw_parts:
+        part = part.strip()
+        if not part:
+            continue
+        # Further split embedded CamelCase chunks (e.g. MinimaxH3 after separator pass).
+        sub = _CAMEL_BOUNDARY_RE.sub(" ", part)
+        for piece in sub.split():
+            piece = piece.strip().lower()
+            if piece:
+                tokens.append(piece)
+    return tokens
+
+
+def _is_noise_token(token: str) -> bool:
+    low = token.casefold()
+    if low in _NOISE_TOKENS:
+        return True
+    if token.isdigit():
+        return True
+    if _WEIGHT_LIKE_RE.match(token):
+        return True
+    return False
+
+
+def derive_trigger_words(record: dict[str, Any]) -> list[str]:
+    """Guess trigger tokens from ``name`` / ``ss_output_name`` and the file stem."""
+    embedded = record.get("_embedded") or {}
+    file_name = record.get("name") or ""
+    stem = Path(file_name).stem if file_name else ""
+
+    label_fields: list[str] = []
+    for key in ("ss_output_name", "name"):
+        val = embedded.get(key)
+        if isinstance(val, str) and val.strip():
+            label_fields.append(val.strip())
+    if stem:
+        label_fields.append(stem)
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for label in label_fields:
+        for token in tokenize_lora_name(label):
+            if _is_noise_token(token):
+                continue
+            key = token.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(token)
+
+    candidates.sort(key=lambda t: (-len(t), t.casefold()))
+    return candidates[:3]
+
+
+def must_be_last(record: dict[str, Any]) -> bool:
+    """Whether the primary trigger must be the final prompt token."""
+    trigger = _primary_trigger(record)
+    embedded = record.get("_embedded") or {}
+    sidecar = record.get("_sidecar") or {}
+    for data in (embedded, sidecar, record):
+        for key in ("must_be_last", "trigger_last", "trigger_must_be_last"):
+            if key in data:
+                val = data[key]
+                if isinstance(val, str):
+                    if val.lower() in {"1", "true", "yes", "on"}:
+                        return True
+                elif val:
+                    return True
+        desc = data.get("description")
+        if isinstance(desc, str) and "must be last" in desc.casefold():
+            return True
+
+    if trigger.endswith("."):
+        return True
+    return _trigger_matches_clothing_removal(trigger)
+
+
+def _trigger_matches_clothing_removal(trigger: str) -> bool:
+    if not trigger:
+        return False
+    bare = trigger.rstrip(".").casefold()
+    for concept in CLOTHING_REMOVAL_CONCEPTS:
+        if bare == concept.casefold() or bare.endswith(concept.casefold()):
+            return True
+    return False
 
 
 def _dedupe_triggers(tokens: list[str]) -> list[str]:
@@ -208,9 +365,15 @@ def normalize_record(path: str | Path) -> dict[str, Any]:
     name = file_path.name
     embedded: dict[str, Any] = {}
     tensor_count = 0
+    structured: dict[str, Any] = {}
+    read_error: str | None = None
     try:
-        embedded, tensor_count = read_safetensors_metadata(file_path)
-    except (FileNotFoundError, SafetensorsMetadataError):
+        embedded, tensor_count, structured = read_safetensors_metadata(file_path)
+    except FileNotFoundError as exc:
+        read_error = str(exc)
+        embedded = {}
+    except SafetensorsMetadataError as exc:
+        read_error = str(exc)
         embedded = {}
 
     sidecar = _load_sidecar(file_path.with_suffix(".json"))
@@ -218,13 +381,25 @@ def normalize_record(path: str | Path) -> dict[str, Any]:
     emb_triggers, emb_base, emb_desc = _extract_from_mapping(embedded)
     side_triggers, side_base, side_desc = _extract_from_mapping(sidecar)
 
-    triggers = _dedupe_triggers(emb_triggers + side_triggers)
-    base_model = side_base or emb_base
+    explicit_triggers = _dedupe_triggers(emb_triggers + side_triggers)
+    base_model = side_base or emb_base or structured.get("base_model_version")
     description = side_desc or emb_desc
+    civitai_hash = structured.get("civitai_hash")
+    if not civitai_hash:
+        civitai_hash = _coerce_optional_str(embedded.get("sshs_model_hash"))
 
-    emb_has = bool(emb_triggers or emb_base or emb_desc)
+    display_name = name
+    for key in ("ss_output_name", "name"):
+        val = embedded.get(key)
+        if isinstance(val, str) and val.strip():
+            display_name = val.strip()
+            break
+
+    emb_has = bool(embedded)
     side_has = bool(side_triggers or side_base or side_desc)
-    if not emb_has and not side_has:
+    if read_error:
+        source = "none"
+    elif not emb_has and not side_has:
         source = "none"
     elif emb_triggers:
         source = "safetensors"
@@ -237,15 +412,33 @@ def normalize_record(path: str | Path) -> dict[str, Any]:
 
     record: dict[str, Any] = {
         "name": name,
+        "display_name": display_name,
         "path": str(file_path),
-        "trigger_words": triggers,
+        "trigger_words": explicit_triggers,
         "base_model": base_model,
         "description": description,
         "source": source,
         "tensor_count": tensor_count,
+        "civitai_hash": civitai_hash,
         "_embedded": embedded,
         "_sidecar": sidecar,
     }
+    if read_error:
+        record["error"] = read_error
+
+    if explicit_triggers:
+        record["trigger_source"] = "explicit"
+    elif read_error:
+        record["trigger_source"] = "none"
+    else:
+        derived = derive_trigger_words(record)
+        if derived:
+            record["trigger_words"] = derived
+            record["trigger_source"] = "derived"
+        else:
+            record["trigger_source"] = "none"
+
+    record["must_be_last"] = must_be_last(record)
     return record
 
 
@@ -270,12 +463,16 @@ def write_catalog(records: list[dict[str, Any]], out_path: str | Path, fmt: str 
     if fmt_norm == "json":
         payload = [
             {
-                "name": r["name"],
+                "name": r.get("display_name") or r["name"],
                 "path": r["path"],
                 "trigger_words": r.get("trigger_words") or [],
+                "trigger_source": r.get("trigger_source") or "none",
+                "must_be_last": bool(r.get("must_be_last")),
                 "base_model": r.get("base_model"),
                 "description": r.get("description") or "",
                 "source": r.get("source") or "none",
+                "civitai_hash": r.get("civitai_hash"),
+                "error": r.get("error"),
             }
             for r in records
         ]
@@ -283,19 +480,29 @@ def write_catalog(records: list[dict[str, Any]], out_path: str | Path, fmt: str 
         return
 
     lines = [
-        "| Name | Trigger words | Base model | Source | Path |",
-        "| --- | --- | --- | --- | --- |",
+        "| Name | Trigger words | Derived trigger (verify) | Trigger source | Must be last | Base model | Path |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for rec in records:
-        triggers = ", ".join(rec.get("trigger_words") or []) or "—"
+        trigger_source = rec.get("trigger_source") or "none"
+        words = rec.get("trigger_words") or []
+        if trigger_source == "derived":
+            triggers_cell = "—"
+            derived_cell = ", ".join(words) or "—"
+        else:
+            triggers_cell = ", ".join(words) or "—"
+            derived_cell = "—"
         base = rec.get("base_model") or "—"
-        source = rec.get("source") or "none"
+        must_last = "yes" if rec.get("must_be_last") else "no"
+        label = rec.get("display_name") or rec["name"]
         lines.append(
-            "| {name} | {triggers} | {base} | {source} | {path} |".format(
-                name=_escape_md_cell(rec["name"]),
-                triggers=_escape_md_cell(triggers),
+            "| {name} | {triggers} | {derived} | {tsrc} | {last} | {base} | {path} |".format(
+                name=_escape_md_cell(label),
+                triggers=_escape_md_cell(triggers_cell),
+                derived=_escape_md_cell(derived_cell),
+                tsrc=_escape_md_cell(trigger_source),
+                last=_escape_md_cell(must_last),
                 base=_escape_md_cell(str(base)),
-                source=_escape_md_cell(source),
                 path=_escape_md_cell(rec["path"]),
             )
         )
@@ -303,18 +510,9 @@ def write_catalog(records: list[dict[str, Any]], out_path: str | Path, fmt: str 
 
 
 def _record_must_be_last(record: dict[str, Any], trigger: str) -> bool:
-    embedded = record.get("_embedded") or {}
-    sidecar = record.get("_sidecar") or {}
-    for data in (embedded, sidecar, record):
-        for key in ("must_be_last", "trigger_last", "trigger_must_be_last"):
-            if key in data:
-                val = data[key]
-                if isinstance(val, str):
-                    if val.lower() in {"1", "true", "yes", "on"}:
-                        return True
-                elif val:
-                    return True
-    return trigger.endswith(".")
+    if "must_be_last" in record:
+        return bool(record["must_be_last"])
+    return must_be_last(record)
 
 
 def _primary_trigger(record: dict[str, Any]) -> str:
@@ -349,15 +547,23 @@ def build_prompt_suffix(record: dict[str, Any], weight: float = 0.85, prompt: st
 
 
 def _is_clothing_removal_record(record: dict[str, Any]) -> bool:
-    blob = " ".join(
-        [
-            record.get("name") or "",
-            record.get("description") or "",
-            json.dumps(record.get("_embedded") or {}, ensure_ascii=False),
-            json.dumps(record.get("_sidecar") or {}, ensure_ascii=False),
-        ]
-    )
-    return bool(_CLOTHING_REMOVAL_RE.search(blob))
+    embedded = record.get("_embedded") or {}
+    label_bits = [
+        record.get("name") or "",
+        record.get("display_name") or "",
+        record.get("description") or "",
+    ]
+    for key in ("name", "ss_output_name"):
+        val = embedded.get(key)
+        if isinstance(val, str):
+            label_bits.append(val)
+    label_blob = " ".join(label_bits)
+    if _CLOTHING_REMOVAL_RE.search(label_blob):
+        return True
+    for token in derive_trigger_words(record) + (record.get("trigger_words") or []):
+        if _trigger_matches_clothing_removal(token):
+            return True
+    return False
 
 
 def build_negative(record: dict[str, Any]) -> str:
@@ -379,6 +585,20 @@ def catalog_index(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         except OSError:
             pass
     return index
+
+
+def lookup_by_civitai_hash(
+    records: list[dict[str, Any]], model_hash: str
+) -> dict[str, Any] | None:
+    """Find a scanned record by CivitAI ``sshs_model_hash`` (case-insensitive)."""
+    if not model_hash:
+        return None
+    target = model_hash.strip().casefold()
+    for rec in records:
+        h = rec.get("civitai_hash")
+        if isinstance(h, str) and h.casefold() == target:
+            return rec
+    return None
 
 
 def lookup_record(rel_or_abs_path: str, index: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
@@ -416,8 +636,12 @@ def enrich_loras(
 
         entry["trigger_words"] = list(rec.get("trigger_words") or [])
         entry["metadata_source"] = rec.get("source")
+        entry["trigger_source"] = rec.get("trigger_source")
+        entry["must_be_last"] = rec.get("must_be_last")
         if rec.get("base_model"):
             entry["base_model"] = rec.get("base_model")
+        if rec.get("civitai_hash"):
+            entry["civitai_hash"] = rec.get("civitai_hash")
 
         if not entry["trigger_words"]:
             warnings.append(f"Scanned LoRA has no trigger words: {lora.get('path')}")
