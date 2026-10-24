@@ -36,6 +36,17 @@ jobs:
           set -o pipefail
           python -m pytest tests/ -q 2>&1 | tee pytest-output.txt
 
+      - name: Publish test summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### pytest result"
+            echo '```'
+            tail -n 60 pytest-output.txt 2>/dev/null || echo "pytest-output.txt missing"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload pytest output on failure
         if: failure()
         uses: actions/upload-artifact@v4
