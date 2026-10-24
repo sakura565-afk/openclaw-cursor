@@ -60,9 +60,12 @@ _NOISE_TOKENS: frozenset[str] = frozenset(
         "h3v",
         "ref2va",
         "fl2va",
+        "fl2v",
+        "flf",
         "i2v",
         "t2v",
         "lora",
+        "loras",
         "lycoris",
         "sdxl",
         "sd15",
@@ -80,13 +83,114 @@ _NOISE_TOKENS: frozenset[str] = frozenset(
         "nsfw",
         "sfw",
         "h",
+        "training",
+        "epoch",
+        "safetensors",
+        "multiverse",
+        "alcaitiff",
+        "norris",
+        "sanchez",
+        "chuck",
+        "table",
+        "extended",
+        "fast",
+        "rev",
+        "revision",
+        "pro",
+        "copy",
+        "edition",
+        "general",
+        "dataset",
+        "base",
+        "screenx",
+        "zshr",
+        "dptv",
+        "sec",
+        "secs",
+        "second",
+        "seconds",
+        "beta",
+        "eros",
+        "max",
+        "use",
+        "using",
+        "video",
+        "videos",
+        "mvmt",
+        "mmh3",
+        "mm",
+        "split",
+        "alone",
+        "attached",
+        "person",
+        "another",
+        "people",
+        "realism",
+        "she",
+        "her",
+        "his",
+        "him",
+        "they",
+        "them",
+        "it",
+        "its",
+        "who",
+        "what",
+        "which",
+        "with",
+        "without",
+        "from",
+        "into",
+        "onto",
+        "over",
+        "under",
+        "when",
+        "while",
+        "that",
+        "this",
+        "then",
+        "than",
+        "very",
+        "more",
+        "most",
+        "much",
+        "many",
+        "some",
+        "such",
+        "only",
+        "also",
+        "just",
+        "like",
+        "move",
+        "moving",
+        "moves",
+        "slides",
+        "has",
+        "have",
+        "wearing",
+        "and",
+        "the",
+        "for",
+        "rick",
+        "collab",
+        "pen",
+        "minimaxh3",
+        "ref",
+        "va",
+        "oac",
     }
 )
 
 _CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 _DIGIT_BOUNDARY_RE = re.compile(r"(?<=\d)(?=[A-Za-z])|(?<=[A-Za-z])(?=\d)")
-_SEPARATOR_SPLIT_RE = re.compile(r"[-_\s.]+")
-_WEIGHT_LIKE_RE = re.compile(r"^\d+(\.\d+)?$|^\d+str$", re.IGNORECASE)
+_SEPARATOR_SPLIT_RE = re.compile(r"[\s_\-.,\(\)\[\]&+/!?+:]+")
+_STRIP_EDGES_RE = re.compile(r"^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$")
+_ALNUM_ONLY_RE = re.compile(r"[^a-zA-Z0-9]")
+_WEIGHT_LIKE_RE = re.compile(
+    r"^\d+(\.\d+)?$|^\d+(\.\d+)?str$|^\d+str$",
+    re.IGNORECASE,
+)
+_SIZE_LIKE_RE = re.compile(r"^\d+x\d+$", re.IGNORECASE)
 _DESCRIPTION_TRIGGERS_RE = re.compile(
     r"^\s*triggers?\s*:\s*(.+)$",
     re.IGNORECASE | re.MULTILINE,
@@ -166,51 +270,141 @@ def _split_trigger_tokens(raw: str) -> list[str]:
     return out
 
 
-def tokenize_lora_name(text: str) -> list[str]:
-    """Split a LoRA display name or filename stem into lowercase concept tokens."""
-    if not text:
-        return []
-    expanded = _CAMEL_BOUNDARY_RE.sub(" ", text)
-    expanded = _DIGIT_BOUNDARY_RE.sub(" ", expanded)
-    raw_parts = _SEPARATOR_SPLIT_RE.split(expanded)
-    tokens: list[str] = []
-    for part in raw_parts:
-        part = part.strip()
-        if not part:
-            continue
-        # Further split embedded CamelCase chunks (e.g. MinimaxH3 after separator pass).
-        sub = _CAMEL_BOUNDARY_RE.sub(" ", part)
-        for piece in sub.split():
-            piece = piece.strip().lower()
-            if piece:
-                tokens.append(piece)
-    return tokens
+def _normalize_chunk_token(raw: str) -> str:
+    """Lowercase alphanumeric-only form of a chunk (e.g. ``2Girls`` -> ``2girls``)."""
+    return _ALNUM_ONLY_RE.sub("", raw).casefold()
 
 
-def _is_noise_token(token: str) -> bool:
-    low = token.casefold()
+def _strip_sign_and_check_numeric(token: str) -> str:
+    """Strip leading ``+``/``-``; return token for further checks."""
+    t = token.lstrip("+-")
+    return t
+
+
+def _is_junk_token(token: str) -> bool:
+    """True if token should be dropped (noise, pure number, size, or weight)."""
+    if not token:
+        return True
+    bare = _strip_sign_and_check_numeric(token)
+    if not bare:
+        return True
+    low = bare.casefold()
     if low in _NOISE_TOKENS:
         return True
-    if token.isdigit():
+    if bare.isdigit():
         return True
-    if _WEIGHT_LIKE_RE.match(token):
+    if _WEIGHT_LIKE_RE.match(bare):
+        return True
+    if _SIZE_LIKE_RE.match(bare):
         return True
     return False
 
 
+def tokenize_lora_name(text: str) -> list[str]:
+    """Split a LoRA filename stem into concept tokens (whole chunks before sub-tokens)."""
+    if not text:
+        return []
+    raw_parts = _SEPARATOR_SPLIT_RE.split(text)
+    wholes: list[str] = []
+    subs: list[str] = []
+    seen_wholes: set[str] = set()
+    seen_subs: set[str] = set()
+
+    for part in raw_parts:
+        part = _STRIP_EDGES_RE.sub("", part.strip())
+        if not part:
+            continue
+        whole = _normalize_chunk_token(part)
+        if whole and not _is_junk_token(whole) and whole not in seen_wholes:
+            seen_wholes.add(whole)
+            wholes.append(whole)
+
+        expanded = _CAMEL_BOUNDARY_RE.sub(" ", part)
+        expanded = _DIGIT_BOUNDARY_RE.sub(" ", expanded)
+        for piece in expanded.split():
+            piece = _STRIP_EDGES_RE.sub("", piece.strip())
+            if not piece:
+                continue
+            sub = _normalize_chunk_token(piece)
+            if not sub or sub == whole:
+                continue
+            if _is_junk_token(sub):
+                continue
+            if sub in seen_wholes or sub in seen_subs:
+                continue
+            seen_subs.add(sub)
+            subs.append(sub)
+
+    return wholes + subs
+
+
+def _is_noise_token(token: str) -> bool:
+    return _is_junk_token(token)
+
+
+def _extract_ss_tag_frequency_triggers(value: Any) -> list[str]:
+    """Parse Kohya ``ss_tag_frequency`` keys ``<count>_<trigger>`` (highest explicit source)."""
+    parsed: Any = None
+    if value is None:
+        return []
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            return []
+    elif isinstance(value, dict):
+        parsed = value
+    else:
+        return []
+
+    if not isinstance(parsed, dict):
+        return []
+
+    ranked: list[tuple[int, str]] = []
+    for key in parsed:
+        if not isinstance(key, str):
+            continue
+        if "_" not in key:
+            continue
+        count_str, word = key.split("_", 1)
+        try:
+            count = int(count_str)
+        except ValueError:
+            continue
+        word = word.strip()
+        if word:
+            ranked.append((count, word))
+
+    ranked.sort(key=lambda pair: (-pair[0], pair[1].casefold()))
+    out: list[str] = []
+    seen: set[str] = set()
+    for _count, word in ranked:
+        key = word.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(word)
+        if len(out) >= 3:
+            break
+    return out
+
+
 def derive_trigger_words(record: dict[str, Any]) -> list[str]:
-    """Guess trigger tokens from ``name`` / ``ss_output_name`` and the file stem."""
+    """Guess trigger tokens: file stem first, embedded training names last."""
     embedded = record.get("_embedded") or {}
     file_name = record.get("name") or ""
     stem = Path(file_name).stem if file_name else ""
 
     label_fields: list[str] = []
+    if stem:
+        label_fields.append(stem)
     for key in ("ss_output_name", "name"):
         val = embedded.get(key)
         if isinstance(val, str) and val.strip():
             label_fields.append(val.strip())
-    if stem:
-        label_fields.append(stem)
 
     candidates: list[str] = []
     seen: set[str] = set()
@@ -223,9 +417,9 @@ def derive_trigger_words(record: dict[str, Any]) -> list[str]:
                 continue
             seen.add(key)
             candidates.append(token)
-
-    candidates.sort(key=lambda t: (-len(t), t.casefold()))
-    return candidates[:3]
+            if len(candidates) >= 3:
+                return candidates
+    return candidates
 
 
 def must_be_last(record: dict[str, Any]) -> bool:
@@ -256,7 +450,8 @@ def _trigger_matches_clothing_removal(trigger: str) -> bool:
         return False
     bare = trigger.rstrip(".").casefold()
     for concept in CLOTHING_REMOVAL_CONCEPTS:
-        if bare == concept.casefold() or bare.endswith(concept.casefold()):
+        c = concept.casefold()
+        if bare == c or bare.endswith(c) or bare.startswith(c + " ") or bare.startswith(c):
             return True
     return False
 
@@ -380,8 +575,9 @@ def normalize_record(path: str | Path) -> dict[str, Any]:
 
     emb_triggers, emb_base, emb_desc = _extract_from_mapping(embedded)
     side_triggers, side_base, side_desc = _extract_from_mapping(sidecar)
+    ss_freq_triggers = _extract_ss_tag_frequency_triggers(embedded.get("ss_tag_frequency"))
 
-    explicit_triggers = _dedupe_triggers(emb_triggers + side_triggers)
+    explicit_triggers = _dedupe_triggers(ss_freq_triggers + emb_triggers + side_triggers)
     base_model = side_base or emb_base or structured.get("base_model_version")
     description = side_desc or emb_desc
     civitai_hash = structured.get("civitai_hash")
