@@ -45,6 +45,35 @@ def _banded_frame(
     return base
 
 
+def _dense_green_stripes(h: int = 256, w: int = 256, period: int = 16) -> np.ndarray:
+    arr = np.zeros((h, w, 3), dtype=np.uint8)
+    half = period // 2
+    for y in range(h):
+        if (y % period) < half:
+            arr[y, :] = (0, 200, 80)
+        else:
+            arr[y, :] = (40, 40, 40)
+    return arr
+
+
+def _dense_black_bands(h: int = 256, w: int = 256, period: int = 16) -> np.ndarray:
+    arr = np.zeros((h, w, 3), dtype=np.uint8)
+    grey = (128, 128, 128)
+    black = (0, 0, 0)
+    half = period // 2
+    for y in range(h):
+        arr[y, :] = black if (y % period) < half else grey
+    return arr
+
+
+def _rail_frame(h: int = 256, w: int = 256) -> np.ndarray:
+    arr = np.zeros((h, w, 3), dtype=np.uint8)
+    arr[:100, :] = (30, 30, 30)
+    arr[100:140, :] = (220, 220, 220)
+    arr[140:, :] = (30, 30, 30)
+    return arr
+
+
 class TestAnalyzeFrameArray:
     def test_clean_gradient(self) -> None:
         fb = analyze_frame_array(_gradient_frame())
@@ -59,6 +88,37 @@ class TestAnalyzeFrameArray:
         assert fb.band_count >= 1
         heights = [b[2] for b in fb.bands]
         assert any(14 <= h <= 18 for h in heights)
+
+    def test_dense_periodic_green_stripes(self) -> None:
+        frame = _dense_green_stripes()
+        fb = analyze_frame_array(frame)
+        assert fb.periodic.detected
+        assert fb.periodic.lag == 16
+        assert fb.periodic.channel == "green"
+        assert fb.green_dominance > 10.0
+        report = analyze_frames([frame])
+        assert report.verdict == "periodic"
+        assert report.periodic
+        assert report.score > 50.0
+        assert report.green_dominance > 10.0
+
+    def test_dense_black_bands_luma_fallback(self) -> None:
+        frame = _dense_black_bands()
+        fb = analyze_frame_array(frame)
+        assert abs(fb.green_dominance) < 1.0
+        assert fb.periodic.detected
+        assert fb.periodic.channel == "luma"
+        assert fb.periodic.lag == 16
+        report = analyze_frames([frame])
+        assert report.verdict == "periodic"
+
+    def test_clean_gradient_not_periodic(self) -> None:
+        fb = analyze_frame_array(_gradient_frame())
+        assert not fb.periodic.detected
+
+    def test_rail_not_periodic(self) -> None:
+        fb = analyze_frame_array(_rail_frame())
+        assert not fb.periodic.detected
 
 
 class TestAnalyzeFrames:
