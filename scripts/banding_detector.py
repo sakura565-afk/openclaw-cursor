@@ -55,6 +55,7 @@ class BandReport:
     bands: list[dict[str, Any]] = field(default_factory=list)
     frames_analyzed: int = 0
     green_dominance: float = 0.0
+    band_green_dominance: float = 0.0
     periodic: bool = False
     periodic_lag: float = 0.0
     periodic_best_corr: float = 0.0
@@ -275,6 +276,22 @@ def analyze_frame_array(
     )
 
 
+def _band_green_dominance(
+    frames: list[np.ndarray],
+    confirmed: list[tuple[int, int, int, set[int]]],
+) -> float:
+    """Mean green dominance over confirmed band row ranges, averaged across frames."""
+    if not confirmed:
+        return 0.0
+    values: list[float] = []
+    for y0, y1, _, frame_ids in confirmed:
+        for idx in frame_ids:
+            rgb = frames[idx][..., :3].astype(np.float64)
+            green_prof = _row_profile_green(rgb)
+            values.append(float(np.mean(green_prof[y0:y1])))
+    return float(np.mean(values)) if values else 0.0
+
+
 def _compute_score(
     band_count: int,
     band_height_px: float,
@@ -346,6 +363,7 @@ def analyze_frames(
     affected_frame_ratio = len(affected_indices) / len(frames)
 
     band_score = _compute_score(band_count, band_height_px, affected_frame_ratio)
+    band_green_dom = _band_green_dominance(frames, confirmed)
 
     periodic_frames = [fb for fb in per_frame if fb.periodic.detected]
     periodic_frame_ratio = len(periodic_frames) / len(frames)
@@ -370,14 +388,19 @@ def analyze_frames(
         periodic_best_corr,
         periodic_amplitude,
     )
-    score = float(max(band_score, periodic_score))
 
     if periodic_detected:
         verdict = "periodic"
-    elif band_count > 0:
+        score = float(max(band_score, periodic_score))
+    elif band_count > 0 and band_green_dom >= 5.0:
         verdict = "banding"
+        score = float(max(band_score, periodic_score))
+    elif band_count > 0:
+        verdict = "geometry"
+        score = 0.0
     else:
         verdict = "clean"
+        score = 0.0
 
     green_dominance = float(np.mean([fb.green_dominance for fb in per_frame]))
 
@@ -400,6 +423,7 @@ def analyze_frames(
         bands=bands_out,
         frames_analyzed=len(frames),
         green_dominance=green_dominance,
+        band_green_dominance=band_green_dom,
         periodic=periodic_detected,
         periodic_lag=periodic_lag,
         periodic_best_corr=periodic_best_corr,
@@ -569,6 +593,7 @@ def _format_summary(data: dict[str, Any]) -> str:
         f"Verdict: {data.get('verdict', '?')}",
         f"Score: {data.get('score', 0):.1f}/100",
         f"Green dominance: {data.get('green_dominance', 0):.2f}",
+        f"Band green dominance: {data.get('band_green_dominance', 0):.2f}",
         f"Bands: {data.get('band_count', 0)} "
         f"(median height {data.get('band_height_px', 0):.1f}px, "
         f"affected frames {data.get('affected_frame_ratio', 0) * 100:.0f}%)",
