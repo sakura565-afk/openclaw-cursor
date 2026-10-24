@@ -109,10 +109,48 @@ class CaseResult:
     prompt_id: str | None = None
     video_path: str | None = None
     banding: dict[str, Any] = field(default_factory=dict)
+    seconds: float | None = None
+    exec_span: float | None = None
+    execution_cached: list[str] = field(default_factory=list)
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def parse_execution_metrics(history: dict[str, Any]) -> tuple[float | None, list[str]]:
+    """
+    Return (exec_span_seconds, execution_cached_node_ids) from ComfyUI history.
+
+    exec_span is execution_success.timestamp - execution_start.timestamp (ms → s).
+    Wall-clock queue wait is excluded. Returns (None, cached) when timestamps are missing.
+    """
+    status = history.get("status") or {}
+    messages = status.get("messages") or []
+
+    start_ms: int | None = None
+    end_ms: int | None = None
+    cached: list[str] = []
+
+    for entry in messages:
+        if not isinstance(entry, (list, tuple)) or len(entry) < 2:
+            continue
+        kind = entry[0]
+        payload = entry[1]
+        if kind == "execution_start" and isinstance(payload, dict):
+            ts = payload.get("timestamp")
+            if isinstance(ts, (int, float)):
+                start_ms = int(ts)
+        elif kind == "execution_success" and isinstance(payload, dict):
+            ts = payload.get("timestamp")
+            if isinstance(ts, (int, float)):
+                end_ms = int(ts)
+        elif kind == "execution_cached" and isinstance(payload, list):
+            cached = [str(x) for x in payload]
+
+    if start_ms is None or end_ms is None or end_ms < start_ms:
+        return None, cached
+    return (end_ms - start_ms) / 1000.0, cached
 
 
 def iter_node_refs(value: Any) -> Iterable[tuple[str, int]]:
@@ -308,9 +346,14 @@ def run_case(
                 "; ".join(f"{i.kind}: {i.message}" for i in issues)
             )
         runner = ComfyRunner(comfy_url)
+        wall_start = time.time()
         prompt_id = runner.queue_prompt(prompt)
         result.prompt_id = prompt_id
         history = runner.wait_history(prompt_id)
+        result.seconds = time.time() - wall_start
+        exec_span, cached = parse_execution_metrics(history)
+        result.exec_span = exec_span
+        result.execution_cached = cached
         rel = runner.find_output_video(history)
         if rel is None:
             raise RuntimeError("no video output in ComfyUI history")

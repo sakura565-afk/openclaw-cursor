@@ -34,6 +34,22 @@ Re-download with size + SHA-256 verification (same conventions as [`scripts/dl_v
 python scripts/verify_wan_vace_checkpoints.py --print-urls
 ```
 
+## How to measure speed (read this before the table)
+
+**Never benchmark a ComfyUI job by wall clock while other prompts are queued.** An early version of [`scripts/vace_ab.py`](../scripts/vace_ab.py) timed submit → history complete; that span includes **queue wait** behind unrelated jobs, which is why the same configuration once looked like **90 s** and another time **1741 s**.
+
+The correct metric is ComfyUI’s **execution span** from the history entry’s `status.messages`:
+
+```text
+exec_span_s = (execution_success.timestamp - execution_start.timestamp) / 1000
+```
+
+The harness now records **`exec_span`** (seconds) alongside wall-clock **`seconds`** and the **`execution_cached`** node list. Use **`exec_span`** for speed comparisons.
+
+`execution_cached` lists nodes whose outputs were reused. In this VACE graph that is only deterministic pre-processing — nodes **4** (`LoadWanVideoT5TextEncoder`), **5** (`WanVideoTextEncode`), **6** (`WanVideoVACEEncode`), **9** (`WanVideoVAELoader`), **30**–**33** (video load/resize). Samplers **7** and **8** are **never** cached, so every run still executed the sampling work and spans are comparable.
+
+**Banding verdicts** are independent of timing: re-analyse the saved **`.mp4` on disk** with [`scripts/banding_detector.py`](../scripts/banding_detector.py). The ComfyUI **preview URL can 404** while the render succeeded; do not treat a missing preview as a failed run.
+
 ## Recommended configuration (quality + speed)
 
 **Keep the baseline loader settings:**
@@ -41,32 +57,34 @@ python scripts/verify_wan_vace_checkpoints.py --print-urls
 - `quantization="fp8_e4m3fn_scaled"` (not plain `fp8_e4m3fn`)
 - `rope_function="comfy"` on both samplers
 
-**Real speed levers** (all post-repair runs scored `clean`):
+### 3-round paired matrix (2026-10-24, execution span)
 
-| Configuration | Wall time (s) | Notes |
-|---------------|---------------|--------|
-| `use_non_blocking=True` | 90 | Fastest measured lever |
-| `use_non_blocking=True` + `prefetch_blocks=2` | 130 | Good block-swap overlap |
-| `attention_mode="sdpa"` | 141 | PyTorch SDPA fallback |
-| `fp8_e4m3fn_scaled_fast` + `prefetch_blocks=1` | 170 | Still clean |
-| **BASELINE** (`fp8_e4m3fn_scaled` + sageattn) | 200 / 403 / 501 / 763 | Same config, huge spread (see below) |
-| `fp8_e4m3fn_scaled_fast` | 201 / 393 / 422 | Clean; not a banding fix, only speed variant |
-| `fp8_e4m3fn` + `sdpa` | 510 / 636 | Plain fp8 slower than scaled |
-| `fp8_e4m3fn` (plain, not scaled) | 661 / 671 | ~1.5–3× slower than scaled |
-| `rope_function="default"` | 671 | Works; slower than `comfy` |
-| `riflex_freq_index=1` | 855 | |
-| `rope_function="comfy_chunked"` | 2985 | **~6× slower — do not use** |
-| Pure T2V, no VACE | 350 | Reference only (different graph) |
+Hardware as above; **6-step** harness graph unless noted. **11/11** runs re-verified **`clean`** from on-disk MP4s.
 
-**Timing caveats**
+| Configuration | Run 1 (s) | Run 2 (s) | Run 3 (s) | Median (s) |
+|---------------|-----------|-----------|-----------|------------|
+| `use_non_blocking=True` + `prefetch_blocks=2` | 72.1 | 72.3 | — | **72.2** |
+| `use_non_blocking=True` | 79.0 | 80.9 | — | **80.0** |
+| `prefetch_blocks=2` | 123.4 | 121.4 | — | 122.4 |
+| Baseline (`fp8_e4m3fn_scaled` + sageattn) | 130.7 | 114.8 | 185.3 | 130.7 |
+| `attention_mode="sdpa"` | 138.4 | 135.6 | — | 137.0 |
 
-- Absolute wall times for the **same** configuration swung **200 → 763 s** on this box. Block-swap **PCIe traffic** and **~40 GB ComfyUI RSS** on a 64 GB machine dominate variance. **Only compare pairs measured in the same session/window.**
-- GPU thermals were not limiting: **41 °C**, **2940/3120 MHz** during the matrix.
+**Headline:** **1.8× faster than baseline median** (130.7 s → **72.2 s**) and **~2.0× versus baseline mean** (143.6 s → 72.2 s), with every run still clean.
 
-**Avoid**
+Same sessions illustrate queue pollution on wall clock vs execution span: e.g. `control_sdpa` **260.3 s** wall vs **138.4 s** exec; `control_nonblocking` **190.9 s** wall vs **79.0 s** exec. Quote **execution span** in write-ups.
 
-- `rope_function="comfy_chunked"` (~6× slower than `comfy`).
-- Plain `fp8_e4m3fn` when `fp8_e4m3fn_scaled` is available (~1.5–3× slower).
+The live production script (`wv_vace_kj_*.mp4`, full **20-step** schedule) measured **324.4 s** execution span (different step count — not comparable to the 6-step rows above).
+
+### What the levers mean
+
+- **`use_non_blocking=True`** — input on **`WanVideoBlockSwap`**: “Use non blocking transfer to GPU. This will be faster but will use more VRAM.” Largest single lever on this card (median **80.0 s** vs baseline **130.7 s**). Measured VRAM during non-blocking runs: **7.6 GB** peak of **16 GB** (~**8.4 GB** free at 480×832 / 29 frames). Comfortable here; at higher resolutions watch free VRAM because swapped blocks stay resident longer.
+- **`prefetch_blocks=2`** — ~**1.15×** vs baseline median when combined with other settings; worthwhile with block swap.
+- **`attention_mode="sdpa"`** — PyTorch SDPA; ~**1.05×** vs baseline median on this card (SageAttention is still the default in the baseline).
+- Keep **`fp8_e4m3fn_scaled`** over plain **`fp8_e4m3fn`** (scaled is faster on this stack).
+- **`fp8_e4m3fn_scaled_fast`** was **`clean` in every run** — not flaky. Apparent “errors” were harness preview **404**s, not render failures.
+- **`rope_function="comfy_chunked"`** — ~**6×** slower than `comfy`; never use it.
+
+GPU thermals were not limiting during the matrix: **41 °C**, **2940/3120 MHz**.
 
 ## Upstream defects (ComfyUI-WanVideoWrapper)
 
@@ -99,4 +117,4 @@ Repository: [github.com/kijai/ComfyUI-WanVideoWrapper](https://github.com/kijai/
 
 ## Measuring the output
 
-The matrix harness may read ComfyUI’s **preview** URL for quick feedback; that URL **404s on some runs** and the report then shows **`None`** even when the render succeeded on disk. The harness prefers harness-named `vace_ab_*.mp4` and falls back to the file path from history, but **the authoritative check is always to re-analyse the saved `.mp4` with `banding_detector.py`** (as done for the 43/43 post-repair verification). See also [`vace-banding-ab.md`](vace-banding-ab.md#measuring-the-output).
+See [How to measure speed](#how-to-measure-speed-read-this-before-the-table) for **`exec_span`** vs wall clock. For quality, the matrix harness may read ComfyUI’s **preview** URL; that URL **404s on some runs** and the report can show **`None`** even when the render succeeded on disk. The harness prefers harness-named `vace_ab_*.mp4` and falls back to the history path, but **the authoritative banding check is always the `.mp4` on disk** via `banding_detector.py` (43/43 post-repair verification and 11/11 in the paired matrix). See also [`vace-banding-ab.md`](vace-banding-ab.md#measuring-the-output).
