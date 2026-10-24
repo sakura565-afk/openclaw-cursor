@@ -6,23 +6,45 @@ from __future__ import annotations
 import argparse
 import io
 import logging
+import mimetypes
 import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from PIL import Image, UnidentifiedImageError
 
-try:
-    import magic  # type: ignore
-except ImportError:  # pragma: no cover
-    magic = None
 
-try:
-    import pyheif  # type: ignore
-except ImportError:  # pragma: no cover
-    pyheif = None
+def _load_magic() -> Any | None:
+    """Load python-magic only on non-Windows platforms.
+
+    On Windows, an incompatible libmagic on PATH can abort the interpreter during
+    import (access violation). Callers must treat a None return as unavailable.
+    """
+    if sys.platform == "win32":
+        return None
+    try:
+        import magic  # type: ignore
+
+        return magic
+    except ImportError:  # pragma: no cover
+        return None
+
+
+def _load_pyheif() -> Any | None:
+    """Optional HEIC support; never import at module init on Windows."""
+    if sys.platform == "win32":
+        return None
+    try:
+        import pyheif  # type: ignore
+
+        return pyheif
+    except ImportError:  # pragma: no cover
+        return None
+
+
+magic = _load_magic()
 
 
 SUPPORTED_EXTENSIONS = {".png", ".tif", ".tiff", ".bmp", ".webp", ".heic", ".jpg", ".jpeg"}
@@ -49,13 +71,14 @@ def setup_logger() -> logging.Logger:
 
 
 def detect_mime(path: Path) -> str | None:
-    if magic is None:
-        return None
-    try:
-        detector = magic.Magic(mime=True)
-        return detector.from_file(str(path))
-    except Exception:
-        return None
+    if magic is not None:
+        try:
+            detector = magic.Magic(mime=True)
+            return detector.from_file(str(path))
+        except Exception:
+            pass
+    guessed, _ = mimetypes.guess_type(str(path))
+    return guessed
 
 
 def is_supported_image(path: Path) -> bool:
@@ -72,6 +95,7 @@ def iter_images(root: Path) -> Iterable[Path]:
 
 
 def heic_to_image(path: Path) -> Image.Image:
+    pyheif = _load_pyheif()
     if pyheif is None:
         raise RuntimeError("pyheif is required for HEIC files")
     heif = pyheif.read_heif(path.read_bytes())
