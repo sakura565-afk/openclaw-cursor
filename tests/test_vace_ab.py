@@ -223,3 +223,36 @@ def test_parse_execution_metrics_missing_timestamps() -> None:
     span, cached = ab.parse_execution_metrics(history)
     assert span is None
     assert cached == ["4"]
+
+
+@pytest.fixture()
+def reset_benchmark_run_seq() -> None:
+    ab._RUN_SEQ[0] = 0
+    yield
+    ab._RUN_SEQ[0] = 0
+
+
+def test_assign_fresh_benchmark_seeds_changes_between_runs(
+    reset_benchmark_run_seq: None,
+) -> None:
+    first = ab.build_prompt("control")
+    second = ab.build_prompt("control")
+    seq1, seeds1 = ab.assign_fresh_benchmark_seeds(first)
+    seq2, seeds2 = ab.assign_fresh_benchmark_seeds(second)
+    assert seq1 == 1
+    assert seq2 == 2
+    assert seeds1 != seeds2
+    assert seeds1[ab.NODE_HIGH_SAMPLER] != seeds2[ab.NODE_HIGH_SAMPLER]
+
+
+def test_assign_fresh_benchmark_seeds_not_baseline_fixture_values(
+    reset_benchmark_run_seq: None,
+) -> None:
+    prompt = ab.build_prompt("control")
+    _seq, seeds = ab.assign_fresh_benchmark_seeds(prompt)
+    assert seeds[ab.NODE_HIGH_SAMPLER] != ab.BASELINE[ab.NODE_HIGH_SAMPLER]["inputs"]["seed"]
+    assert seeds[ab.NODE_LOW_SAMPLER] != ab.BASELINE[ab.NODE_LOW_SAMPLER]["inputs"]["seed"]
+    assert seeds[ab.NODE_FRAME_SAMPLE] != ab.BASELINE[ab.NODE_FRAME_SAMPLE]["inputs"]["seed"]
+    assert seeds[ab.NODE_HIGH_SAMPLER] == 42 + 1
+    assert seeds[ab.NODE_LOW_SAMPLER] == 43 + 1
+    assert seeds[ab.NODE_FRAME_SAMPLE] == 42 + 1
