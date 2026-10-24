@@ -42,15 +42,19 @@ from `tests/fixtures/vace_defective_workflow.json` (single source of truth). Tes
 pin both the raw file SHA-256 and the canonical JSON hash so the fixture cannot
 drift silently.
 
-Recovered graph (node ids):
+Recovered graph (node ids). The fixture file is checksum-pinned in
+`tests/test_vace_ab.py` (raw file SHA-256 and canonical JSON hash).
 
 | Node | Role |
 |------|------|
-| `1` / `2` | `WanVideoModelLoader` — `wan2.2_fun_vace_*_noise_14B_fp8_scaled` (no separate `vace_model`; weights are merged Fun VACE checkpoints) |
-| `6` | `WanVideoVACEEncode` — 480×832, 29 frames, strength 1.0, VACE window 0–100% |
-| `7` / `8` | `WanVideoSampler` — 6 steps, CFG 1.0, shift 5.0, `dpm++_sde`, split at step 3 |
-| `30` → `31` → `32` → `33` | `LoadVideo` (`vace_test.mp4`) → `VideoFrameSample` → `GetVideoComponents` → `ImageResizeKJ` (`divisible_by` 16) |
-| `40` / `41` | `CreateVideo` (16 fps) → `SaveVideo` (`filename_prefix` `wv_vace_final`) |
+| `1` / `2` | `WanVideoModelLoader` — high/low `wan2.2_fun_vace_*_noise_14B_fp8_scaled`, `block_swap_args` → `3`, sageattn, fp8 scaled quant |
+| `3` | `WanVideoBlockSwap` — `blocks_to_swap` 30, `vace_blocks_to_swap` 8 |
+| `4` / `5` | `LoadWanVideoT5TextEncoder` → `WanVideoTextEncode` |
+| `6` | `WanVideoVACEEncode` — 480×832, 29 frames, strength 1.0, VACE 0–100%, VAE from node `9` |
+| `7` / `8` | `WanVideoSampler` — 6 steps, CFG 1.0, shift 5.0, `dpm++_sde`, split at step 3 (seeds 42 / 43), `rope_function` comfy |
+| `9` / `10` | `WanVideoVAELoader` (`Wan2_1_VAE_bf16.safetensors`) → `WanVideoDecode` |
+| `30` → `31` → `32` → `33` | `LoadVideo` (`vace_test.mp4`) → `VideoFrameSample` (`head`, seed 42) → `GetVideoComponents` → `ImageResizeKJ` (lanczos, `divisible_by` 16) |
+| `40` / `41` | `CreateVideo` (16 fps, 8-bit) → `SaveVideo` (`wv_vace_final`, h264 mp4) |
 
 No `WanVideoImageToVideoEncode` and no `VHS_*` nodes (native ComfyUI video I/O).
 

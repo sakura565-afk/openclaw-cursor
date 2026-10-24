@@ -15,10 +15,10 @@ FIXTURE = Path(__file__).resolve().parent / "fixtures" / "vace_defective_workflo
 
 # Checksums of tests/fixtures/vace_defective_workflow.json (recovered ComfyUI prompt).
 FIXTURE_FILE_SHA256 = (
-    "443a5e053e2942460117116d678ad4c2f862245a91fd0916e69889a0aff30c54"
+    "9093545970f1a290e33218e53a368c7d9cd033e5a7a8dd60d39d04d1e16bb63d"
 )
 FIXTURE_CANONICAL_SHA256 = (
-    "e15af7bcc7220d7e8e0f7d6b93b98a8c1439e3a689a0a78c69a140d48068ae8b"
+    "bc4abde5f1e411bf6d371ac4870dc206d90f58537a9f6cd8569802968b5aceea"
 )
 
 EXPECTED_NODE_CLASSES = {
@@ -33,7 +33,6 @@ EXPECTED_NODE_CLASSES = {
     "WanVideoDecode",
     "WanVideoModelLoader",
     "WanVideoSampler",
-    "WanVideoSetBlockSwap",
     "WanVideoTextEncode",
     "WanVideoVACEEncode",
     "WanVideoVAELoader",
@@ -98,6 +97,8 @@ def test_baseline_is_the_real_defective_prompt(fixture_workflow: dict) -> None:
         assert sampler["scheduler"] == "dpm++_sde"
 
     assert fixture_workflow["30"]["inputs"]["file"] == "vace_test.mp4"
+    assert fixture_workflow["31"]["inputs"]["strategy"] == "head"
+    assert fixture_workflow["31"]["inputs"]["seed"] == 42
     assert fixture_workflow["33"]["inputs"]["divisible_by"] == 16
 
     classes = {node["class_type"] for node in fixture_workflow.values()}
