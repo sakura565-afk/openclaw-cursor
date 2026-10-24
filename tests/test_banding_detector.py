@@ -66,6 +66,35 @@ def _dense_black_bands(h: int = 256, w: int = 256, period: int = 16) -> np.ndarr
     return arr
 
 
+def _grey_band_frame(
+    h: int = 256,
+    w: int = 256,
+    y0: int = 100,
+    height: int = 16,
+) -> np.ndarray:
+    """Persistent horizontal stripe that is not green (scene geometry)."""
+    base = _gradient_frame(h, w)
+    y1 = y0 + height
+    base[y0:y1, :, 0] = 200
+    base[y0:y1, :, 1] = 200
+    base[y0:y1, :, 2] = 210
+    return base
+
+
+def _blue_band_frame(
+    h: int = 256,
+    w: int = 256,
+    y0: int = 100,
+    height: int = 16,
+) -> np.ndarray:
+    base = _gradient_frame(h, w)
+    y1 = y0 + height
+    base[y0:y1, :, 0] = 30
+    base[y0:y1, :, 1] = 60
+    base[y0:y1, :, 2] = 220
+    return base
+
+
 def _rail_frame(h: int = 256, w: int = 256) -> np.ndarray:
     arr = np.zeros((h, w, 3), dtype=np.uint8)
     arr[:100, :] = (30, 30, 30)
@@ -152,6 +181,42 @@ class TestAnalyzeFrames:
         banded = analyze_frames(banded_frames)
         assert clean.score < banded.score
         assert banded.score > 0.0
+
+    def test_non_green_persistent_band_is_geometry(self) -> None:
+        frames = [_grey_band_frame(y0=100, height=16) for _ in range(5)]
+        report = analyze_frames(frames, min_consecutive_frames=2)
+        assert report.band_count >= 1
+        assert report.verdict == "geometry"
+        assert report.verdict != "banding"
+        assert report.score == 0.0
+        assert report.band_green_dominance < 5.0
+
+    def test_blue_persistent_band_is_geometry(self) -> None:
+        frames = [_blue_band_frame(y0=100, height=16) for _ in range(5)]
+        report = analyze_frames(frames, min_consecutive_frames=2)
+        assert report.band_count >= 1
+        assert report.verdict == "geometry"
+        assert report.score == 0.0
+
+    def test_green_persistent_band_is_banding(self) -> None:
+        frames = [_banded_frame(y0=100, height=16) for _ in range(5)]
+        report = analyze_frames(frames, min_consecutive_frames=2)
+        assert report.band_count >= 1
+        assert report.verdict == "banding"
+        assert report.band_green_dominance >= 5.0
+        assert report.score > 0.0
+
+    def test_dense_periodic_green_stripes_verdict_periodic(self) -> None:
+        frames = [_dense_green_stripes() for _ in range(3)]
+        report = analyze_frames(frames)
+        assert report.verdict == "periodic"
+        assert report.periodic
+
+    def test_clean_frame_verdict_clean(self) -> None:
+        frames = [_gradient_frame() for _ in range(5)]
+        report = analyze_frames(frames)
+        assert report.verdict == "clean"
+        assert report.score == 0.0
 
 
 class TestAnalyzePaths:
