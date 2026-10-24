@@ -21,6 +21,18 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 
 
 @dataclass
+class FramePeriodic:
+    """Per-frame periodic horizontal stripe pattern metrics."""
+
+    detected: bool = False
+    lag: int = 0
+    best_corr: float = 0.0
+    median_corr: float = 0.0
+    amplitude: float = 0.0
+    channel: str = ""
+
+
+@dataclass
 class FrameBands:
     """Per-frame horizontal band detection result."""
 
@@ -28,6 +40,7 @@ class FrameBands:
     band_count: int = 0
     total_band_height: int = 0
     green_dominance: float = 0.0
+    periodic: FramePeriodic = field(default_factory=FramePeriodic)
 
 
 @dataclass
@@ -42,6 +55,13 @@ class BandReport:
     bands: list[dict[str, Any]] = field(default_factory=list)
     frames_analyzed: int = 0
     green_dominance: float = 0.0
+    periodic: bool = False
+    periodic_lag: float = 0.0
+    periodic_best_corr: float = 0.0
+    periodic_median_corr: float = 0.0
+    periodic_amplitude: float = 0.0
+    periodic_channel: str = ""
+    periodic_frame_ratio: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -122,6 +142,83 @@ def _wide_dark_rows(
     return darker > threshold
 
 
+def _row_profile_green(rgb: np.ndarray) -> np.ndarray:
+    g = rgb[:, :, 1].mean(axis=1)
+    r = rgb[:, :, 0].mean(axis=1)
+    b = rgb[:, :, 2].mean(axis=1)
+    return g - 0.5 * (r + b)
+
+
+def _row_profile_luma(rgb: np.ndarray) -> np.ndarray:
+    r = rgb[:, :, 0].mean(axis=1)
+    g = rgb[:, :, 1].mean(axis=1)
+    b = rgb[:, :, 2].mean(axis=1)
+    return 0.299 * r + 0.587 * g + 0.114 * b
+
+
+def _periodic_stripe_metrics(profile: np.ndarray, height: int) -> FramePeriodic:
+    """Detect dense periodic horizontal stripes via normalized autocorrelation."""
+    min_lag = 6
+    max_lag = min(64, height // 3)
+    if max_lag < min_lag:
+        return FramePeriodic()
+
+    x = profile.astype(np.float64)
+    x_centered = x - float(np.mean(x))
+    corrs: list[float] = []
+    best_lag = min_lag
+    best_corr = -2.0
+    for lag in range(min_lag, max_lag + 1):
+        a = x_centered[:-lag]
+        b = x_centered[lag:]
+        denom = float(np.sqrt(np.dot(a, a) * np.dot(b, b)))
+        if denom < 1e-12:
+            corr = 0.0
+        else:
+            corr = float(np.dot(a, b) / denom)
+        corrs.append(corr)
+        if corr > best_corr + 1e-12 or (
+            abs(corr - best_corr) <= 1e-12 and lag < best_lag
+        ):
+            best_corr = corr
+            best_lag = lag
+
+    median_corr = float(np.median(corrs))
+    amplitude = float(np.percentile(x, 95) - np.percentile(x, 5))
+    edge_thresh = max(amplitude * 0.15, 1.0)
+    stripe_transitions = int(np.sum(np.abs(np.diff(x)) > edge_thresh))
+    min_transitions = max(6, (height // best_lag) - 1) if best_lag > 0 else 6
+    detected = (
+        best_lag >= 6
+        and best_corr >= 0.80
+        and amplitude >= 18.0
+        and (best_corr - median_corr) >= 0.25
+        and stripe_transitions >= min_transitions
+    )
+    return FramePeriodic(
+        detected=detected,
+        lag=best_lag,
+        best_corr=best_corr,
+        median_corr=median_corr,
+        amplitude=amplitude,
+        channel="",
+    )
+
+
+def _analyze_frame_periodic(rgb: np.ndarray) -> FramePeriodic:
+    height = rgb.shape[0]
+    green_prof = _row_profile_green(rgb)
+    if float(np.max(np.abs(green_prof))) < 1.0:
+        channel = "luma"
+        prof = _row_profile_luma(rgb)
+    else:
+        channel = "green"
+        prof = green_prof
+    result = _periodic_stripe_metrics(prof, height)
+    result.channel = channel
+    return result
+
+
 def _group_rows(mask: np.ndarray, min_band_height: int) -> list[tuple[int, int, int]]:
     bands: list[tuple[int, int, int]] = []
     h = len(mask)
@@ -169,18 +266,15 @@ def analyze_frame_array(
     bands = _group_rows(anomalous, min_band_height)
     band_count = len(bands)
     total_height = sum(b[2] for b in bands)
-    green_score = 0.0
-    if bands:
-        vals = []
-        for y0, y1, _ in bands:
-            vals.append(float(np.mean(green_dom[y0:y1])))
-        green_score = float(np.mean(vals))
+    green_score = float(np.mean(green_dom))
+    periodic = _analyze_frame_periodic(rgb)
 
     return FrameBands(
         bands=bands,
         band_count=band_count,
         total_band_height=total_height,
         green_dominance=green_score,
+        periodic=periodic,
     )
 
 
@@ -194,6 +288,19 @@ def _compute_score(
     height_term = (band_height_px / 24.0) * 45.0
     ratio_term = affected_frame_ratio * 55.0
     return float(min(100.0, height_term + ratio_term))
+
+
+def _compute_periodic_score(
+    periodic_frame_ratio: float,
+    best_corr: float,
+    amplitude: float,
+) -> float:
+    if periodic_frame_ratio <= 0.0:
+        return 0.0
+    corr_term = max(0.0, (best_corr - 0.80) / 0.20) * 35.0
+    amp_term = min(25.0, (amplitude / 40.0) * 25.0)
+    ratio_term = periodic_frame_ratio * 40.0
+    return float(min(100.0, corr_term + amp_term + ratio_term))
 
 
 def analyze_frames(
@@ -241,11 +348,41 @@ def analyze_frames(
         affected_indices |= frame_ids
     affected_frame_ratio = len(affected_indices) / len(frames)
 
-    score = _compute_score(band_count, band_height_px, affected_frame_ratio)
-    verdict = "banding" if band_count > 0 else "clean"
+    band_score = _compute_score(band_count, band_height_px, affected_frame_ratio)
 
-    green_vals = [per_frame[i].green_dominance for i in affected_indices if per_frame[i].green_dominance]
-    green_dominance = float(np.mean(green_vals)) if green_vals else 0.0
+    periodic_frames = [fb for fb in per_frame if fb.periodic.detected]
+    periodic_frame_ratio = len(periodic_frames) / len(frames)
+    periodic_detected = len(periodic_frames) > 0
+    if periodic_frames:
+        rep = max(periodic_frames, key=lambda fb: fb.periodic.best_corr)
+        p = rep.periodic
+        periodic_lag = float(p.lag)
+        periodic_best_corr = p.best_corr
+        periodic_median_corr = p.median_corr
+        periodic_amplitude = p.amplitude
+        periodic_channel = p.channel
+    else:
+        periodic_lag = 0.0
+        periodic_best_corr = 0.0
+        periodic_median_corr = 0.0
+        periodic_amplitude = 0.0
+        periodic_channel = ""
+
+    periodic_score = _compute_periodic_score(
+        periodic_frame_ratio,
+        periodic_best_corr,
+        periodic_amplitude,
+    )
+    score = float(max(band_score, periodic_score))
+
+    if periodic_detected:
+        verdict = "periodic"
+    elif band_count > 0:
+        verdict = "banding"
+    else:
+        verdict = "clean"
+
+    green_dominance = float(np.mean([fb.green_dominance for fb in per_frame]))
 
     bands_out = [
         {
@@ -266,6 +403,13 @@ def analyze_frames(
         bands=bands_out,
         frames_analyzed=len(frames),
         green_dominance=green_dominance,
+        periodic=periodic_detected,
+        periodic_lag=periodic_lag,
+        periodic_best_corr=periodic_best_corr,
+        periodic_median_corr=periodic_median_corr,
+        periodic_amplitude=periodic_amplitude,
+        periodic_channel=periodic_channel,
+        periodic_frame_ratio=periodic_frame_ratio,
     )
 
 
@@ -427,10 +571,18 @@ def _format_summary(data: dict[str, Any]) -> str:
         f"Frames analyzed: {data.get('frames_analyzed', 0)}",
         f"Verdict: {data.get('verdict', '?')}",
         f"Score: {data.get('score', 0):.1f}/100",
+        f"Green dominance: {data.get('green_dominance', 0):.2f}",
         f"Bands: {data.get('band_count', 0)} "
         f"(median height {data.get('band_height_px', 0):.1f}px, "
         f"affected frames {data.get('affected_frame_ratio', 0) * 100:.0f}%)",
     ]
+    if data.get("periodic"):
+        lines.append(
+            f"Periodic stripes: lag={data.get('periodic_lag', 0):.0f}px "
+            f"corr={data.get('periodic_best_corr', 0):.3f} "
+            f"channel={data.get('periodic_channel', '?')} "
+            f"({data.get('periodic_frame_ratio', 0) * 100:.0f}% frames)"
+        )
     for band in data.get("bands", []):
         lines.append(
             f"  y={band['y0']}-{band['y1']} ({band['height']}px) "
