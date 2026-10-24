@@ -193,6 +193,9 @@ def test_cases_each_change_one_variable_except_combo() -> None:
         if name == "unipc":
             assert overrides == {"scheduler": "unipc", "shift": 8.0}
             continue
+        if name in ("nb_pf2", "nb_pf4"):
+            assert "use_non_blocking" in overrides and "prefetch_blocks" in overrides
+            continue
         assert len(overrides) == 1, f"{name} should isolate one variable"
 
 
@@ -216,6 +219,69 @@ def test_parse_execution_metrics_span_and_cached() -> None:
     span, cached = ab.parse_execution_metrics(history)
     assert span == pytest.approx(81.6)
     assert cached == ["4", "5", "6", "9", "30", "31", "32", "33"]
+
+
+def test_block_swap_node_is_wan_video_block_swap(fixture_workflow: dict) -> None:
+    node = fixture_workflow[ab.NODE_BLOCK_SWAP]
+    assert node["class_type"] == "WanVideoBlockSwap"
+    assert fixture_workflow["1"]["inputs"]["block_swap_args"][0] == ab.NODE_BLOCK_SWAP
+    assert fixture_workflow["2"]["inputs"]["block_swap_args"][0] == ab.NODE_BLOCK_SWAP
+
+
+def test_apply_overrides_block_swap_levers() -> None:
+    out = ab.apply_overrides(
+        ab.BASELINE,
+        {
+            "use_non_blocking": True,
+            "prefetch_blocks": 2,
+            "blocks_to_swap": 20,
+            "vace_blocks_to_swap": 0,
+        },
+    )
+    bs = out[ab.NODE_BLOCK_SWAP]["inputs"]
+    assert bs["use_non_blocking"] is True
+    assert bs["prefetch_blocks"] == 2
+    assert bs["blocks_to_swap"] == 20
+    assert bs["vace_blocks_to_swap"] == 0
+    assert ab.BASELINE[ab.NODE_BLOCK_SWAP]["inputs"]["use_non_blocking"] is False
+
+
+def test_build_prompt_nb_pf2_sets_block_swap_inputs() -> None:
+    prompt = ab.build_prompt("nb_pf2")
+    bs = prompt[ab.NODE_BLOCK_SWAP]["inputs"]
+    assert bs["use_non_blocking"] is True
+    assert bs["prefetch_blocks"] == 2
+
+
+def test_build_prompt_control_leaves_block_swap_baseline() -> None:
+    prompt = ab.build_prompt("control")
+    assert (
+        prompt[ab.NODE_BLOCK_SWAP]["inputs"]
+        == ab.BASELINE[ab.NODE_BLOCK_SWAP]["inputs"]
+    )
+
+
+def test_build_prompt_nonblocking_and_prefetch2_cases() -> None:
+    nb = ab.build_prompt("nonblocking")
+    assert nb[ab.NODE_BLOCK_SWAP]["inputs"]["use_non_blocking"] is True
+    assert "prefetch_blocks" not in nb[ab.NODE_BLOCK_SWAP]["inputs"]
+
+    pf = ab.build_prompt("prefetch2")
+    assert pf[ab.NODE_BLOCK_SWAP]["inputs"]["prefetch_blocks"] == 2
+    assert pf[ab.NODE_BLOCK_SWAP]["inputs"]["use_non_blocking"] is False
+
+
+def test_cases_block_swap_matrix_definitions() -> None:
+    assert ab.CASES["nonblocking"] == {"use_non_blocking": True}
+    assert ab.CASES["prefetch2"] == {"prefetch_blocks": 2}
+    assert ab.CASES["nb_pf2"] == {
+        "use_non_blocking": True,
+        "prefetch_blocks": 2,
+    }
+    assert ab.CASES["nb_pf4"] == {
+        "use_non_blocking": True,
+        "prefetch_blocks": 4,
+    }
 
 
 def test_parse_execution_metrics_missing_timestamps() -> None:
