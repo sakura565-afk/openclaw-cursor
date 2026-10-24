@@ -46,9 +46,21 @@ exec_span_s = (execution_success.timestamp - execution_start.timestamp) / 1000
 
 The harness now records **`exec_span`** (seconds) alongside wall-clock **`seconds`** and the **`execution_cached`** node list. Use **`exec_span`** for speed comparisons.
 
-`execution_cached` lists nodes whose outputs were reused. In this VACE graph that is only deterministic pre-processing — nodes **4** (`LoadWanVideoT5TextEncoder`), **5** (`WanVideoTextEncode`), **6** (`WanVideoVACEEncode`), **9** (`WanVideoVAELoader`), **30**–**33** (video load/resize). Samplers **7** and **8** are **never** cached, so every run still executed the sampling work and spans are comparable.
+`execution_cached` lists nodes whose outputs were reused. In this VACE graph that is only deterministic pre-processing — nodes **4** (`LoadWanVideoT5TextEncoder`), **5** (`WanVideoTextEncode`), **6** (`WanVideoVACEEncode`), **9** (`WanVideoVAELoader`), **30**–**33** (video load/resize). Samplers **7** and **8** must not appear there on a valid benchmark run (see below).
+
+### The seed trap (silent invalidation of a benchmark)
+
+The recovered workflow uses **fixed seeds** (node **7** → 42, node **8** → 43, node **31** → 42). ComfyUI caches node outputs by input hash, so re-submitting the **same** graph can be served **entirely from cache** — the job finishes in ~**0.6 s** with the **samplers never executing**. One such run appeared in an early matrix as a bogus fast row.
+
+[`scripts/vace_ab.py`](../scripts/vace_ab.py) now **bumps those seeds on every `run_case`** (module run counter: `base + seq` per node). Reports record **`run_seq`** and the applied **`seeds`**. When benchmarking by hand, **change the seed** between runs and confirm **`execution_cached` does not list nodes 7 or 8**.
 
 **Banding verdicts** are independent of timing: re-analyse the saved **`.mp4` on disk** with [`scripts/banding_detector.py`](../scripts/banding_detector.py). The ComfyUI **preview URL can 404** while the render succeeded; do not treat a missing preview as a failed run.
+
+### Output discovery
+
+On this ComfyUI build, the WanVideoWrapper **`SaveVideo`** node reports finished files under the **`images`** key in history (not **`gifs`** or **`videos`**), with an **`animated`** sibling on the node output. The harness collects **`gifs`**, **`videos`**, and **`images`**, and prefers an entry whose **`type`** is **`output`** so the graph’s **`LoadVideo`** input (`type: input`) is never scored as the result.
+
+If the `.mp4` is not present under a local **`ComfyUI/`** tree or **`--output-dir`**, the harness downloads it from the instance via **`GET /view?filename=…&subfolder=…&type=…`** into a temporary file before banding analysis. **`--output-dir`** is only a local mirror fallback, not the ComfyUI install path.
 
 ## Recommended configuration (quality + speed)
 
@@ -63,22 +75,40 @@ Hardware as above; **6-step** harness graph unless noted. **11/11** runs re-veri
 
 | Configuration | Run 1 (s) | Run 2 (s) | Run 3 (s) | Median (s) |
 |---------------|-----------|-----------|-----------|------------|
-| `use_non_blocking=True` + `prefetch_blocks=2` | 72.1 | 72.3 | — | **72.2** |
-| `use_non_blocking=True` | 79.0 | 80.9 | — | **80.0** |
+| `use_non_blocking=True` + `prefetch_blocks=2` | 72.1 | 72.3 | — | **72.3** |
+| `use_non_blocking=True` | 79.0 | 80.9 | — | **80.9** |
 | `prefetch_blocks=2` | 123.4 | 121.4 | — | 122.4 |
 | Baseline (`fp8_e4m3fn_scaled` + sageattn) | 130.7 | 114.8 | 185.3 | 130.7 |
-| `attention_mode="sdpa"` | 138.4 | 135.6 | — | 137.0 |
+| `attention_mode="sdpa"` | 138.4 | 135.6 | — | 138.4 |
 
-**Headline:** **1.8× faster than baseline median** (130.7 s → **72.2 s**) and **~2.0× versus baseline mean** (143.6 s → 72.2 s), with every run still clean.
+Reproduce the headline row and neighbors on this hardware:
+
+```bash
+python scripts/vace_ab.py --matrix --only control,nonblocking,prefetch2,nb_pf2
+```
+
+**Headline:** **1.8× faster than baseline median** (130.7 s → **72.3 s**) and **~2.0× versus baseline mean** (143.6 s → 72.3 s), with every run still clean.
 
 Same sessions illustrate queue pollution on wall clock vs execution span: e.g. `control_sdpa` **260.3 s** wall vs **138.4 s** exec; `control_nonblocking` **190.9 s** wall vs **79.0 s** exec. Quote **execution span** in write-ups.
 
 The live production script (`wv_vace_kj_*.mp4`, full **20-step** schedule) measured **324.4 s** execution span (different step count — not comparable to the 6-step rows above).
 
+### How to reproduce
+
+On the same RTX 4070 Ti SUPER box, run the harness subset that maps to the table rows above:
+
+```bash
+python scripts/vace_ab.py --matrix --only control,nonblocking,prefetch2,nb_pf2
+```
+
+Expect execution-span medians near **72.3 s** (`nb_pf2`), **80.9 s** (`nonblocking`), **122.4 s** (`prefetch2`), and **130.7 s** (`control` baseline). Each run should still score **`clean`** when re-analysed from the on-disk `.mp4`.
+
+With `use_non_blocking=True`, a prefetch sweep found **prefetch_blocks 2–6** equivalent (~72 s) and **8** degrading (**128.3 s**); use **2–4** in production.
+
 ### What the levers mean
 
-- **`use_non_blocking=True`** — input on **`WanVideoBlockSwap`**: “Use non blocking transfer to GPU. This will be faster but will use more VRAM.” Largest single lever on this card (median **80.0 s** vs baseline **130.7 s**). Measured VRAM during non-blocking runs: **7.6 GB** peak of **16 GB** (~**8.4 GB** free at 480×832 / 29 frames). Comfortable here; at higher resolutions watch free VRAM because swapped blocks stay resident longer.
-- **`prefetch_blocks=2`** — ~**1.15×** vs baseline median when combined with other settings; worthwhile with block swap.
+- **`use_non_blocking=True`** — input on **`WanVideoBlockSwap`**: “Use non blocking transfer to GPU. This will be faster but will use more VRAM.” Largest single lever on this card (median **80.9 s** vs baseline **130.7 s**). Non-blocking transfers keep swapped blocks in VRAM longer; measured peak **7.6 GB** of **16 GB** (~**8.4 GB** free at 480×832 / 29 frames). Comfortable here; at higher resolutions watch free VRAM.
+- **`prefetch_blocks=2`** — with non-blocking, completes the headline config (~**72.3 s** median). Alone (~**122.4 s**) it does not beat baseline; pair it with `use_non_blocking`. Prefetch **2–6** is equivalent on this card; **8** regresses to **128.3 s** — prefer **2–4**.
 - **`attention_mode="sdpa"`** — PyTorch SDPA; ~**1.05×** vs baseline median on this card (SageAttention is still the default in the baseline).
 - Keep **`fp8_e4m3fn_scaled`** over plain **`fp8_e4m3fn`** (scaled is faster on this stack).
 - **`fp8_e4m3fn_scaled_fast`** was **`clean` in every run** — not flaky. Apparent “errors” were harness preview **404**s, not render failures.

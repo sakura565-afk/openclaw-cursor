@@ -7,6 +7,7 @@ import argparse
 import copy
 import json
 import sys
+import tempfile
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -32,7 +33,8 @@ def _analyze_video(path: Path, fps: float = 2.0) -> dict[str, Any]:
 
 DEFAULT_COMFY_URL = "http://127.0.0.1:8188"
 DEFAULT_REPORT_PATH = Path("memory/vace_ab_report.json")
-DEFAULT_OUTPUT_DIR = Path("output/vace_ab")
+# Local mirror only; ComfyUI may live elsewhere. Missing files are fetched via /view.
+DEFAULT_OUTPUT_DIR = Path(tempfile.gettempdir()) / "vace_ab"
 
 # ComfyUI prompt node ids (recovered defective Wan2.2 Fun VACE workflow).
 NODE_HIGH_LOADER = "1"
@@ -45,7 +47,16 @@ NODE_BLOCK_SWAP = "3"
 NODE_VAE = "9"
 NODE_DECODE = "10"
 NODE_RESIZE = "33"
+NODE_FRAME_SAMPLE = "31"
 NODE_SAVE = "41"
+
+# Baseline fixture seeds; bumped per harness run so ComfyUI cannot serve the full graph from cache.
+_BENCHMARK_SEED_BASE: dict[str, int] = {
+    NODE_HIGH_SAMPLER: 42,
+    NODE_LOW_SAMPLER: 43,
+    NODE_FRAME_SAMPLE: 42,
+}
+_RUN_SEQ: list[int] = [0]
 
 
 def _fixture_path() -> Path:
@@ -80,6 +91,10 @@ CASES: dict[str, dict[str, Any]] = {
         "scheduler": "unipc",
         "shift": 8.0,
     },
+    "nonblocking": {"use_non_blocking": True},
+    "prefetch2": {"prefetch_blocks": 2},
+    "nb_pf2": {"use_non_blocking": True, "prefetch_blocks": 2},
+    "nb_pf4": {"use_non_blocking": True, "prefetch_blocks": 4},
 }
 
 CASE_DESCRIPTIONS: dict[str, str] = {
@@ -93,6 +108,10 @@ CASE_DESCRIPTIONS: dict[str, str] = {
     "sdpa": "SDPA attention on both model loaders.",
     "noquant": "Quantization disabled on both loaders.",
     "combo": "CFG 5.0 + 20 steps / split 10 + UniPC + shift 8.0.",
+    "nonblocking": "WanVideoBlockSwap use_non_blocking=True.",
+    "prefetch2": "WanVideoBlockSwap prefetch_blocks=2.",
+    "nb_pf2": "use_non_blocking=True and prefetch_blocks=2 (headline speed config).",
+    "nb_pf4": "use_non_blocking=True and prefetch_blocks=4.",
 }
 
 
@@ -112,10 +131,36 @@ class CaseResult:
     seconds: float | None = None
     exec_span: float | None = None
     execution_cached: list[str] = field(default_factory=list)
+    run_seq: int | None = None
+    seeds: dict[str, int] = field(default_factory=dict)
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def assign_fresh_benchmark_seeds(
+    prompt: dict[str, dict[str, Any]],
+) -> tuple[int, dict[str, int]]:
+    """
+    Bump sampler / frame-sample seeds so repeated matrix runs are not fully cached.
+
+    Mutates prompt in place. Returns (run_seq, node_id -> seed applied).
+    """
+    _RUN_SEQ[0] += 1
+    seq = _RUN_SEQ[0]
+    applied: dict[str, int] = {}
+    for nid, base in _BENCHMARK_SEED_BASE.items():
+        node = prompt.get(nid)
+        if not node:
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict) or "seed" not in inputs:
+            continue
+        value = base + seq
+        inputs["seed"] = value
+        applied[nid] = value
+    return seq, applied
 
 
 def parse_execution_metrics(history: dict[str, Any]) -> tuple[float | None, list[str]]:
@@ -270,6 +315,21 @@ def apply_overrides(
     if "prefix" in overrides:
         out[NODE_SAVE]["inputs"]["filename_prefix"] = str(overrides["prefix"])
 
+    block_swap_keys = (
+        "use_non_blocking",
+        "prefetch_blocks",
+        "blocks_to_swap",
+        "vace_blocks_to_swap",
+    )
+    for key in block_swap_keys:
+        if key not in overrides:
+            continue
+        val = overrides[key]
+        if key == "use_non_blocking":
+            out[NODE_BLOCK_SWAP]["inputs"][key] = bool(val)
+        else:
+            out[NODE_BLOCK_SWAP]["inputs"][key] = int(val)
+
     return out
 
 
@@ -312,17 +372,75 @@ class ComfyRunner:
         raise TimeoutError(f"timed out waiting for prompt {prompt_id}")
 
     def find_output_video(self, history: dict[str, Any]) -> Path | None:
+        """Return the best video path from ComfyUI history outputs, or None."""
         outputs = history.get("outputs", {})
+        ranked: list[tuple[int, Path]] = []
         for node_out in outputs.values():
-            for key in ("gifs", "videos"):
+            for key in ("gifs", "videos", "images"):
                 for item in node_out.get(key, []) or []:
                     filename = item.get("filename")
                     if not filename:
                         continue
-                    subfolder = item.get("subfolder", "")
+                    subfolder = item.get("subfolder", "") or ""
                     folder_type = item.get("type", "output")
-                    return Path(folder_type) / subfolder / filename
-        return None
+                    if folder_type == "output":
+                        rank = 0
+                    elif folder_type == "input":
+                        rank = 2
+                    else:
+                        rank = 1
+                    rel = Path(folder_type) / subfolder / filename
+                    ranked.append((rank, rel))
+        if not ranked:
+            return None
+        ranked.sort(key=lambda pair: pair[0])
+        if ranked[0][0] >= 2:
+            return None
+        return ranked[0][1]
+
+    @staticmethod
+    def _split_output_rel(rel: Path) -> tuple[str, str, str]:
+        parts = rel.parts
+        if len(parts) < 2:
+            raise ValueError(f"invalid ComfyUI output path: {rel}")
+        folder_type = parts[0]
+        filename = parts[-1]
+        subfolder = str(Path(*parts[1:-1])) if len(parts) > 2 else ""
+        return folder_type, subfolder, filename
+
+    def download_output_video(
+        self, filename: str, subfolder: str = "", folder_type: str = "output"
+    ) -> Path:
+        """Fetch a rendered file from ComfyUI /view into a temporary path."""
+        params = {
+            "filename": filename,
+            "subfolder": subfolder,
+            "type": folder_type,
+        }
+        response = self._request("GET", "/view", params=params)
+        suffix = Path(filename).suffix or ".mp4"
+        handle, raw_path = tempfile.mkstemp(prefix="vace_ab_", suffix=suffix)
+        dest = Path(raw_path)
+        try:
+            with open(handle, "wb") as out:
+                out.write(response.content)
+        except Exception:
+            dest.unlink(missing_ok=True)
+            raise
+        return dest
+
+    def resolve_output_video(self, rel: Path, output_dir: Path) -> Path:
+        """
+        Locate the rendered video on disk, or download it from ComfyUI /view.
+
+        Tries ComfyUI/ relative to cwd, then output_dir (local mirror fallback).
+        """
+        local_candidates = [Path("ComfyUI") / rel, output_dir / rel.name]
+        for candidate in local_candidates:
+            if candidate.is_file():
+                return candidate
+        folder_type, subfolder, filename = self._split_output_rel(rel)
+        return self.download_output_video(filename, subfolder, folder_type)
 
 
 def score_video(path: Path, fps: float = 2.0) -> dict[str, Any]:
@@ -340,6 +458,9 @@ def run_case(
     result = CaseResult(case=case, overrides=dict(overrides))
     try:
         prompt = build_prompt(case)
+        run_seq, seeds = assign_fresh_benchmark_seeds(prompt)
+        result.run_seq = run_seq
+        result.seeds = seeds
         issues = validate_graph(prompt)
         if issues:
             raise RuntimeError(
@@ -357,9 +478,7 @@ def run_case(
         rel = runner.find_output_video(history)
         if rel is None:
             raise RuntimeError("no video output in ComfyUI history")
-        video_path = Path("ComfyUI") / rel
-        if not video_path.is_file():
-            video_path = output_dir / rel.name
+        video_path = runner.resolve_output_video(rel, output_dir)
         result.video_path = str(video_path)
         result.banding = score_video(video_path, fps=fps)
     except Exception as exc:  # noqa: BLE001 - surfaced in report JSON
@@ -416,10 +535,23 @@ def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list", action="store_true", help="List experiment cases.")
     parser.add_argument("--run", metavar="CASE", help="Queue one case on ComfyUI and score.")
     parser.add_argument("--matrix", action="store_true", help="Run every case sequentially.")
+    parser.add_argument(
+        "--only",
+        metavar="CASES",
+        help="Comma-separated case names to run with --matrix (default: all).",
+    )
     parser.add_argument("--report", action="store_true", help="Print saved report table.")
     parser.add_argument("--comfy-url", default=DEFAULT_COMFY_URL, dest="comfy_url")
     parser.add_argument("--report-path", type=Path, default=DEFAULT_REPORT_PATH)
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR,
+        help=(
+            "Local ComfyUI output mirror (fallback before downloading via /view). "
+            f"Default: {DEFAULT_OUTPUT_DIR}"
+        ),
+    )
     parser.add_argument("--fps", type=float, default=2.0, help="Banding detector video FPS.")
     args = parser.parse_args(argv)
 
@@ -450,8 +582,16 @@ def _main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.matrix:
+        if args.only:
+            case_names = [c.strip() for c in args.only.split(",") if c.strip()]
+            unknown = [c for c in case_names if c not in CASES]
+            if unknown:
+                print(f"Unknown case(s): {', '.join(unknown)}", file=sys.stderr)
+                return 1
+        else:
+            case_names = list(CASES)
         results: list[CaseResult] = []
-        for case in CASES:
+        for case in case_names:
             print(f"Running {case}...", file=sys.stderr)
             results.append(
                 run_case(
