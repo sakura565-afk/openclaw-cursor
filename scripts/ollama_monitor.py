@@ -176,7 +176,7 @@ def is_pid_running(pid: int | None) -> bool:
         return False
     try:
         os.kill(int(pid), 0)
-    except (OSError, ValueError):
+    except (OSError, ValueError, SystemError):
         return False
     return True
 
