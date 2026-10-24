@@ -42,7 +42,8 @@ class ProactiveSkillWatcherTests(unittest.TestCase):
         beta_dir.mkdir(parents=True, exist_ok=True)
         (beta_dir / "broken.py").write_text("def broken(:\n    pass\n", encoding="utf-8")
 
-        old_mtime = (datetime.now(timezone.utc) - timedelta(days=45)).timestamp()
+        watcher_now = datetime(2026, 5, 4, tzinfo=timezone.utc)
+        old_mtime = (watcher_now - timedelta(days=45)).timestamp()
         os.utime(beta_dir / "broken.py", (old_mtime, old_mtime))
 
         self.log_root.joinpath("activity.log").write_text(
@@ -63,7 +64,7 @@ class ProactiveSkillWatcherTests(unittest.TestCase):
             skill_roots=[self.skill_root, self.workspace_skill_root],
             log_roots=[self.log_root, self.workspace_log_root],
             report_dir=self.report_dir,
-            now=datetime(2026, 5, 4, tzinfo=timezone.utc),
+            now=watcher_now,
         )
 
     def tearDown(self) -> None:

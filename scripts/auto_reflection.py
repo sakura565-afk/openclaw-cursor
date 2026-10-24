@@ -106,6 +106,8 @@ class ReflectionRun:
     session_files: list[str]
     insights: list[Insight]
     summary_markdown: str
+    aggregated_metrics: dict[str, Any] = field(default_factory=dict)
+    reflections_markdown: str = ""
 
 
 def utc_now() -> datetime:
@@ -212,6 +214,20 @@ def rel_under_root(path: Path, root: Path) -> str:
         return path.relative_to(root).as_posix()
     except ValueError:
         return path.as_posix()
+
+
+def session_files_under_root(root: Path, session_files: Sequence[Path]) -> list[Path]:
+    """Keep only paths inside ``root`` (extra session dirs are scanned for insights separately)."""
+
+    root_resolved = root.resolve()
+    kept: list[Path] = []
+    for path in session_files:
+        try:
+            path.resolve().relative_to(root_resolved)
+        except ValueError:
+            continue
+        kept.append(path)
+    return kept
 
 
 @functools.lru_cache(maxsize=1)
@@ -495,6 +511,8 @@ def write_insight_artifacts(root: Path, run: ReflectionRun) -> tuple[Path, Path]
         "",
         run.summary_markdown,
     ]
+    if run.reflections_markdown.strip():
+        md_lines.extend(["", "## Reflections excerpt", "", run.reflections_markdown.strip(), ""])
     md_path.write_text("\n".join(md_lines), encoding="utf-8")
 
     json_path.write_text(json.dumps(asdict(run), indent=2) + "\n", encoding="utf-8")
@@ -535,6 +553,7 @@ def write_latest_pointers(
     md_path: Path,
     weekly_path: Path,
     wins_losses_md: Path | None = None,
+    reflections_path: Path | None = None,
 ) -> None:
     """Small files for automation consumers."""
 
@@ -546,6 +565,8 @@ def write_latest_pointers(
     }
     if wins_losses_md is not None:
         data["wins_losses_md"] = wins_losses_md.relative_to(root).as_posix()
+    if reflections_path is not None:
+        data["reflections_md"] = reflections_path.relative_to(root).as_posix()
     ptr.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
@@ -651,11 +672,42 @@ def run_reflection(
     insights = dedupe_insights(insights)
     insights.sort(key=lambda x: (x.category, x.severity, x.text))
 
+    from scripts.self_improvement import auto_reflection as session_reflection
+
+    per_file = session_reflection.collect_per_file_metrics(root, session_files_under_root(root, session_files))
+    agg = session_reflection.aggregate_session_metrics(per_file)
+    went_well, improve = session_reflection.build_went_well_and_improve(agg, insights)
+    top_for_reflection = sorted(
+        insights,
+        key=lambda i: ({"error": 0, "warning": 1, "info": 2}.get(i.severity, 9), -len(i.source_paths)),
+    )[:12]
+
     top_sessions = [rel_under_root(p, root) for p in session_files[:20]]
     summary = build_summary_markdown(started, len(session_files), insights, top_sessions)
 
     finished = utc_now()
     run_id = started.strftime("%Y%m%d_%H%M%S")
+    reflections_body = session_reflection.build_reflections_markdown(
+        started,
+        run_id,
+        agg,
+        went_well,
+        improve,
+        top_for_reflection,
+    )
+
+    agg_dict = {
+        "files_parsed": agg.files_parsed,
+        "segment_rows": agg.segment_rows,
+        "context_switches": agg.context_switches,
+        "context_switches_per_100_segments": agg.context_switches_per_100_segments,
+        "tool_invocations": agg.tool_invocations,
+        "tool_output_rows": agg.tool_output_rows,
+        "tool_success_estimated": agg.tool_success_estimated,
+        "tool_failure_estimated": agg.tool_failure_estimated,
+        "task_completion_rate": agg.task_completion_rate,
+        "tool_success_rate": agg.tool_success_rate,
+    }
 
     run = ReflectionRun(
         run_id=run_id,
@@ -665,6 +717,8 @@ def run_reflection(
         session_files=[rel_under_root(p, root) for p in session_files],
         insights=insights,
         summary_markdown=summary,
+        aggregated_metrics=agg_dict,
+        reflections_markdown=reflections_body,
     )
 
     if dry_run:
@@ -673,11 +727,13 @@ def run_reflection(
     md_path, _ = write_insight_artifacts(root, run)
     weekly_path = update_weekly_summary(root, started, summary)
     wl_path = write_wins_losses_markdown(root, run)
-    write_latest_pointers(root, md_path, weekly_path, wl_path)
+    reflections_path = session_reflection.update_reflections_md(root, reflections_body)
+    write_latest_pointers(root, md_path, weekly_path, wl_path, reflections_path)
 
     state["last_run_utc"] = finished.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     state["last_run_id"] = run_id
     state["last_insight_count"] = len(insights)
+    state["last_aggregated_metrics"] = agg_dict
     save_state(root, state)
 
     try:
@@ -687,9 +743,11 @@ def run_reflection(
             "reflection",
             {
                 "summary_markdown": run.summary_markdown,
+                "reflections_markdown": run.reflections_markdown,
                 "run_id": run.run_id,
                 "files_scanned": run.files_scanned,
                 "insight_count": len(run.insights),
+                "metrics": run.aggregated_metrics,
             },
         )
     except Exception:
