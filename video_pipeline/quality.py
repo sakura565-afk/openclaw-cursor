@@ -215,12 +215,63 @@ class QualityGate:
             message=message,
         )
 
+    def check_banding(
+        self,
+        video: Path,
+        *,
+        max_score: float = 25.0,
+        fps: float = 2.0,
+        min_consecutive_frames: int = 2,
+        min_band_height: int = 8,
+        k: float = 6.0,
+    ) -> CheckResult:
+        """Check rendered video for horizontal stripe (banding) artifacts.
+
+        Args:
+            video: Rendered video path.
+            max_score: Fail when banding score exceeds this threshold (0–100).
+            fps: Frame sampling rate passed to the banding detector.
+            min_consecutive_frames: Bands must persist across this many frames.
+            min_band_height: Minimum band height in pixels.
+            k: MAD multiplier for per-row outlier detection.
+
+        Returns:
+            CheckResult with banding score and pass/fail.
+        """
+        from scripts.banding_detector import analyze_video
+
+        report = analyze_video(
+            video,
+            fps=fps,
+            min_consecutive_frames=min_consecutive_frames,
+            min_band_height=min_band_height,
+            k=k,
+        )
+        score = float(report.get("score", 0.0))
+        verdict = report.get("verdict", "clean")
+        passed = verdict == "clean" and score <= max_score
+        band_count = int(report.get("band_count", 0))
+        message = (
+            f"Banding score {score:.1f} ({verdict}, {band_count} band(s))"
+            if passed
+            else f"Banding score {score:.1f} exceeds max {max_score} ({verdict})"
+        )
+        return CheckResult(
+            name="banding",
+            passed=passed,
+            actual=score,
+            expected=max_score,
+            message=message,
+        )
+
     def check_all(
         self,
         video: Path,
         source_image: Path,
         gates: QualityGates,
         target_duration_sec: float | None = None,
+        include_banding: bool = False,
+        banding_max_score: float = 25.0,
     ) -> QualityReport:
         """Run all quality checks and aggregate results.
 
@@ -229,6 +280,8 @@ class QualityGate:
             source_image: Original source image.
             gates: Quality gate thresholds.
             target_duration_sec: Optional expected duration for duration check.
+            include_banding: When True, run horizontal banding detection (opt-in).
+            banding_max_score: Maximum allowed banding score when include_banding is set.
 
         Returns:
             QualityReport with all check results.
@@ -239,4 +292,6 @@ class QualityGate:
         report.add(self.check_codec(video, gates.expected_codec))
         if target_duration_sec is not None:
             report.add(self.check_duration(video, target_duration_sec))
+        if include_banding:
+            report.add(self.check_banding(video, max_score=banding_max_score))
         return report
