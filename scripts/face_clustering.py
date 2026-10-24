@@ -599,7 +599,11 @@ def export_folders(scan_root: Path, result: ClusterResult, export_dir: Path) -> 
             dest_path = person_dir / link_name
             if dest_path.exists():
                 dest_path.unlink()
-            shutil.copy2(member.file_path.resolve(), dest_path)
+            source = member.file_path.resolve()
+            try:
+                dest_path.symlink_to(source)
+            except OSError:
+                shutil.copy2(source, dest_path)
 
 
 def run(
