@@ -9,9 +9,13 @@ from scripts.lora_metadata import (
     build_negative,
     build_prompt_suffix,
     build_safetensors_fixture,
+    derive_trigger_words,
+    lookup_by_civitai_hash,
+    must_be_last,
     normalize_record,
     read_safetensors_metadata,
     scan_dir,
+    tokenize_lora_name,
     write_catalog,
 )
 
@@ -32,11 +36,13 @@ def test_read_safetensors_metadata_parses_header_and_counts_tensors(tmp_path: Pa
     }
     path = _write_lora(tmp_path / "tiny.safetensors", header)
 
-    metadata, tensor_count = read_safetensors_metadata(path)
+    metadata, tensor_count, structured = read_safetensors_metadata(path)
 
     assert metadata["description"] == "demo"
     assert metadata["trigger_words"] == ["alpha"]
     assert tensor_count == 2
+    assert structured["civitai_hash"] is None
+    assert structured["base_model_version"] is None
 
 
 @pytest.mark.parametrize(
@@ -151,7 +157,120 @@ def test_write_catalog_markdown_one_row_per_record(tmp_path: Path) -> None:
     text = out.read_text(encoding="utf-8")
     assert text.count("| a.safetensors |") == 1
     assert text.count("| b.safetensors |") == 1
-    assert "| Name | Trigger words |" in text
+    assert "| Name | Trigger words | Derived trigger (verify) |" in text
+
+
+def test_read_safetensors_metadata_exposes_h3_fields(tmp_path: Path) -> None:
+    header = {
+        METADATA_KEY: {
+            "sshs_model_hash": "abc123hash",
+            "ss_base_model_version": "minimax_h3_ref2va",
+            "name": "MinimaxH3-Blowjob-512",
+            "ss_output_name": "MinimaxH3-Blowjob-512",
+        },
+        "w": {},
+    }
+    path = _write_lora(tmp_path / "Blowjob_NSFW.safetensors", header)
+    _, _, structured = read_safetensors_metadata(path)
+    assert structured["civitai_hash"] == "abc123hash"
+    assert structured["base_model_version"] == "minimax_h3_ref2va"
+
+
+def test_h3_lora_derives_blowjob_trigger(tmp_path: Path) -> None:
+    header = {
+        METADATA_KEY: {
+            "ss_base_model_version": "minimax_h3_ref2va",
+            "name": "MinimaxH3-Blowjob-512",
+            "ss_output_name": "MinimaxH3-Blowjob-512",
+        },
+        "w": {},
+    }
+    path = _write_lora(tmp_path / "Blowjob_NSFW.safetensors", header)
+    record = normalize_record(path)
+    assert record["trigger_source"] == "derived"
+    assert "blowjob" in record["trigger_words"]
+    assert "minimax" not in record["trigger_words"]
+    assert "h3" not in record["trigger_words"]
+    assert "512" not in record["trigger_words"]
+
+
+def test_derive_trigger_words_tokenization_examples() -> None:
+    record = {
+        "name": "BoobSlider.safetensors",
+        "_embedded": {"ss_output_name": "BoobSlider"},
+    }
+    derived = derive_trigger_words(record)
+    assert "boob" in derived
+    assert "slider" in derived
+
+    tokens = tokenize_lora_name("BJ_Sandwich_v2.0")
+    assert "bj" in tokens
+    assert "sandwich" in tokens
+
+    noise_record = {
+        "name": "x.safetensors",
+        "_embedded": {"name": "minimax-h3-0.8str-512"},
+    }
+    derived_noise = derive_trigger_words(noise_record)
+    for bad in ("minimax", "h3", "512", "0.8", "str"):
+        assert bad not in derived_noise
+
+
+def test_must_be_last_rules() -> None:
+    period_rec = {"trigger_words": ["undressing."], "_embedded": {}, "_sidecar": {}}
+    assert must_be_last(period_rec) is True
+
+    undress_rec = {
+        "trigger_words": ["undressing"],
+        "name": "undressing.safetensors",
+        "_embedded": {},
+        "_sidecar": {},
+    }
+    assert must_be_last(undress_rec) is True
+
+    plain = {"trigger_words": ["blowjob"], "_embedded": {}, "_sidecar": {}}
+    assert must_be_last(plain) is False
+
+
+def test_normalize_record_corrupt_header_does_not_raise(tmp_path: Path) -> None:
+    bad = tmp_path / "broken.safetensors"
+    bad.write_bytes(b"\x00\x00\x00\x00\x00\x00\x00\x00")
+    record = normalize_record(bad)
+    assert record["source"] == "none"
+    assert "error" in record
+    assert record["trigger_source"] == "none"
+
+
+def test_lookup_by_civitai_hash() -> None:
+    records = [
+        {"name": "a.safetensors", "civitai_hash": "DeadBeef"},
+        {"name": "b.safetensors", "civitai_hash": "other"},
+    ]
+    found = lookup_by_civitai_hash(records, "deadbeef")
+    assert found is not None
+    assert found["name"] == "a.safetensors"
+
+
+def test_write_catalog_markdown_has_new_columns(tmp_path: Path) -> None:
+    records = [
+        {
+            "name": "a.safetensors",
+            "display_name": "a",
+            "path": "/loras/a.safetensors",
+            "trigger_words": ["t1"],
+            "trigger_source": "explicit",
+            "must_be_last": False,
+            "base_model": "flux",
+            "description": "",
+            "source": "safetensors",
+        },
+    ]
+    out = tmp_path / "LORA_CATALOG.md"
+    write_catalog(records, out, fmt="md")
+    text = out.read_text(encoding="utf-8")
+    assert "| Trigger source |" in text
+    assert "| Must be last |" in text
+    assert "| Derived trigger (verify) |" in text
 
 
 def test_scan_dir_finds_nested_safetensors(tmp_path: Path) -> None:
