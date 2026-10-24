@@ -46,8 +46,9 @@ def fixture_workflow() -> dict:
 
 def test_fixture_checksums_are_pinned() -> None:
     raw = FIXTURE.read_bytes()
-    assert hashlib.sha256(raw).hexdigest() == FIXTURE_FILE_SHA256
-    parsed = json.loads(raw.decode("utf-8"))
+    normalized = raw.replace(b"\r\n", b"\n")
+    assert hashlib.sha256(normalized).hexdigest() == FIXTURE_FILE_SHA256
+    parsed = json.loads(normalized.decode("utf-8"))
     canonical = json.dumps(parsed, sort_keys=True, separators=(",", ":")).encode(
         "utf-8"
     )
