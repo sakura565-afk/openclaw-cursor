@@ -56,6 +56,12 @@ The recovered workflow uses **fixed seeds** (node **7** → 42, node **8** → 4
 
 **Banding verdicts** are independent of timing: re-analyse the saved **`.mp4` on disk** with [`scripts/banding_detector.py`](../scripts/banding_detector.py). The ComfyUI **preview URL can 404** while the render succeeded; do not treat a missing preview as a failed run.
 
+### Output discovery
+
+On this ComfyUI build, the WanVideoWrapper **`SaveVideo`** node reports finished files under the **`images`** key in history (not **`gifs`** or **`videos`**), with an **`animated`** sibling on the node output. The harness collects **`gifs`**, **`videos`**, and **`images`**, and prefers an entry whose **`type`** is **`output`** so the graph’s **`LoadVideo`** input (`type: input`) is never scored as the result.
+
+If the `.mp4` is not present under a local **`ComfyUI/`** tree or **`--output-dir`**, the harness downloads it from the instance via **`GET /view?filename=…&subfolder=…&type=…`** into a temporary file before banding analysis. **`--output-dir`** is only a local mirror fallback, not the ComfyUI install path.
+
 ## Recommended configuration (quality + speed)
 
 **Keep the baseline loader settings:**
