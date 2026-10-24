@@ -63,22 +63,40 @@ Hardware as above; **6-step** harness graph unless noted. **11/11** runs re-veri
 
 | Configuration | Run 1 (s) | Run 2 (s) | Run 3 (s) | Median (s) |
 |---------------|-----------|-----------|-----------|------------|
-| `use_non_blocking=True` + `prefetch_blocks=2` | 72.1 | 72.3 | — | **72.2** |
-| `use_non_blocking=True` | 79.0 | 80.9 | — | **80.0** |
+| `use_non_blocking=True` + `prefetch_blocks=2` | 72.1 | 72.3 | — | **72.3** |
+| `use_non_blocking=True` | 79.0 | 80.9 | — | **80.9** |
 | `prefetch_blocks=2` | 123.4 | 121.4 | — | 122.4 |
 | Baseline (`fp8_e4m3fn_scaled` + sageattn) | 130.7 | 114.8 | 185.3 | 130.7 |
-| `attention_mode="sdpa"` | 138.4 | 135.6 | — | 137.0 |
+| `attention_mode="sdpa"` | 138.4 | 135.6 | — | 138.4 |
 
-**Headline:** **1.8× faster than baseline median** (130.7 s → **72.2 s**) and **~2.0× versus baseline mean** (143.6 s → 72.2 s), with every run still clean.
+Reproduce the headline row and neighbors on this hardware:
+
+```bash
+python scripts/vace_ab.py --matrix --only control,nonblocking,prefetch2,nb_pf2
+```
+
+**Headline:** **1.8× faster than baseline median** (130.7 s → **72.3 s**) and **~2.0× versus baseline mean** (143.6 s → 72.3 s), with every run still clean.
 
 Same sessions illustrate queue pollution on wall clock vs execution span: e.g. `control_sdpa` **260.3 s** wall vs **138.4 s** exec; `control_nonblocking` **190.9 s** wall vs **79.0 s** exec. Quote **execution span** in write-ups.
 
 The live production script (`wv_vace_kj_*.mp4`, full **20-step** schedule) measured **324.4 s** execution span (different step count — not comparable to the 6-step rows above).
 
+### How to reproduce
+
+On the same RTX 4070 Ti SUPER box, run the harness subset that maps to the table rows above:
+
+```bash
+python scripts/vace_ab.py --matrix --only control,nonblocking,prefetch2,nb_pf2
+```
+
+Expect execution-span medians near **72.3 s** (`nb_pf2`), **80.9 s** (`nonblocking`), **122.4 s** (`prefetch2`), and **130.7 s** (`control` baseline). Each run should still score **`clean`** when re-analysed from the on-disk `.mp4`.
+
+With `use_non_blocking=True`, a prefetch sweep found **prefetch_blocks 2–6** equivalent (~72 s) and **8** degrading (**128.3 s**); use **2–4** in production.
+
 ### What the levers mean
 
-- **`use_non_blocking=True`** — input on **`WanVideoBlockSwap`**: “Use non blocking transfer to GPU. This will be faster but will use more VRAM.” Largest single lever on this card (median **80.0 s** vs baseline **130.7 s**). Measured VRAM during non-blocking runs: **7.6 GB** peak of **16 GB** (~**8.4 GB** free at 480×832 / 29 frames). Comfortable here; at higher resolutions watch free VRAM because swapped blocks stay resident longer.
-- **`prefetch_blocks=2`** — ~**1.15×** vs baseline median when combined with other settings; worthwhile with block swap.
+- **`use_non_blocking=True`** — input on **`WanVideoBlockSwap`**: “Use non blocking transfer to GPU. This will be faster but will use more VRAM.” Largest single lever on this card (median **80.9 s** vs baseline **130.7 s**). Non-blocking transfers keep swapped blocks in VRAM longer; measured peak **7.6 GB** of **16 GB** (~**8.4 GB** free at 480×832 / 29 frames). Comfortable here; at higher resolutions watch free VRAM.
+- **`prefetch_blocks=2`** — with non-blocking, completes the headline config (~**72.3 s** median). Alone (~**122.4 s**) it does not beat baseline; pair it with `use_non_blocking`. Prefetch **2–6** is equivalent on this card; **8** regresses to **128.3 s** — prefer **2–4**.
 - **`attention_mode="sdpa"`** — PyTorch SDPA; ~**1.05×** vs baseline median on this card (SageAttention is still the default in the baseline).
 - Keep **`fp8_e4m3fn_scaled`** over plain **`fp8_e4m3fn`** (scaled is faster on this stack).
 - **`fp8_e4m3fn_scaled_fast`** was **`clean` in every run** — not flaky. Apparent “errors” were harness preview **404**s, not render failures.
