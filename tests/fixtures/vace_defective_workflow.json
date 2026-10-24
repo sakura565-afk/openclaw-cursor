@@ -1,0 +1,274 @@
+{
+  "1": {
+    "class_type": "LoadWanVideoT5TextEncoder",
+    "inputs": {
+      "model_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "precision": "bf16"
+    }
+  },
+  "10": {
+    "class_type": "WanVideoSetBlockSwap",
+    "inputs": {
+      "block_swap_args": [
+        "8",
+        0
+      ],
+      "model": [
+        "6",
+        0
+      ]
+    }
+  },
+  "11": {
+    "class_type": "WanVideoVACEEncode",
+    "inputs": {
+      "height": 480,
+      "input_frames": [
+        "30",
+        0
+      ],
+      "num_frames": 81,
+      "strength": 1.0,
+      "tiled_vae": false,
+      "vace_end_percent": 1.0,
+      "vace_start_percent": 0.0,
+      "vae": [
+        "2",
+        0
+      ],
+      "width": 832
+    }
+  },
+  "12": {
+    "class_type": "WanVideoSampler",
+    "inputs": {
+      "cfg": 1.0,
+      "end_step": 3,
+      "force_offload": true,
+      "image_embeds": [
+        "16",
+        0
+      ],
+      "model": [
+        "9",
+        0
+      ],
+      "riflex_freq_index": 0,
+      "scheduler": "dpm++_sde",
+      "seed": 42,
+      "shift": 8.0,
+      "start_step": 0,
+      "steps": 6,
+      "text_embeds": [
+        "3",
+        0
+      ]
+    }
+  },
+  "14": {
+    "class_type": "VHS_LoadVideo",
+    "inputs": {
+      "custom_height": 0,
+      "custom_width": 0,
+      "force_rate": 16,
+      "frame_load_cap": 81,
+      "select_every_nth": 1,
+      "skip_first_frames": 0,
+      "video": "vace_source.mp4"
+    }
+  },
+  "15": {
+    "class_type": "WanVideoImageToVideoEncode",
+    "inputs": {
+      "end_latent_strength": 1.0,
+      "force_offload": true,
+      "height": 480,
+      "noise_aug_strength": 0.0,
+      "num_frames": 81,
+      "start_image": [
+        "30",
+        0
+      ],
+      "start_latent_strength": 1.0,
+      "tiled_vae": false,
+      "vae": [
+        "2",
+        0
+      ],
+      "width": 832
+    }
+  },
+  "16": {
+    "class_type": "WanVideoCombineEmbeds",
+    "inputs": {
+      "t2v_embeds": [
+        "15",
+        0
+      ],
+      "vace_embeds": [
+        "11",
+        0
+      ]
+    }
+  },
+  "18": {
+    "class_type": "WanVideoSampler",
+    "inputs": {
+      "cfg": 1.0,
+      "end_step": -1,
+      "force_offload": true,
+      "image_embeds": [
+        "16",
+        0
+      ],
+      "model": [
+        "10",
+        0
+      ],
+      "riflex_freq_index": 0,
+      "samples": [
+        "12",
+        0
+      ],
+      "scheduler": "dpm++_sde",
+      "seed": 42,
+      "shift": 8.0,
+      "start_step": 3,
+      "steps": 6,
+      "text_embeds": [
+        "3",
+        0
+      ]
+    }
+  },
+  "2": {
+    "class_type": "WanVideoVAELoader",
+    "inputs": {
+      "model_name": "wan_2.1_vae.safetensors",
+      "precision": "bf16"
+    }
+  },
+  "20": {
+    "class_type": "WanVideoDecode",
+    "inputs": {
+      "enable_vae_tiling": false,
+      "samples": [
+        "18",
+        0
+      ],
+      "tile_stride_x": 144,
+      "tile_stride_y": 128,
+      "tile_x": 272,
+      "tile_y": 272,
+      "vae": [
+        "2",
+        0
+      ]
+    }
+  },
+  "3": {
+    "class_type": "WanVideoTextEncode",
+    "inputs": {
+      "force_offload": true,
+      "negative_prompt": "oversaturated, static, blurry, worst quality, low quality, subtitles, watermark",
+      "positive_prompt": "A senior couple walking on a beach at sunset, cinematic side view, gentle sea waves, natural motion.",
+      "t5": [
+        "1",
+        0
+      ]
+    }
+  },
+  "30": {
+    "class_type": "ImageResizeKJ",
+    "inputs": {
+      "crop": "disabled",
+      "divisible_by": 16,
+      "height": 480,
+      "image": [
+        "14",
+        0
+      ],
+      "width": 832
+    }
+  },
+  "4": {
+    "class_type": "WanVideoTextEncode",
+    "inputs": {
+      "force_offload": true,
+      "negative_prompt": "oversaturated, static, blurry, worst quality, low quality, subtitles, watermark",
+      "positive_prompt": "",
+      "t5": [
+        "1",
+        0
+      ]
+    }
+  },
+  "41": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "crf": 19,
+      "filename_prefix": "wv_vace_final",
+      "format": "video/h264-mp4",
+      "frame_rate": 16,
+      "images": [
+        "20",
+        0
+      ],
+      "loop_count": 0,
+      "pingpong": false,
+      "pix_fmt": "yuv420p",
+      "save_metadata": true,
+      "save_output": true,
+      "trim_to_audio": false
+    }
+  },
+  "5": {
+    "class_type": "WanVideoModelLoader",
+    "inputs": {
+      "attention_mode": "sageattn",
+      "base_precision": "fp16_fast",
+      "load_device": "offload_device",
+      "model": "Wan2_2-I2V-A14B-HIGH_fp8_e4m3fn_scaled_KJ.safetensors",
+      "quantization": "fp8_e4m3fn_scaled"
+    }
+  },
+  "6": {
+    "class_type": "WanVideoModelLoader",
+    "inputs": {
+      "attention_mode": "sageattn",
+      "base_precision": "fp16_fast",
+      "load_device": "offload_device",
+      "model": "Wan2_2-I2V-A14B-LOW_fp8_e4m3fn_scaled_KJ.safetensors",
+      "quantization": "fp8_e4m3fn_scaled"
+    }
+  },
+  "7": {
+    "class_type": "WanVideoBlockSwap",
+    "inputs": {
+      "blocks_to_swap": 20,
+      "offload_img_emb": false,
+      "offload_txt_emb": false
+    }
+  },
+  "8": {
+    "class_type": "WanVideoBlockSwap",
+    "inputs": {
+      "blocks_to_swap": 20,
+      "offload_img_emb": false,
+      "offload_txt_emb": false
+    }
+  },
+  "9": {
+    "class_type": "WanVideoSetBlockSwap",
+    "inputs": {
+      "block_swap_args": [
+        "7",
+        0
+      ],
+      "model": [
+        "5",
+        0
+      ]
+    }
+  }
+}
