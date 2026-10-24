@@ -143,9 +143,10 @@ class DocGeneratorTestCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             write_file(tmp_path / "scripts" / "export_assets.py", sample_script())
+            doc_generator_script = Path(__file__).resolve().parents[1] / "scripts" / "doc_generator.py"
 
             run_result = subprocess.run(
-                [sys.executable, "/workspace/scripts/doc_generator.py", "--no-color"],
+                [sys.executable, str(doc_generator_script), "--no-color"],
                 cwd=tmp_path,
                 capture_output=True,
                 text=True,
@@ -155,7 +156,7 @@ class DocGeneratorTestCase(unittest.TestCase):
             self.assertIn("updated: docs/README.md", run_result.stderr)
 
             check_result = subprocess.run(
-                [sys.executable, "/workspace/scripts/doc_generator.py", "--check", "--no-color"],
+                [sys.executable, str(doc_generator_script), "--check", "--no-color"],
                 cwd=tmp_path,
                 capture_output=True,
                 text=True,
