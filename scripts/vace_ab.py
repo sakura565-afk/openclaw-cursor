@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 import sys
 import time
 import uuid
@@ -54,7 +55,34 @@ _BENCHMARK_SEED_BASE: dict[str, int] = {
     NODE_LOW_SAMPLER: 43,
     NODE_FRAME_SAMPLE: 42,
 }
+_SEED_MOD = 2**32
 _RUN_SEQ: list[int] = [0]
+
+
+def _fresh_process_seed_offset() -> int:
+    """Per-process offset so the first run in a new process cannot match a prior process."""
+    return int.from_bytes(os.urandom(4), "big")
+
+
+_PROCESS_SEED_OFFSET: int = _fresh_process_seed_offset()
+
+
+def reset_benchmark_seed_state(
+    *,
+    run_seq: int = 0,
+    process_seed_offset: int | None = None,
+) -> None:
+    """
+    Reset harness seed state (for tests or a fresh logical process).
+
+    When process_seed_offset is omitted, draws a new per-process offset like a real import.
+    """
+    global _PROCESS_SEED_OFFSET
+    _RUN_SEQ[0] = run_seq
+    if process_seed_offset is None:
+        _PROCESS_SEED_OFFSET = _fresh_process_seed_offset()
+    else:
+        _PROCESS_SEED_OFFSET = process_seed_offset % _SEED_MOD
 
 
 def _fixture_path() -> Path:
@@ -155,7 +183,7 @@ def assign_fresh_benchmark_seeds(
         inputs = node.get("inputs")
         if not isinstance(inputs, dict) or "seed" not in inputs:
             continue
-        value = base + seq
+        value = (base + _PROCESS_SEED_OFFSET + seq) % _SEED_MOD
         inputs["seed"] = value
         applied[nid] = value
     return seq, applied

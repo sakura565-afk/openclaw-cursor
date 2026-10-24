@@ -291,11 +291,15 @@ def test_parse_execution_metrics_missing_timestamps() -> None:
     assert cached == ["4"]
 
 
+def _expected_benchmark_seed(base: int, seq: int, process_offset: int) -> int:
+    return (base + process_offset + seq) % (2**32)
+
+
 @pytest.fixture()
 def reset_benchmark_run_seq() -> None:
-    ab._RUN_SEQ[0] = 0
+    ab.reset_benchmark_seed_state(run_seq=0, process_seed_offset=1_000_000)
     yield
-    ab._RUN_SEQ[0] = 0
+    ab.reset_benchmark_seed_state(run_seq=0, process_seed_offset=1_000_000)
 
 
 def test_assign_fresh_benchmark_seeds_changes_between_runs(
@@ -319,6 +323,39 @@ def test_assign_fresh_benchmark_seeds_not_baseline_fixture_values(
     assert seeds[ab.NODE_HIGH_SAMPLER] != ab.BASELINE[ab.NODE_HIGH_SAMPLER]["inputs"]["seed"]
     assert seeds[ab.NODE_LOW_SAMPLER] != ab.BASELINE[ab.NODE_LOW_SAMPLER]["inputs"]["seed"]
     assert seeds[ab.NODE_FRAME_SAMPLE] != ab.BASELINE[ab.NODE_FRAME_SAMPLE]["inputs"]["seed"]
-    assert seeds[ab.NODE_HIGH_SAMPLER] == 42 + 1
-    assert seeds[ab.NODE_LOW_SAMPLER] == 43 + 1
-    assert seeds[ab.NODE_FRAME_SAMPLE] == 42 + 1
+    offset = 1_000_000
+    assert seeds[ab.NODE_HIGH_SAMPLER] == _expected_benchmark_seed(42, 1, offset)
+    assert seeds[ab.NODE_LOW_SAMPLER] == _expected_benchmark_seed(43, 1, offset)
+    assert seeds[ab.NODE_FRAME_SAMPLE] == _expected_benchmark_seed(42, 1, offset)
+
+
+def test_assign_fresh_benchmark_seeds_unique_across_simulated_processes() -> None:
+    ab.reset_benchmark_seed_state(run_seq=0, process_seed_offset=0)
+    first_process_prompt = ab.build_prompt("control")
+    _seq_a, seeds_a = ab.assign_fresh_benchmark_seeds(first_process_prompt)
+
+    ab.reset_benchmark_seed_state(run_seq=0, process_seed_offset=9_876_543)
+    second_process_prompt = ab.build_prompt("control")
+    _seq_b, seeds_b = ab.assign_fresh_benchmark_seeds(second_process_prompt)
+
+    assert _seq_a == 1 and _seq_b == 1
+    assert seeds_a != seeds_b
+    assert seeds_a[ab.NODE_HIGH_SAMPLER] == _expected_benchmark_seed(42, 1, 0)
+    assert seeds_b[ab.NODE_HIGH_SAMPLER] == _expected_benchmark_seed(42, 1, 9_876_543)
+    assert seeds_b[ab.NODE_HIGH_SAMPLER] != seeds_a[ab.NODE_HIGH_SAMPLER]
+
+
+def test_assign_fresh_benchmark_seeds_within_int32_range(
+    reset_benchmark_run_seq: None,
+) -> None:
+    prompt = ab.build_prompt("control")
+    for _ in range(5):
+        _seq, seeds = ab.assign_fresh_benchmark_seeds(prompt)
+        for value in seeds.values():
+            assert 0 <= value < 2**32
+
+    ab.reset_benchmark_seed_state(run_seq=0, process_seed_offset=2**32 - 10)
+    wrap_prompt = ab.build_prompt("control")
+    _seq, wrap_seeds = ab.assign_fresh_benchmark_seeds(wrap_prompt)
+    for value in wrap_seeds.values():
+        assert 0 <= value < 2**32
