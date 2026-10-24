@@ -46,7 +46,13 @@ exec_span_s = (execution_success.timestamp - execution_start.timestamp) / 1000
 
 The harness now records **`exec_span`** (seconds) alongside wall-clock **`seconds`** and the **`execution_cached`** node list. Use **`exec_span`** for speed comparisons.
 
-`execution_cached` lists nodes whose outputs were reused. In this VACE graph that is only deterministic pre-processing — nodes **4** (`LoadWanVideoT5TextEncoder`), **5** (`WanVideoTextEncode`), **6** (`WanVideoVACEEncode`), **9** (`WanVideoVAELoader`), **30**–**33** (video load/resize). Samplers **7** and **8** are **never** cached, so every run still executed the sampling work and spans are comparable.
+`execution_cached` lists nodes whose outputs were reused. In this VACE graph that is only deterministic pre-processing — nodes **4** (`LoadWanVideoT5TextEncoder`), **5** (`WanVideoTextEncode`), **6** (`WanVideoVACEEncode`), **9** (`WanVideoVAELoader`), **30**–**33** (video load/resize). Samplers **7** and **8** must not appear there on a valid benchmark run (see below).
+
+### The seed trap (silent invalidation of a benchmark)
+
+The recovered workflow uses **fixed seeds** (node **7** → 42, node **8** → 43, node **31** → 42). ComfyUI caches node outputs by input hash, so re-submitting the **same** graph can be served **entirely from cache** — the job finishes in ~**0.6 s** with the **samplers never executing**. One such run appeared in an early matrix as a bogus fast row.
+
+[`scripts/vace_ab.py`](../scripts/vace_ab.py) now **bumps those seeds on every `run_case`** (module run counter: `base + seq` per node). Reports record **`run_seq`** and the applied **`seeds`**. When benchmarking by hand, **change the seed** between runs and confirm **`execution_cached` does not list nodes 7 or 8**.
 
 **Banding verdicts** are independent of timing: re-analyse the saved **`.mp4` on disk** with [`scripts/banding_detector.py`](../scripts/banding_detector.py). The ComfyUI **preview URL can 404** while the render succeeded; do not treat a missing preview as a failed run.
 
