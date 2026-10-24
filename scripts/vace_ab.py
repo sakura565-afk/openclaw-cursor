@@ -13,266 +13,84 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-try:
-    from scripts.banding_detector import analyze_video
-except ImportError:  # pragma: no cover - standalone from scripts/
-    from banding_detector import analyze_video
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_FIXTURE_REL = Path("tests/fixtures/vace_defective_workflow.json")
 
 try:
     import requests
 except ImportError:  # pragma: no cover
     requests = None  # type: ignore
 
+
+def _analyze_video(path: Path, fps: float = 2.0) -> dict[str, Any]:
+    try:
+        from scripts.banding_detector import analyze_video
+    except ImportError:  # pragma: no cover - standalone from scripts/
+        from banding_detector import analyze_video
+    return analyze_video(path, fps=fps)
+
+
 DEFAULT_COMFY_URL = "http://127.0.0.1:8188"
 DEFAULT_REPORT_PATH = Path("memory/vace_ab_report.json")
 DEFAULT_OUTPUT_DIR = Path("output/vace_ab")
 
-# ComfyUI prompt node ids (recovered defective Wan2.2 VACE workflow).
-NODE_T5 = "1"
-NODE_VAE = "2"
-NODE_TEXT_POS = "3"
-NODE_TEXT_NEG = "4"
-NODE_HIGH_LOADER = "5"
-NODE_LOW_LOADER = "6"
-NODE_BLOCKSWAP_HIGH = "7"
-NODE_BLOCKSWAP_LOW = "8"
-NODE_MODEL_HIGH = "9"
-NODE_MODEL_LOW = "10"
-NODE_VACE = "11"
-NODE_T2V_ENCODE = "15"
-NODE_IMAGE_EMBEDS = "16"
-NODE_HIGH_SAMPLER = "12"
-NODE_LOW_SAMPLER = "18"
-NODE_DECODE = "20"
-NODE_RESIZE = "30"
+# ComfyUI prompt node ids (recovered defective Wan2.2 Fun VACE workflow).
+NODE_HIGH_LOADER = "1"
+NODE_LOW_LOADER = "2"
+NODE_T5 = "5"
+NODE_VACE = "6"
+NODE_HIGH_SAMPLER = "7"
+NODE_LOW_SAMPLER = "8"
+NODE_VAE = "11"
+NODE_RESIZE = "33"
 NODE_SAVE = "41"
 
-BASELINE: dict[str, dict[str, Any]] = {
-    NODE_T5: {
-        "class_type": "LoadWanVideoT5TextEncoder",
-        "inputs": {
-            "model_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
-            "precision": "bf16",
-        },
-    },
-    NODE_VAE: {
-        "class_type": "WanVideoVAELoader",
-        "inputs": {"model_name": "wan_2.1_vae.safetensors", "precision": "bf16"},
-    },
-    NODE_TEXT_POS: {
-        "class_type": "WanVideoTextEncode",
-        "inputs": {
-            "t5": [NODE_T5, 0],
-            "positive_prompt": (
-                "A senior couple walking on a beach at sunset, cinematic side view, "
-                "gentle sea waves, natural motion."
-            ),
-            "negative_prompt": (
-                "oversaturated, static, blurry, worst quality, low quality, "
-                "subtitles, watermark"
-            ),
-            "force_offload": True,
-        },
-    },
-    NODE_TEXT_NEG: {
-        "class_type": "WanVideoTextEncode",
-        "inputs": {
-            "t5": [NODE_T5, 0],
-            "positive_prompt": "",
-            "negative_prompt": (
-                "oversaturated, static, blurry, worst quality, low quality, "
-                "subtitles, watermark"
-            ),
-            "force_offload": True,
-        },
-    },
-    NODE_HIGH_LOADER: {
-        "class_type": "WanVideoModelLoader",
-        "inputs": {
-            "model": "Wan2_2-I2V-A14B-HIGH_fp8_e4m3fn_scaled_KJ.safetensors",
-            "base_precision": "fp16_fast",
-            "quantization": "fp8_e4m3fn_scaled",
-            "load_device": "offload_device",
-            "attention_mode": "sageattn",
-        },
-    },
-    NODE_LOW_LOADER: {
-        "class_type": "WanVideoModelLoader",
-        "inputs": {
-            "model": "Wan2_2-I2V-A14B-LOW_fp8_e4m3fn_scaled_KJ.safetensors",
-            "base_precision": "fp16_fast",
-            "quantization": "fp8_e4m3fn_scaled",
-            "load_device": "offload_device",
-            "attention_mode": "sageattn",
-        },
-    },
-    NODE_BLOCKSWAP_HIGH: {
-        "class_type": "WanVideoBlockSwap",
-        "inputs": {"blocks_to_swap": 20, "offload_img_emb": False, "offload_txt_emb": False},
-    },
-    NODE_BLOCKSWAP_LOW: {
-        "class_type": "WanVideoBlockSwap",
-        "inputs": {"blocks_to_swap": 20, "offload_img_emb": False, "offload_txt_emb": False},
-    },
-    NODE_MODEL_HIGH: {
-        "class_type": "WanVideoSetBlockSwap",
-        "inputs": {"model": [NODE_HIGH_LOADER, 0], "block_swap_args": [NODE_BLOCKSWAP_HIGH, 0]},
-    },
-    NODE_MODEL_LOW: {
-        "class_type": "WanVideoSetBlockSwap",
-        "inputs": {"model": [NODE_LOW_LOADER, 0], "block_swap_args": [NODE_BLOCKSWAP_LOW, 0]},
-    },
-    NODE_RESIZE: {
-        "class_type": "ImageResizeKJ",
-        "inputs": {
-            "image": ["14", 0],
-            "width": 832,
-            "height": 480,
-            "divisible_by": 16,
-            "crop": "disabled",
-        },
-    },
-    NODE_VACE: {
-        "class_type": "WanVideoVACEEncode",
-        "inputs": {
-            "vae": [NODE_VAE, 0],
-            "width": 832,
-            "height": 480,
-            "num_frames": 81,
-            "strength": 1.0,
-            "vace_start_percent": 0.0,
-            "vace_end_percent": 1.0,
-            "input_frames": [NODE_RESIZE, 0],
-            "tiled_vae": False,
-        },
-    },
-    "14": {
-        "class_type": "VHS_LoadVideo",
-        "inputs": {
-            "video": "vace_source.mp4",
-            "force_rate": 16,
-            "custom_width": 0,
-            "custom_height": 0,
-            "frame_load_cap": 81,
-            "skip_first_frames": 0,
-            "select_every_nth": 1,
-        },
-    },
-    NODE_T2V_ENCODE: {
-        "class_type": "WanVideoImageToVideoEncode",
-        "inputs": {
-            "vae": [NODE_VAE, 0],
-            "width": 832,
-            "height": 480,
-            "num_frames": 81,
-            "noise_aug_strength": 0.0,
-            "start_latent_strength": 1.0,
-            "end_latent_strength": 1.0,
-            "force_offload": True,
-            "start_image": [NODE_RESIZE, 0],
-            "tiled_vae": False,
-        },
-    },
-    NODE_IMAGE_EMBEDS: {
-        "class_type": "WanVideoCombineEmbeds",
-        "inputs": {
-            "t2v_embeds": [NODE_T2V_ENCODE, 0],
-            "vace_embeds": [NODE_VACE, 0],
-        },
-    },
-    NODE_HIGH_SAMPLER: {
-        "class_type": "WanVideoSampler",
-        "inputs": {
-            "model": [NODE_MODEL_HIGH, 0],
-            "image_embeds": [NODE_IMAGE_EMBEDS, 0],
-            "steps": 6,
-            "cfg": 1.0,
-            "shift": 8.0,
-            "seed": 42,
-            "force_offload": True,
-            "scheduler": "dpm++_sde",
-            "riflex_freq_index": 0,
-            "text_embeds": [NODE_TEXT_POS, 0],
-            "start_step": 0,
-            "end_step": 3,
-        },
-    },
-    NODE_LOW_SAMPLER: {
-        "class_type": "WanVideoSampler",
-        "inputs": {
-            "model": [NODE_MODEL_LOW, 0],
-            "image_embeds": [NODE_IMAGE_EMBEDS, 0],
-            "steps": 6,
-            "cfg": 1.0,
-            "shift": 8.0,
-            "seed": 42,
-            "force_offload": True,
-            "scheduler": "dpm++_sde",
-            "riflex_freq_index": 0,
-            "text_embeds": [NODE_TEXT_POS, 0],
-            "samples": [NODE_HIGH_SAMPLER, 0],
-            "start_step": 3,
-            "end_step": -1,
-        },
-    },
-    NODE_DECODE: {
-        "class_type": "WanVideoDecode",
-        "inputs": {
-            "vae": [NODE_VAE, 0],
-            "samples": [NODE_LOW_SAMPLER, 0],
-            "enable_vae_tiling": False,
-            "tile_x": 272,
-            "tile_y": 272,
-            "tile_stride_x": 144,
-            "tile_stride_y": 128,
-        },
-    },
-    NODE_SAVE: {
-        "class_type": "VHS_VideoCombine",
-        "inputs": {
-            "images": [NODE_DECODE, 0],
-            "frame_rate": 16,
-            "loop_count": 0,
-            "filename_prefix": "wv_vace_final",
-            "format": "video/h264-mp4",
-            "pix_fmt": "yuv420p",
-            "crf": 19,
-            "save_metadata": True,
-            "trim_to_audio": False,
-            "pingpong": False,
-            "save_output": True,
-        },
-    },
-}
+
+def _fixture_path() -> Path:
+    return _REPO_ROOT / _FIXTURE_REL
+
+
+def load_baseline_workflow() -> dict[str, dict[str, Any]]:
+    path = _fixture_path()
+    with path.open(encoding="utf-8") as handle:
+        data = json.load(handle)
+    if not isinstance(data, dict):
+        raise TypeError(f"expected object in {path}")
+    return data
+
+
+BASELINE: dict[str, dict[str, Any]] = load_baseline_workflow()
 
 CASES: dict[str, dict[str, Any]] = {
-    "baseline": {},
-    "cfg_1": {"cfg": 1.0},
-    "cfg_3_5": {"cfg": 3.5},
-    "steps_8": {"steps": 8},
-    "split_4": {"split": 4},
-    "scheduler_euler": {"scheduler": "euler"},
-    "shift_5": {"shift": 5.0},
-    "vace_strength_0_75": {"vace_strength": 0.75},
-    "vace_end_0_8": {"vace_end_percent": 0.8},
-    "divisible_32": {"divisible_by": 32},
-    "attention_sdpa": {"attention_mode": "sdpa"},
-    "quant_fp8_e4m3fn": {"quantization": "fp8_e4m3fn"},
+    "control": {},
+    "cfg5": {"cfg": 5.0},
+    "steps20": {"steps": 20, "split": 10},
+    "unipc": {"scheduler": "unipc", "shift": 8.0},
+    "strength07": {"vace_strength": 0.7},
+    "vace_end08": {"vace_end_percent": 0.8},
+    "div32": {"divisible_by": 32},
+    "sdpa": {"attention_mode": "sdpa"},
+    "noquant": {"quantization": "disabled"},
+    "combo": {
+        "cfg": 5.0,
+        "steps": 20,
+        "split": 10,
+        "scheduler": "unipc",
+        "shift": 8.0,
+    },
 }
 
 CASE_DESCRIPTIONS: dict[str, str] = {
-    "baseline": "Recovered defective prompt (no overrides).",
-    "cfg_1": "CFG on both samplers (explicit 1.0).",
-    "cfg_3_5": "Higher CFG on both samplers.",
-    "steps_8": "More denoise steps on both samplers.",
-    "split_4": "Earlier high/low noise handoff (split step 4).",
-    "scheduler_euler": "Euler scheduler on both samplers.",
-    "shift_5": "Lower sampling shift on both samplers.",
-    "vace_strength_0_75": "Reduced VACE strength.",
-    "vace_end_0_8": "VACE active for first 80% of steps only.",
-    "divisible_32": "Resize divisible_by 32 instead of 16.",
-    "attention_sdpa": "SDPA attention on both model loaders.",
-    "quant_fp8_e4m3fn": "fp8_e4m3fn quantization on both loaders.",
+    "control": "Recovered defective prompt (no overrides).",
+    "cfg5": "CFG 5.0 on both samplers.",
+    "steps20": "20 steps with high/low split at 10.",
+    "unipc": "UniPC scheduler and shift 8.0 on both samplers.",
+    "strength07": "Reduced VACE strength (0.7).",
+    "vace_end08": "VACE active for first 80% of steps only.",
+    "div32": "Resize divisible_by 32 instead of 16.",
+    "sdpa": "SDPA attention on both model loaders.",
+    "noquant": "Quantization disabled on both loaders.",
+    "combo": "CFG 5.0 + 20 steps / split 10 + UniPC + shift 8.0.",
 }
 
 
@@ -325,7 +143,6 @@ def validate_graph(prompt: dict[str, dict[str, Any]]) -> list[GraphIssue]:
                         )
                     )
 
-    # Cycle detection on node dependency graph.
     graph: dict[str, set[str]] = {nid: set() for nid in prompt}
     for nid, node in prompt.items():
         for ref_id, _ in iter_node_refs(node.get("inputs", {})):
@@ -337,9 +154,7 @@ def validate_graph(prompt: dict[str, dict[str, Any]]) -> list[GraphIssue]:
 
     def dfs(nid: str, stack: list[str]) -> None:
         if nid in visiting:
-            issues.append(
-                GraphIssue("cycle", " -> ".join(stack + [nid]))
-            )
+            issues.append(GraphIssue("cycle", " -> ".join(stack + [nid])))
             return
         if nid in visited:
             return
@@ -395,7 +210,9 @@ def apply_overrides(
         out[NODE_VACE]["inputs"]["strength"] = float(overrides["vace_strength"])
 
     if "vace_end_percent" in overrides:
-        out[NODE_VACE]["inputs"]["vace_end_percent"] = float(overrides["vace_end_percent"])
+        out[NODE_VACE]["inputs"]["vace_end_percent"] = float(
+            overrides["vace_end_percent"]
+        )
 
     if "divisible_by" in overrides:
         out[NODE_RESIZE]["inputs"]["divisible_by"] = int(overrides["divisible_by"])
@@ -409,6 +226,9 @@ def apply_overrides(
         quant = str(overrides["quantization"])
         out[NODE_HIGH_LOADER]["inputs"]["quantization"] = quant
         out[NODE_LOW_LOADER]["inputs"]["quantization"] = quant
+
+    if "prefix" in overrides:
+        out[NODE_SAVE]["inputs"]["filename_prefix"] = str(overrides["prefix"])
 
     return out
 
@@ -466,7 +286,7 @@ class ComfyRunner:
 
 
 def score_video(path: Path, fps: float = 2.0) -> dict[str, Any]:
-    return analyze_video(path, fps=fps)
+    return _analyze_video(path, fps=fps)
 
 
 def run_case(
