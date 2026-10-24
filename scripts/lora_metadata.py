@@ -178,6 +178,8 @@ _NOISE_TOKENS: frozenset[str] = frozenset(
         "ref",
         "va",
         "oac",
+        "oac6",
+        "x",
     }
 )
 
@@ -187,10 +189,12 @@ _SEPARATOR_SPLIT_RE = re.compile(r"[\s_\-.,\(\)\[\]&+/!?+:]+")
 _STRIP_EDGES_RE = re.compile(r"^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$")
 _ALNUM_ONLY_RE = re.compile(r"[^a-zA-Z0-9]")
 _WEIGHT_LIKE_RE = re.compile(
-    r"^\d+(\.\d+)?$|^\d+(\.\d+)?str$|^\d+str$",
+    r"^\d+(\.\d+)?$|^\d+(\.\d+)?str$|^\d+str$|^\d+steps$",
     re.IGNORECASE,
 )
 _SIZE_LIKE_RE = re.compile(r"^\d+x\d+$", re.IGNORECASE)
+_VERSION_LIKE_RE = re.compile(r"^v\d", re.IGNORECASE)
+_TRAINING_SUFFIX_RE = re.compile(r"^oac\d+$", re.IGNORECASE)
 _DESCRIPTION_TRIGGERS_RE = re.compile(
     r"^\s*triggers?\s*:\s*(.+)$",
     re.IGNORECASE | re.MULTILINE,
@@ -297,6 +301,12 @@ def _is_junk_token(token: str) -> bool:
         return True
     if _SIZE_LIKE_RE.match(bare):
         return True
+    if _VERSION_LIKE_RE.match(bare):
+        return True
+    if _TRAINING_SUFFIX_RE.match(bare):
+        return True
+    if len(bare) < 2:
+        return True
     return False
 
 
@@ -392,34 +402,42 @@ def _extract_ss_tag_frequency_triggers(value: Any) -> list[str]:
     return out
 
 
+def _collect_derived_tokens(label: str, limit: int = 3) -> list[str]:
+    """Tokenize a label string into deduped trigger candidates (non-noise, up to *limit*)."""
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for token in tokenize_lora_name(label):
+        if _is_noise_token(token):
+            continue
+        key = token.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(token)
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
 def derive_trigger_words(record: dict[str, Any]) -> list[str]:
     """Guess trigger tokens: file stem first, embedded training names last."""
     embedded = record.get("_embedded") or {}
     file_name = record.get("name") or ""
     stem = Path(file_name).stem if file_name else ""
 
-    label_fields: list[str] = []
     if stem:
-        label_fields.append(stem)
+        from_stem = _collect_derived_tokens(stem, limit=3)
+        if from_stem:
+            return from_stem
+
     for key in ("ss_output_name", "name"):
         val = embedded.get(key)
         if isinstance(val, str) and val.strip():
-            label_fields.append(val.strip())
+            from_embedded = _collect_derived_tokens(val.strip(), limit=3)
+            if from_embedded:
+                return from_embedded
 
-    candidates: list[str] = []
-    seen: set[str] = set()
-    for label in label_fields:
-        for token in tokenize_lora_name(label):
-            if _is_noise_token(token):
-                continue
-            key = token.casefold()
-            if key in seen:
-                continue
-            seen.add(key)
-            candidates.append(token)
-            if len(candidates) >= 3:
-                return candidates
-    return candidates
+    return []
 
 
 def must_be_last(record: dict[str, Any]) -> bool:
