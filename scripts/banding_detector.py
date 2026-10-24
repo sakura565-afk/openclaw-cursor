@@ -185,15 +185,12 @@ def _periodic_stripe_metrics(profile: np.ndarray, height: int) -> FramePeriodic:
 
     median_corr = float(np.median(corrs))
     amplitude = float(np.percentile(x, 95) - np.percentile(x, 5))
-    edge_thresh = max(amplitude * 0.15, 1.0)
-    stripe_transitions = int(np.sum(np.abs(np.diff(x)) > edge_thresh))
-    min_transitions = max(6, (height // best_lag) - 1) if best_lag > 0 else 6
+    corr_peak = best_corr - median_corr
     detected = (
-        best_lag >= 6
-        and best_corr >= 0.80
-        and amplitude >= 18.0
-        and (best_corr - median_corr) >= 0.25
-        and stripe_transitions >= min_transitions
+        best_lag >= 8
+        and best_corr >= 0.90
+        and corr_peak >= 0.50
+        and amplitude >= 5.0
     )
     return FramePeriodic(
         detected=detected,
@@ -297,7 +294,7 @@ def _compute_periodic_score(
 ) -> float:
     if periodic_frame_ratio <= 0.0:
         return 0.0
-    corr_term = max(0.0, (best_corr - 0.80) / 0.20) * 35.0
+    corr_term = max(0.0, (best_corr - 0.90) / 0.10) * 35.0
     amp_term = min(25.0, (amplitude / 40.0) * 25.0)
     ratio_term = periodic_frame_ratio * 40.0
     return float(min(100.0, corr_term + amp_term + ratio_term))
