@@ -109,7 +109,7 @@ class DreamTracker:
             f"{history_lines or '- No transitions yet.'}\n"
         )
         target.write_text(content, encoding="utf-8")
-        dream["path"] = str(target.relative_to(self.repo_root))
+        dream["path"] = target.relative_to(self.repo_root).as_posix()
 
     def _store_dream(self, dream):
         data = self._load_index()
@@ -187,7 +187,7 @@ class DreamTracker:
 
     def status(self, dream_id):
         dream = self.get_dream(dream_id)
-        dream["path"] = str(self._dream_location(dream).relative_to(self.repo_root))
+        dream["path"] = self._dream_location(dream).relative_to(self.repo_root).as_posix()
         return dream
 
     def _append_note(self, dream, note):

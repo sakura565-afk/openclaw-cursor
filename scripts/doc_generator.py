@@ -579,7 +579,7 @@ def generate_docs(root_dir: Path, scripts_dir: Path, docs_dir: Path, *, check: b
         status_color = Ansi.YELLOW if check else Ansi.GREEN
         verb = "would update" if check else "updated"
         for changed_file in changed_files:
-            log(f"{verb}: {changed_file.relative_to(root_dir)}", status_color, enabled=color)
+            log(f"{verb}: {changed_file.relative_to(root_dir).as_posix()}", status_color, enabled=color)
         return 1 if check else 0
 
     log("Documentation is up to date.", Ansi.BLUE, enabled=color)
