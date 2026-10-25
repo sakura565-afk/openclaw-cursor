@@ -6,6 +6,16 @@ OpenClaw orchestration via Cursor Cloud Agent.
 
 The declarative runner in `video_pipeline/` supports `director: h3` (default, MiniMax H3) and `director: freevideo` ([FreeVideo](https://github.com/FlashML-org/FreeVideo) / `FreeVideoGenerate`). FreeVideo is installed only on the **LAB** ComfyUI instance (`http://127.0.0.1:8189`), not PROD (`:8188`). Point `director_config.comfy_url` at LAB for FreeVideo. The node writes to `G:/FreeVideo_output` and embeds the workflow in the output MP4 metadata; see `video_pipeline/README.md` for YAML keys under `freevideo:`.
 
+## Video pipeline upscale
+
+The declarative runner (`python -m video_pipeline.runner`) upscales each clip after H3 render. Configure via YAML `upscale`:
+
+- `backend`: `auto` (default), `seedvr2`, `esrgan`, or `lanczos`
+- `comfyui_url`: usually PROD ComfyUI (`http://127.0.0.1:8188`) — independent of `director_config.comfy_url` (LAB)
+- `resolution`, `batch_size`, `temporal_overlap`, `blocks_to_swap`: SeedVR2 tuning
+
+With `auto`, backends are chosen once from `/object_info` in order **seedvr2 → esrgan → lanczos**. SeedVR2 needs the `ComfyUI-SeedVR2_VideoUpscaler` pack on that ComfyUI instance; if ComfyUI is down or nodes are missing, the pipeline falls back to ffmpeg Lanczos and logs a warning. See `video_pipeline/README.md` for details.
+
 ## Tests
 
 Run the full suite from the repository root (CI uses the same command):

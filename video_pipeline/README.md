@@ -33,10 +33,42 @@ python -m video_pipeline.runner --config video_pipeline/configs/furniture_batch.
 | `quality_gates` | object | `max_ar_drift`, `max_render_sec`, `min_resolution_h`, `expected_codec` |
 | `delivery` | object | `telegram_chat`, templates, `progress_every_min` |
 | `recovery` | object | `max_retries`, `retry_backoff_sec`, `resume_from_state`, `state_file` |
+| `upscale` | object | Post-render upscale: `backend`, `comfyui_url`, `resolution`, `batch_size`, … |
 | `director` | string | Director key: `h3` (default) or `freevideo` (LAB only) |
 | `director_config` | object | `comfy_url` (LAB `:8189` for FreeVideo), optional `workflow_path` (H3) |
 | `freevideo` | object | FreeVideo settings (when `director: freevideo`): `width`, `height`, `seconds`, `seed`, `two_pass`, `base_steps`, `refine_steps`, `preview`, `output_root` (default `G:/FreeVideo_output`) |
 | `output_dir` | path | Output directory for rendered videos |
+
+### Upscale (`upscale`)
+
+After each H3 render, the runner upscales to the format’s delivery resolution.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `backend` | `auto` | `auto`, `seedvr2`, `esrgan`, or `lanczos` |
+| `comfyui_url` | `http://127.0.0.1:8188` | PROD ComfyUI for learned backends (not the LAB render URL) |
+| `resolution` | `1080` | SeedVR2 target **short edge** (pixels); aspect ratio preserved |
+| `batch_size` | `5` | SeedVR2 temporal batch size |
+| `temporal_overlap` | `3` | SeedVR2 overlap between batches |
+| `blocks_to_swap` | `32` | SeedVR2 DiT VRAM trade-off |
+| `free_vram_urls` | `[]` | ComfyUI base URLs to unload via `POST /free` before a learned upscale (see below) |
+| `min_free_vram_gb` | `13.0` | Minimum free VRAM (GB) on `comfyui_url` before starting SeedVR2 / ESRGAN |
+
+**Backend order for `auto`:** `seedvr2` → `esrgan` → `lanczos` (probed once via `/object_info` on `comfyui_url`).
+
+- **seedvr2** — requires the `ComfyUI-SeedVR2_VideoUpscaler` custom node pack and model files under `models/SEEDVR2/` on that instance.
+- **esrgan** — `UpscaleModelLoader` + `ImageUpscaleWithModel` with `4x-UltraSharp.pth`, then Lanczos scale+pad to the exact target box.
+- **lanczos** — ffmpeg only; used when ComfyUI is unreachable or nodes are missing (logged warning).
+
+Audio is preserved (VHS audio wiring for Comfy paths; ffmpeg copy/mux for Lanczos).
+
+#### VRAM and scheduling (SeedVR2)
+
+The SeedVR2 backend needs about **15 GB of free VRAM** on the GPU (measured peak **15.76 / 16.38 GB** on an RTX 4070 Ti SUPER 16 GB) because it runs a 3B DiT plus a tiled video VAE. On this machine the render ComfyUI instance (**LAB**, `director_config.comfy_url`, port **8189**) idles holding roughly **11 GB** of the card. Before each learned upscale on **PROD** (`upscale.comfyui_url`, port **8188**), the pipeline calls `POST {url}/free` with `{"unload_models": true, "free_memory": true}` on every URL in `free_vram_urls` (by default the LAB URL when `free_vram_urls` is empty), then reads `GET {comfyui_url}/system_stats` and checks `devices[0].vram_free`. If free VRAM is below `min_free_vram_gb` (default **13.0**), upscale **falls back to Lanczos** automatically with a logged warning that includes both the measured free GB and the required threshold. If stats are unavailable, the learned backend still runs (no hard block).
+
+**Timing (SeedVR2, 1080×1880):** about **6.6 s per frame** (~**8 min** for a 73-frame clip, ~**19 min** for 175 frames). For faster turnaround, use a smaller `resolution` or the `esrgan` backend.
+
+In the `upscale` config, `resolution` is the **target short edge** in pixels; aspect ratio is preserved.
 
 See `video_pipeline/config.py` for the full Pydantic schema.
 
