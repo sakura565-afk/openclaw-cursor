@@ -224,6 +224,54 @@ def fetch_object_info(
         return None
 
 
+def release_vram(
+    urls: list[str],
+    *,
+    request_func_post: Callable[..., Any] = requests.post,
+) -> list[str]:
+    """POST ``/free`` on each ComfyUI base URL to unload models and free GPU memory."""
+    payload = {"unload_models": True, "free_memory": True}
+    succeeded: list[str] = []
+    for url in urls:
+        try:
+            request_func_post(
+                f"{url.rstrip('/')}/free",
+                json=payload,
+                timeout=30,
+            )
+            succeeded.append(url)
+        except Exception as exc:
+            logger.warning("Failed to release VRAM at {}: {}", url, exc)
+    return succeeded
+
+
+def free_vram_gb(
+    url: str,
+    *,
+    request_func_get: Callable[..., Any] = requests.get,
+) -> float | None:
+    """Return free VRAM in GB from ComfyUI ``/system_stats``, or None if unavailable."""
+    try:
+        response = request_func_get(f"{url.rstrip('/')}/system_stats", timeout=15)
+        if response.status_code >= 400:
+            return None
+        data = response.json()
+        if not isinstance(data, dict):
+            return None
+        devices = data.get("devices")
+        if not isinstance(devices, list) or not devices:
+            return None
+        device0 = devices[0]
+        if not isinstance(device0, dict):
+            return None
+        vram_free = device0.get("vram_free")
+        if vram_free is None:
+            return None
+        return float(vram_free) / (1024**3)
+    except (requests.RequestException, ValueError, TypeError):
+        return None
+
+
 def _comfy_reachable(comfyui_url: str, request_func: Callable[..., Any] = requests.get) -> bool:
     try:
         response = request_func(f"{comfyui_url.rstrip('/')}/system_stats", timeout=5)
@@ -396,6 +444,19 @@ def upscale_video(
         logger.warning(
             "ComfyUI unreachable at {}; falling back to lanczos upscale",
             config.comfyui_url,
+        )
+        lanczos_upscale(in_path, out_path, target_width, target_height)
+        return "lanczos"
+
+    release_vram(config.free_vram_urls, request_func_post=request_func_post)
+    free_gb = free_vram_gb(config.comfyui_url, request_func_get=request_func_get)
+    if free_gb is not None and free_gb < config.min_free_vram_gb:
+        logger.warning(
+            "Insufficient free VRAM for {} upscale: {:.2f} GB free, {:.2f} GB required; "
+            "falling back to lanczos",
+            backend,
+            free_gb,
+            config.min_free_vram_gb,
         )
         lanczos_upscale(in_path, out_path, target_width, target_height)
         return "lanczos"

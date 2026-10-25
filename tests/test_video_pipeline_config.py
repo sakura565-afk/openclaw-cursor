@@ -106,10 +106,13 @@ class TestGetDirectorWiring:
         with mock.patch("video_pipeline.runner.H3Director") as h3_cls:
             h3_cls.return_value = mock.Mock()
             _get_director(config)
+            expected_upscale = config.upscale.model_copy(
+                update={"free_vram_urls": [config.director_config.comfy_url]},
+            )
             h3_cls.assert_called_once_with(
                 output_dir=config.output_dir,
                 comfy_url="http://127.0.0.1:8199",
-                upscale_config=config.upscale,
+                upscale_config=expected_upscale,
             )
 
     def test_workflow_path_passed_when_set(self, tmp_path: Path) -> None:
@@ -126,9 +129,12 @@ class TestGetDirectorWiring:
         with mock.patch("video_pipeline.runner.H3Director") as h3_cls:
             h3_cls.return_value = mock.Mock()
             _get_director(config)
+            expected_upscale = config.upscale.model_copy(
+                update={"free_vram_urls": [config.director_config.comfy_url]},
+            )
             h3_cls.assert_called_once_with(
                 output_dir=config.output_dir,
                 comfy_url="http://127.0.0.1:8189",
                 workflow_path=custom,
-                upscale_config=config.upscale,
+                upscale_config=expected_upscale,
             )
