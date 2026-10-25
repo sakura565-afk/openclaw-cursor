@@ -43,7 +43,13 @@ def _get_director(config: PipelineConfig) -> Director:
     """Factory for director implementations."""
     match config.director:
         case "h3":
-            return H3Director(output_dir=config.output_dir)
+            kwargs: dict[str, object] = {
+                "output_dir": config.output_dir,
+                "comfy_url": config.director_config.comfy_url,
+            }
+            if config.director_config.workflow_path is not None:
+                kwargs["workflow_path"] = config.director_config.workflow_path
+            return H3Director(**kwargs)
         case _:
             raise ValueError(f"Unknown director: {config.director}")
 
