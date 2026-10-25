@@ -36,7 +36,7 @@ python -m video_pipeline.runner --config video_pipeline/configs/furniture_batch.
 | `upscale` | object | Post-render upscale: `backend`, `comfyui_url`, `resolution`, `batch_size`, … |
 | `director` | string | Director key: `h3` (default) or `freevideo` (LAB only) |
 | `director_config` | object | `comfy_url` (LAB `:8189` for FreeVideo), optional `workflow_path` (H3) |
-| `freevideo` | object | FreeVideo settings (when `director: freevideo`): `width`, `height`, `seconds`, `seed`, `two_pass`, `base_steps`, `refine_steps`, `preview`, `output_root` (default `G:/FreeVideo_output`) |
+| `freevideo` | object | FreeVideo settings (when `director: freevideo`): `width`, `height`, `seconds`, `seed`, `two_pass`, `base_steps`, `refine_steps`, `preview`, `output_root` (default `G:/FreeVideo_output`), `last_frame` (optional path pinned as the graph’s last frame), `frame_lock` (default `true`: keep the full subject in frame at constant distance) |
 | `output_dir` | path | Output directory for rendered videos |
 
 ### Upscale (`upscale`)
@@ -79,6 +79,23 @@ Supported aspect ratios: `1:1`, `9:16`, `16:9`, `3:4`, `4:3`, `2:3`.
 ### Motion presets (H3)
 
 Built-in motion keys: `slow_push_in`, `static`, `slow_turn`, `pan_left`. Custom strings are used as raw prompt fragments.
+
+### Product shots from photos
+
+For furniture and other rotating product clips, pin **both** ends of the clip to real photos. The LAB `FreeVideoGenerate` node accepts optional `first` and `last` image inputs; when the last frame is left unpinned, a slow rotation tends to **invent** carved scroll volutes on armrest extremities and gilt crest details that are absent in the first frame, and the framing **crops** feet or other extremities out of shot. With first and last frames pinned to true product photos (and `frame_lock: true` so the camera distance stays constant), measured runs produced clean geometry at every sampled angle.
+
+CLI helper (LAB ComfyUI must be running):
+
+```bash
+python scripts/product_shot.py \
+  --image path/to/front.jpg \
+  --last-image path/to/back.jpg \
+  --width 1344 --height 768 \
+  --prompt prompts/product_rotate.txt \
+  --out media/out/product_rotate.mp4
+```
+
+`--last-image` maps to `freevideo.last_frame` in YAML configs. The script waits for `video.partial.mp4` to finish growing (then rename to `video.mp4`) before copying the final file.
 
 ## Adding a new director
 
