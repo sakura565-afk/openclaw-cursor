@@ -13,7 +13,7 @@ from loguru import logger
 
 from video_pipeline import assembler
 from video_pipeline.assembler import AssemblyError, ClipSpec
-from video_pipeline.config import PipelineConfig, load_config, render_template
+from video_pipeline.config import PipelineConfig, UpscaleConfig, load_config, render_template
 from video_pipeline.director_base import Director
 from video_pipeline.directors.h3 import H3Director
 from video_pipeline.notify import TelegramNotifier, TelegramNotifierError
@@ -39,6 +39,17 @@ def _discover_images(source_dir: Path) -> list[Path]:
     return images
 
 
+def _director_upscale_config(config: PipelineConfig) -> UpscaleConfig:
+    """Build upscale settings for the director without mutating the pipeline config."""
+    upscale = config.upscale
+    free_urls = (
+        list(upscale.free_vram_urls)
+        if upscale.free_vram_urls
+        else [config.director_config.comfy_url]
+    )
+    return upscale.model_copy(update={"free_vram_urls": free_urls})
+
+
 def _get_director(config: PipelineConfig) -> Director:
     """Factory for director implementations."""
     match config.director:
@@ -46,7 +57,7 @@ def _get_director(config: PipelineConfig) -> Director:
             kwargs: dict[str, object] = {
                 "output_dir": config.output_dir,
                 "comfy_url": config.director_config.comfy_url,
-                "upscale_config": config.upscale,
+                "upscale_config": _director_upscale_config(config),
             }
             if config.director_config.workflow_path is not None:
                 kwargs["workflow_path"] = config.director_config.workflow_path

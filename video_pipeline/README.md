@@ -44,6 +44,8 @@ After each H3 render, the runner upscales to the format’s delivery resolution.
 | `batch_size` | `5` | SeedVR2 temporal batch size |
 | `temporal_overlap` | `3` | SeedVR2 overlap between batches |
 | `blocks_to_swap` | `32` | SeedVR2 DiT VRAM trade-off |
+| `free_vram_urls` | `[]` | ComfyUI base URLs to unload via `POST /free` before a learned upscale (see below) |
+| `min_free_vram_gb` | `13.0` | Minimum free VRAM (GB) on `comfyui_url` before starting SeedVR2 / ESRGAN |
 
 **Backend order for `auto`:** `seedvr2` → `esrgan` → `lanczos` (probed once via `/object_info` on `comfyui_url`).
 
@@ -55,7 +57,7 @@ Audio is preserved (VHS audio wiring for Comfy paths; ffmpeg copy/mux for Lanczo
 
 #### VRAM and scheduling (SeedVR2)
 
-The SeedVR2 backend needs about **15 GB of free VRAM** on the GPU (measured peak **15.7 / 16.4 GB** on an RTX 4070 Ti SUPER 16 GB) because it runs a 3B DiT plus a tiled video VAE. On this machine the other ComfyUI instance (**LAB**, port **8189**) idles holding roughly **11 GB** of the card, so SeedVR2 upscale must run either while LAB is idle or released, or in a **separate phase after** the H3 render phase—not at the same time as a live H3 render.
+The SeedVR2 backend needs about **15 GB of free VRAM** on the GPU (measured peak **15.76 / 16.38 GB** on an RTX 4070 Ti SUPER 16 GB) because it runs a 3B DiT plus a tiled video VAE. On this machine the render ComfyUI instance (**LAB**, `director_config.comfy_url`, port **8189**) idles holding roughly **11 GB** of the card. Before each learned upscale on **PROD** (`upscale.comfyui_url`, port **8188**), the pipeline calls `POST {url}/free` with `{"unload_models": true, "free_memory": true}` on every URL in `free_vram_urls` (by default the LAB URL when `free_vram_urls` is empty), then reads `GET {comfyui_url}/system_stats` and checks `devices[0].vram_free`. If free VRAM is below `min_free_vram_gb` (default **13.0**), upscale **falls back to Lanczos** automatically with a logged warning that includes both the measured free GB and the required threshold. If stats are unavailable, the learned backend still runs (no hard block).
 
 **Timing (SeedVR2, 1080×1880):** about **6.6 s per frame** (~**8 min** for a 73-frame clip, ~**19 min** for 175 frames). For faster turnaround, use a smaller `resolution` or the `esrgan` backend.
 
