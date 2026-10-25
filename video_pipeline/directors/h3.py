@@ -16,6 +16,7 @@ from loguru import logger
 
 from PIL import Image
 
+from video_pipeline.assembler import _even, scale_pad_filter
 from video_pipeline.config import OutputSpec
 from video_pipeline.director_base import Director, JobSpec, VideoResult
 from video_pipeline.resolution import apply_resolution, resolve_resolution
@@ -33,6 +34,19 @@ FORMAT_MAP: dict[str, dict[str, Any]] = {
     "4:3": {"aspect_ratio": "4:3 (Landscape)", "width": 832, "height": 624},
     "2:3": {"aspect_ratio": "2:3 (Portrait)", "width": 544, "height": 832},
 }
+
+
+class H3DirectorError(RuntimeError):
+    """Raised when H3 director operations fail."""
+
+
+def upscale_target_dimensions(target_format: str) -> tuple[int, int]:
+    """Return even H.264-safe upscale dimensions for a format key."""
+    if target_format not in FORMAT_MAP:
+        raise H3DirectorError(f"Unknown target format: {target_format}")
+    entry = FORMAT_MAP[target_format]
+    return _even(entry["width"]), _even(entry["height"])
+
 
 DEFAULT_MOTION_PRESETS: dict[str, str] = {
     "slow_push_in": (
@@ -54,10 +68,6 @@ DEFAULT_MOTION_PRESETS: dict[str, str] = {
         "while maintaining focus."
     ),
 }
-
-
-class H3DirectorError(RuntimeError):
-    """Raised when H3 director operations fail."""
 
 
 class H3Director(Director):
@@ -431,14 +441,10 @@ class H3Director(Director):
 
     def upscale(self, video_path: Path, target_format: str) -> Path:
         """Upscale video to target format dimensions using ffmpeg Lanczos."""
-        if target_format not in FORMAT_MAP:
-            raise H3DirectorError(f"Unknown target format: {target_format}")
-
-        target_w = FORMAT_MAP[target_format]["width"]
-        target_h = FORMAT_MAP[target_format]["height"]
+        target_w, target_h = upscale_target_dimensions(target_format)
         upscaled_path = video_path.with_name(f"{video_path.stem}_upscaled.mp4")
 
-        vf = f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease"
+        vf = scale_pad_filter(target_w, target_h)
         proc = subprocess.run(
             [
                 "ffmpeg",
