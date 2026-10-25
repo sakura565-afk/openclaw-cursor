@@ -41,6 +41,20 @@ class DirectorConfig(BaseModel):
     workflow_path: Path | None = None
 
 
+class FreeVideoConfig(BaseModel):
+    """FreeVideo (Video DeltaNet) generation settings (LAB ComfyUI only)."""
+
+    width: int = 1344
+    height: int = 768
+    seconds: float = 7.29
+    seed: int = 2026090903
+    two_pass: bool = True
+    base_steps: int = 8
+    refine_steps: int = 3
+    preview: bool = False
+    output_root: Path = Path("G:/FreeVideo_output")
+
+
 class InterpolationConfig(BaseModel):
     """Optional RIFE frame interpolation via a dedicated ComfyUI instance.
 
@@ -94,6 +108,7 @@ class PipelineConfig(BaseModel):
     recovery: RecoveryConfig = Field(default_factory=RecoveryConfig)
     director: str = "h3"
     director_config: DirectorConfig = Field(default_factory=DirectorConfig)
+    freevideo: FreeVideoConfig = Field(default_factory=FreeVideoConfig)
     output_dir: Path = Path("media/out/main/")
 
 
