@@ -25,6 +25,25 @@ class QualityGates(BaseModel):
     max_render_sec: int = 1800
     min_resolution_h: int = 720
     expected_codec: str = "h264"
+    include_banding: bool = True
+    banding_max_score: float = 25.0
+
+
+class InterpolationConfig(BaseModel):
+    """Optional RIFE frame interpolation via a dedicated ComfyUI instance."""
+
+    enabled: bool = False
+    target_fps: float = 48.0
+    comfyui_url: str = "http://127.0.0.1:8188"
+
+
+class AssemblyConfig(BaseModel):
+    """Optional multi-clip concat and assembled delivery."""
+
+    enabled: bool = False
+    output_name: str = "assembled"
+    deliver_per_clip: bool = True
+    deliver_assembled: bool = True
 
 
 class DeliveryConfig(BaseModel):
@@ -53,6 +72,8 @@ class PipelineConfig(BaseModel):
     source_dir: Path
     outputs: list[OutputSpec]
     quality_gates: QualityGates = Field(default_factory=QualityGates)
+    interpolation: InterpolationConfig = Field(default_factory=InterpolationConfig)
+    assembly: AssemblyConfig = Field(default_factory=AssemblyConfig)
     delivery: DeliveryConfig
     recovery: RecoveryConfig = Field(default_factory=RecoveryConfig)
     director: str = "h3"
