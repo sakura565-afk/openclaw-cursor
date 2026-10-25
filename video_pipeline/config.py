@@ -71,6 +71,8 @@ class UpscaleConfig(BaseModel):
     batch_size: int = 5
     temporal_overlap: int = 3
     blocks_to_swap: int = 32
+    free_vram_urls: list[str] = []
+    min_free_vram_gb: float = 13.0
 
 
 class DeliveryConfig(BaseModel):
