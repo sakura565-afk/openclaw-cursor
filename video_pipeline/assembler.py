@@ -382,6 +382,87 @@ def _comfy_reachable(comfyui_url: str) -> bool:
         return False
 
 
+def _extract_combo_options(spec: Any) -> list[Any]:
+    """Unwrap a ComfyUI combo/list input spec to its option entries."""
+    if not isinstance(spec, (list, tuple)) or not spec:
+        return []
+    head = spec[0]
+    if isinstance(head, (list, tuple)) and head:
+        if all(isinstance(item, str) for item in head):
+            return list(head)
+        return list(head)
+    return list(spec)
+
+
+def _format_subwidget_keys(format_spec: Any, selected_format: str) -> set[str]:
+    """Return input keys declared as sub-widgets for the chosen VHS format option."""
+    keys: set[str] = set()
+    for option in _extract_combo_options(format_spec):
+        if not isinstance(option, (list, tuple)) or len(option) < 2:
+            continue
+        if str(option[0]) != selected_format:
+            continue
+        subwidgets = option[1]
+        if not isinstance(subwidgets, (list, tuple)):
+            continue
+        for widget in subwidgets:
+            if isinstance(widget, (list, tuple)) and widget and isinstance(widget[0], str):
+                keys.add(widget[0])
+        break
+    return keys
+
+
+def allowed_node_input_keys(node_def: dict[str, Any], node_inputs: dict[str, Any]) -> set[str]:
+    """Keys accepted on a node given object_info and the node's current inputs."""
+    input_block = node_def.get("input", {})
+    if not isinstance(input_block, dict):
+        return set()
+    keys: set[str] = set()
+    for section in ("required", "optional", "hidden"):
+        section_data = input_block.get(section, {})
+        if isinstance(section_data, dict):
+            keys.update(section_data.keys())
+    selected_format = node_inputs.get("format")
+    if selected_format is not None:
+        for section in ("required", "optional"):
+            section_data = input_block.get(section, {})
+            if isinstance(section_data, dict) and "format" in section_data:
+                keys.update(_format_subwidget_keys(section_data["format"], str(selected_format)))
+    return keys
+
+
+def validate_workflow_against_object_info(
+    workflow: dict[str, Any],
+    object_info: dict[str, Any],
+) -> list[str]:
+    """Validate API workflow node inputs against a ComfyUI /object_info payload."""
+    errors: list[str] = []
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            errors.append(f"node {node_id}: expected object")
+            continue
+        class_type = node.get("class_type")
+        if not class_type:
+            errors.append(f"node {node_id}: missing class_type")
+            continue
+        if class_type not in object_info:
+            errors.append(f"node {node_id}: unknown class_type {class_type!r}")
+            continue
+        node_def = object_info[class_type]
+        if not isinstance(node_def, dict):
+            errors.append(f"node {node_id}: invalid object_info for {class_type!r}")
+            continue
+        inputs = node.get("inputs", {})
+        if not isinstance(inputs, dict):
+            errors.append(f"node {node_id}: inputs must be an object")
+            continue
+        allowed = allowed_node_input_keys(node_def, inputs)
+        for key in inputs:
+            if key not in allowed:
+                errors.append(f"node {node_id} ({class_type}): unknown input {key!r}")
+    return errors
+
+
 def _default_rife_workflow(video_filename: str, target_fps: float) -> dict[str, Any]:
     """Minimal ComfyUI API workflow for VHS + RIFE-style interpolation."""
     return {
@@ -420,6 +501,9 @@ def _default_rife_workflow(video_filename: str, target_fps: float) -> dict[str, 
                 "loop_count": 0,
                 "filename_prefix": "assembler_rife",
                 "format": "video/h264-mp4",
+                "pix_fmt": "yuv420p",
+                "crf": 19,
+                "save_metadata": True,
                 "pingpong": False,
                 "save_output": True,
                 "images": ["2", 0],
@@ -492,7 +576,7 @@ def _validate_workflow_against_comfyui(comfyui_url: str, workflow: dict[str, Any
                 f"Workflow node {class_type!r} (id {node_id}) missing required input: {input_name!r}"
             )
 
-        allowed = required | optional
+        allowed = allowed_node_input_keys(node_info, workflow_inputs)
         for input_name in workflow_inputs:
             if input_name not in allowed:
                 raise AssemblyError(
