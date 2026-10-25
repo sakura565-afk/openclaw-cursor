@@ -90,6 +90,35 @@ class TestQualityGateAR:
         assert result.actual > 0.03
 
 
+class TestQualityGateARValue:
+    def test_ar_value_pass_when_matching(self, tmp_path: Path) -> None:
+        video = tmp_path / "video.mp4"
+        video.write_bytes(b"fake")
+        payload = {
+            "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1080, "height": 1920}],
+            "format": {"duration": "7.0"},
+        }
+        expected_ar = 1080 / 1920
+        gate = QualityGate()
+        with mock.patch("video_pipeline.quality.subprocess.run", return_value=_make_ffprobe_proc(payload)):
+            result = gate.check_ar_value(video, expected_ar, max_drift=0.05)
+        assert result.passed
+        assert result.actual == pytest.approx(0.0, abs=1e-6)
+
+    def test_ar_value_fail_when_drift_exceeds_tolerance(self, tmp_path: Path) -> None:
+        video = tmp_path / "video.mp4"
+        video.write_bytes(b"fake")
+        payload = {
+            "streams": [{"codec_type": "video", "codec_name": "h264", "width": 1000, "height": 1000}],
+            "format": {"duration": "7.0"},
+        }
+        gate = QualityGate()
+        with mock.patch("video_pipeline.quality.subprocess.run", return_value=_make_ffprobe_proc(payload)):
+            result = gate.check_ar_value(video, expected_ar=9 / 16, max_drift=0.05)
+        assert not result.passed
+        assert result.actual > 0.05
+
+
 class TestQualityGateDuration:
     def test_duration_pass(self, tmp_path: Path) -> None:
         video = tmp_path / "video.mp4"
@@ -203,3 +232,24 @@ class TestQualityReport:
         assert not report.overall_passed
         failed_names = [c.name for c in report.checks if not c.passed]
         assert "codec" in failed_names
+
+    def test_check_all_uses_expected_ar_when_set(self, tmp_path: Path) -> None:
+        from video_pipeline.quality import CheckResult
+
+        video = tmp_path / "video.mp4"
+        video.write_bytes(b"fake")
+        gate = QualityGate()
+        gates = QualityGates(max_ar_drift=0.05, min_resolution_h=720, expected_codec="h264")
+        ok = CheckResult(name="x", passed=True, actual=0, expected=0, message="ok")
+
+        with (
+            mock.patch.object(gate, "check_ar_value", return_value=ok) as ar_value,
+            mock.patch.object(gate, "check_ar") as ar_image,
+            mock.patch.object(gate, "check_resolution", return_value=ok),
+            mock.patch.object(gate, "check_codec", return_value=ok),
+        ):
+            report = gate.check_all(video, None, gates, expected_ar=16 / 9)
+
+        ar_image.assert_not_called()
+        ar_value.assert_called_once_with(video, 16 / 9, gates.max_ar_drift)
+        assert report.overall_passed
