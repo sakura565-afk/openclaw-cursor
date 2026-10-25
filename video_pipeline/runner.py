@@ -331,11 +331,12 @@ def run_pipeline(
 
             asm_report = quality.check_all(
                 assembled_path,
-                first_source_image,
+                None,
                 config.quality_gates,
                 target_duration_sec=assembled_duration if assembled_duration > 0 else None,
                 include_banding=config.quality_gates.include_banding,
                 banding_max_score=config.quality_gates.banding_max_score,
+                expected_ar=target_ar_value,
             )
             if not asm_report.overall_passed:
                 reasons = "; ".join(c.message for c in asm_report.checks if not c.passed)

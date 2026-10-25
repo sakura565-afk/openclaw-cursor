@@ -11,8 +11,11 @@ from unittest import mock
 import pytest
 
 from video_pipeline.assembler import (
+    AssemblyError,
     AssemblySpec,
     ClipSpec,
+    _default_rife_workflow,
+    _validate_workflow_against_comfyui,
     build_concat_demuxer_argv,
     build_normalize_argv,
     concat_clips,
@@ -175,6 +178,73 @@ class TestConcatIntegration:
         tw, th = target_resolution([info_a, info_b, info_c])
         assert info_out["width"] == tw
         assert info_out["height"] == th
+
+
+# Required input names on production ComfyUI (:8188) — regression table for RIFE workflow.
+_RIFE_NODE_REQUIRED_INPUTS: dict[str, frozenset[str]] = {
+    "VHS_LoadVideo": frozenset(
+        {
+            "video",
+            "force_rate",
+            "force_size",
+            "custom_width",
+            "custom_height",
+            "frame_load_cap",
+            "skip_first_frames",
+            "select_every_nth",
+        }
+    ),
+    "RIFE VFI": frozenset(
+        {
+            "batch_size",
+            "ckpt_name",
+            "clear_cache_after_n_frames",
+            "dtype",
+            "ensemble",
+            "fast_mode",
+            "frames",
+            "multiplier",
+            "scale_factor",
+            "torch_compile",
+        }
+    ),
+    "VHS_VideoCombine": frozenset(
+        {
+            "frame_rate",
+            "loop_count",
+            "filename_prefix",
+            "format",
+            "pingpong",
+            "save_output",
+        }
+    ),
+}
+
+
+def test_default_rife_workflow_covers_required_node_inputs() -> None:
+    workflow = _default_rife_workflow("clip.mp4", target_fps=48.0)
+    for node in workflow.values():
+        class_type = node["class_type"]
+        required = _RIFE_NODE_REQUIRED_INPUTS[class_type]
+        workflow_keys = set(node["inputs"].keys())
+        missing = required - workflow_keys
+        assert not missing, f"{class_type} missing workflow inputs: {sorted(missing)}"
+
+
+def test_validate_workflow_raises_on_missing_required_input() -> None:
+    workflow = _default_rife_workflow("clip.mp4", target_fps=24.0)
+    workflow["1"]["inputs"].pop("force_size")
+
+    def fake_fetch(_url: str, class_type: str) -> dict:
+        required = {name: ["INT"] for name in _RIFE_NODE_REQUIRED_INPUTS[class_type]}
+        return {"input": {"required": required, "optional": {}}}
+
+    with mock.patch(
+        "video_pipeline.assembler._fetch_node_object_info",
+        side_effect=lambda url, ct: fake_fetch(url, ct),
+    ):
+        with pytest.raises(AssemblyError, match="missing required input: 'force_size'"):
+            _validate_workflow_against_comfyui("http://127.0.0.1:8188", workflow)
 
 
 def test_assemble_spec_dataclass(tmp_path: Path) -> None:
