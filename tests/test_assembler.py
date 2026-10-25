@@ -23,7 +23,67 @@ from video_pipeline.assembler import (
     probe,
     scale_pad_filter,
     target_resolution,
+    validate_workflow_against_object_info,
 )
+
+
+def _rife_object_info_fixture() -> dict:
+    """Minimal /object_info slice matching VHS + RIFE on ComfyUI :8188."""
+    h264_subwidgets = [
+        ["pix_fmt", ["yuv420p", "yuv420p10le"]],
+        ["crf", "INT", {"default": 19, "min": 0, "max": 100, "step": 1}],
+        ["save_metadata", "BOOLEAN", {"default": True}],
+    ]
+    return {
+        "VHS_LoadVideo": {
+            "input": {
+                "required": {
+                    "video": ["STRING", {"default": ""}],
+                    "force_rate": ["INT", {"default": 0}],
+                    "force_size": [["Disabled"], {}],
+                    "custom_width": ["INT", {"default": 0}],
+                    "custom_height": ["INT", {"default": 0}],
+                    "frame_load_cap": ["INT", {"default": 0}],
+                    "skip_first_frames": ["INT", {"default": 0}],
+                    "select_every_nth": ["INT", {"default": 1}],
+                },
+            },
+        },
+        "RIFE VFI": {
+            "input": {
+                "required": {
+                    "ckpt_name": [["rife47.pth"], {}],
+                    "multiplier": ["INT", {"default": 2}],
+                    "fast_mode": ["BOOLEAN", {"default": True}],
+                    "ensemble": ["BOOLEAN", {"default": True}],
+                    "scale_factor": ["FLOAT", {"default": 1.0}],
+                    "clear_cache_after_n_frames": ["INT", {"default": 10}],
+                    "dtype": [["float32"], {}],
+                    "torch_compile": ["BOOLEAN", {"default": False}],
+                    "batch_size": ["INT", {"default": 1}],
+                    "frames": ["IMAGE", {}],
+                },
+            },
+        },
+        "VHS_VideoCombine": {
+            "input": {
+                "required": {
+                    "images": ["IMAGE", {}],
+                    "frame_rate": ["FLOAT", {"default": 8}],
+                    "loop_count": ["INT", {"default": 0}],
+                    "filename_prefix": ["STRING", {"default": "AnimateDiff"}],
+                    "format": [
+                        [
+                            ["video/h264-mp4", h264_subwidgets],
+                            ["video/webm-vp9", [["crf", "INT", {"default": 32}]]],
+                        ]
+                    ],
+                    "pingpong": ["BOOLEAN", {"default": False}],
+                    "save_output": ["BOOLEAN", {"default": True}],
+                },
+            },
+        },
+    }
 
 
 def _ffmpeg_available() -> bool:
@@ -254,3 +314,37 @@ def test_assemble_spec_dataclass(tmp_path: Path) -> None:
         interpolate=False,
     )
     assert spec.target_fps is None
+
+
+class TestDefaultRifeWorkflow:
+    def test_vhs_video_combine_includes_format_subwidgets(self) -> None:
+        workflow = _default_rife_workflow("clip.mp4", target_fps=48.0)
+        combine = workflow["3"]["inputs"]
+        assert combine["format"] == "video/h264-mp4"
+        assert combine["pix_fmt"] == "yuv420p"
+        assert combine["crf"] == 19
+        assert combine["save_metadata"] is True
+
+    def test_preflight_accepts_workflow_with_format_subwidgets(self) -> None:
+        workflow = _default_rife_workflow("clip.mp4", target_fps=48.0)
+        errors = validate_workflow_against_object_info(workflow, _rife_object_info_fixture())
+        assert errors == []
+
+    def test_preflight_rejects_unknown_format_subwidget(self) -> None:
+        workflow = _default_rife_workflow("clip.mp4", target_fps=48.0)
+        workflow["3"]["inputs"]["not_a_real_widget"] = True
+        errors = validate_workflow_against_object_info(workflow, _rife_object_info_fixture())
+        assert any("unknown input" in err and "not_a_real_widget" in err for err in errors)
+
+    def test_comfyui_preflight_accepts_format_subwidgets(self) -> None:
+        workflow = _default_rife_workflow("clip.mp4", target_fps=48.0)
+        fixture = _rife_object_info_fixture()
+
+        def fake_fetch(_url: str, class_type: str) -> dict:
+            return fixture[class_type]
+
+        with mock.patch(
+            "video_pipeline.assembler._fetch_node_object_info",
+            side_effect=lambda url, ct: fake_fetch(url, ct),
+        ):
+            _validate_workflow_against_comfyui("http://127.0.0.1:8188", workflow)
