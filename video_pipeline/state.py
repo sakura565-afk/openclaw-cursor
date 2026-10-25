@@ -208,6 +208,36 @@ class StateManager:
 
         return self._mutate_state(mutator)
 
+    def mark_assembly_done(
+        self,
+        output_path: str,
+        *,
+        name: str,
+        clip_count: int,
+        **metrics: Any,
+    ) -> StateDict:
+        """Record a successfully assembled multi-clip output (separate from per-item records).
+
+        Args:
+            output_path: Path to the assembled video file.
+            name: Assembled output basename (from config).
+            clip_count: Number of clips concatenated.
+            **metrics: Optional extra fields stored on the assembly summary.
+
+        Returns:
+            Updated state dict.
+        """
+        def mutator(state: StateDict) -> None:
+            state["assembly"] = {
+                "status": ItemStatus.DONE.value,
+                "output_path": output_path,
+                "name": name,
+                "clip_count": clip_count,
+                **metrics,
+            }
+
+        return self._mutate_state(mutator)
+
     def get_item_status(self, image: str, format_key: str) -> str | None:
         """Get the status of a specific item.
 
