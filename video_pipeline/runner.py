@@ -11,6 +11,8 @@ from pathlib import Path
 
 from loguru import logger
 
+from video_pipeline import assembler
+from video_pipeline.assembler import AssemblyError, ClipSpec
 from video_pipeline.config import PipelineConfig, load_config, render_template
 from video_pipeline.director_base import Director
 from video_pipeline.directors.h3 import H3Director
@@ -41,7 +43,13 @@ def _get_director(config: PipelineConfig) -> Director:
     """Factory for director implementations."""
     match config.director:
         case "h3":
-            return H3Director(output_dir=config.output_dir)
+            kwargs: dict[str, object] = {
+                "output_dir": config.output_dir,
+                "comfy_url": config.director_config.comfy_url,
+            }
+            if config.director_config.workflow_path is not None:
+                kwargs["workflow_path"] = config.director_config.workflow_path
+            return H3Director(**kwargs)
         case _:
             raise ValueError(f"Unknown director: {config.director}")
 
@@ -106,6 +114,8 @@ def run_pipeline(
 
     director = _get_director(config) if not dry_run else None
     quality = QualityGate()
+    assembled_clips: list[ClipSpec] = []
+    first_source_image: Path | None = None
 
     logger.info(
         "Pipeline {}: {} images x {} outputs = {} jobs",
@@ -173,6 +183,8 @@ def run_pipeline(
                         image_path,
                         config.quality_gates,
                         target_duration_sec=float(output_spec.duration_sec),
+                        include_banding=config.quality_gates.include_banding,
+                        banding_max_score=config.quality_gates.banding_max_score,
                     )
 
                     if not report.overall_passed:
@@ -186,14 +198,58 @@ def run_pipeline(
                         break
 
                     final_path = director.upscale(result.video_path, output_spec.format)
-                    size_mb = final_path.stat().st_size / (1024 * 1024)
+                    delivery_path = final_path
+                    interpolated = False
+
+                    if config.interpolation.enabled:
+                        interpolated_path = final_path.with_name(
+                            f"{final_path.stem}_interp{final_path.suffix}"
+                        )
+                        try:
+                            assembler.interpolate(
+                                final_path,
+                                interpolated_path,
+                                config.interpolation.target_fps,
+                                comfyui_url=config.interpolation.comfyui_url,
+                            )
+                            delivery_path = interpolated_path
+                            interpolated = True
+                        except AssemblyError as exc:
+                            logger.warning("Interpolation skipped for {}: {}", job_label, exc)
+
+                    if interpolated:
+                        duration_check = quality.check_duration(
+                            delivery_path,
+                            float(output_spec.duration_sec),
+                        )
+                        if not duration_check.passed:
+                            logger.error(
+                                "Duration check failed for {} after interpolation: {}",
+                                job_label,
+                                duration_check.message,
+                            )
+                            if attempts > max_retries:
+                                state_mgr.mark_failed(
+                                    image_name,
+                                    format_key,
+                                    f"quality: {duration_check.message}",
+                                )
+                            else:
+                                time.sleep(config.recovery.retry_backoff_sec * attempts)
+                                continue
+                            break
+
+                    size_mb = delivery_path.stat().st_size / (1024 * 1024)
                     ar_check = quality.check_ar(
-                        final_path,
+                        delivery_path,
                         image_path,
                         config.quality_gates.max_ar_drift,
                     )
 
-                    if notifier:
+                    deliver_clip = not (
+                        config.assembly.enabled and not config.assembly.deliver_per_clip
+                    )
+                    if notifier and deliver_clip:
                         caption = render_template(
                             config.delivery.caption_template,
                             name=image_path.stem,
@@ -202,7 +258,7 @@ def run_pipeline(
                         )
                         try:
                             notifier.send_video(
-                                final_path,
+                                delivery_path,
                                 caption,
                                 config.delivery.telegram_chat,
                             )
@@ -217,13 +273,17 @@ def run_pipeline(
                     state_mgr.mark_done(
                         image_name,
                         format_key,
-                        str(final_path),
+                        str(delivery_path),
                         duration_sec=result.render_sec,
                         size_mb=round(size_mb, 2),
                         ar_drift=ar_check.actual,
+                        interpolated=interpolated,
                     )
+                    assembled_clips.append(ClipSpec(path=delivery_path))
+                    if first_source_image is None:
+                        first_source_image = image_path
                     done_count += 1
-                    logger.info("Completed {} -> {}", job_label, final_path)
+                    logger.info("Completed {} -> {}", job_label, delivery_path)
 
                     if notifier:
                         pct = int((done_count / total_jobs) * 100) if total_jobs else 100
@@ -245,6 +305,71 @@ def run_pipeline(
                         state_mgr.mark_failed(image_name, format_key, str(exc))
                     else:
                         time.sleep(config.recovery.retry_backoff_sec * attempts)
+
+    if (
+        not dry_run
+        and config.assembly.enabled
+        and assembled_clips
+        and first_source_image is not None
+    ):
+        assembled_path = config.output_dir / f"{config.assembly.output_name}.mp4"
+        try:
+            width, height = assembler.target_resolution(assembled_clips)
+            target_ar_value = width / height if height else None
+            assembler.concat_clips(assembled_clips, assembled_path, target_ar_value)
+        except AssemblyError as exc:
+            logger.error("Assembly failed: {}", exc)
+        else:
+            assembled_duration = 0.0
+            for image_path in images:
+                for output_spec in config.outputs:
+                    if (
+                        state_mgr.get_item_status(image_path.name, output_spec.format)
+                        == ItemStatus.DONE.value
+                    ):
+                        assembled_duration += float(output_spec.duration_sec)
+
+            asm_report = quality.check_all(
+                assembled_path,
+                first_source_image,
+                config.quality_gates,
+                target_duration_sec=assembled_duration if assembled_duration > 0 else None,
+                include_banding=config.quality_gates.include_banding,
+                banding_max_score=config.quality_gates.banding_max_score,
+            )
+            if not asm_report.overall_passed:
+                reasons = "; ".join(c.message for c in asm_report.checks if not c.passed)
+                logger.error("Assembled video quality gate failed: {}", reasons)
+            else:
+                asm_size_mb = assembled_path.stat().st_size / (1024 * 1024)
+                if notifier and config.assembly.deliver_assembled:
+                    asm_caption = render_template(
+                        config.delivery.caption_template,
+                        name=config.assembly.output_name,
+                        format="assembled",
+                        duration=int(assembled_duration),
+                        assembled=config.assembly.output_name,
+                        clip_count=len(assembled_clips),
+                    )
+                    try:
+                        notifier.send_video(
+                            assembled_path,
+                            asm_caption,
+                            config.delivery.telegram_chat,
+                        )
+                    except Exception as exc:
+                        logger.error("Telegram delivery of assembled video failed: {}", exc)
+                state_mgr.mark_assembly_done(
+                    str(assembled_path),
+                    name=config.assembly.output_name,
+                    clip_count=len(assembled_clips),
+                    size_mb=round(asm_size_mb, 2),
+                )
+                logger.info(
+                    "Assembled {} clips -> {}",
+                    len(assembled_clips),
+                    assembled_path,
+                )
 
     if notifier and not dry_run and total_jobs > 0:
         final_text = render_template(
