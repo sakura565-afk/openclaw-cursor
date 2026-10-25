@@ -8,12 +8,15 @@ from unittest import mock
 import pytest
 
 from video_pipeline.config import UpscaleConfig
+from video_pipeline.runner import _director_upscale_config
 from video_pipeline.upscale import (
     build_esrgan_workflow,
     build_seedvr2_workflow,
     capabilities_from_object_info,
+    free_vram_gb,
     lanczos_upscale,
     mux_audio_from_source,
+    release_vram,
     select_backend,
     upscale_video,
 )
@@ -146,6 +149,166 @@ class TestLanczosAndAudio:
             with mock.patch("video_pipeline.upscale._run_ffmpeg") as run_ff:
                 mux_audio_from_source(video, audio_src, out)
         run_ff.assert_called_once()
+
+
+class TestReleaseVram:
+    def test_posts_free_on_every_url(self) -> None:
+        calls: list[tuple[str, dict]] = []
+
+        def fake_post(url: str, **kwargs: object) -> object:
+            calls.append((url, kwargs))
+            return mock.Mock(status_code=200)
+
+        urls = ["http://127.0.0.1:8189", "http://127.0.0.1:8189/"]
+        succeeded = release_vram(urls, request_func_post=fake_post)
+        assert succeeded == urls
+        assert len(calls) == 2
+        for call_url, kwargs in calls:
+            assert call_url.endswith("/free")
+            assert kwargs["json"] == {"unload_models": True, "free_memory": True}
+
+    def test_swallows_failing_url_and_returns_others(self) -> None:
+        def fake_post(url: str, **kwargs: object) -> object:
+            if "8189" in url:
+                raise ConnectionError("down")
+            return mock.Mock(status_code=200)
+
+        succeeded = release_vram(
+            ["http://127.0.0.1:8189", "http://127.0.0.1:8188"],
+            request_func_post=fake_post,
+        )
+        assert succeeded == ["http://127.0.0.1:8188"]
+
+
+class TestFreeVramGb:
+    def test_reads_vram_free_as_gb(self) -> None:
+        gib = 5 * 1024**3
+
+        def fake_get(url: str, **kwargs: object) -> object:
+            assert url.endswith("/system_stats")
+            return mock.Mock(status_code=200, json=lambda: {"devices": [{"vram_free": gib}]})
+
+        assert free_vram_gb("http://127.0.0.1:8188/", request_func_get=fake_get) == 5.0
+
+    def test_returns_none_when_vram_free_missing(self) -> None:
+        def fake_get(url: str, **kwargs: object) -> object:
+            return mock.Mock(status_code=200, json=lambda: {"devices": [{}]})
+
+        assert free_vram_gb("http://127.0.0.1:8188", request_func_get=fake_get) is None
+
+
+class TestUpscaleVramPreflight:
+    def test_preflight_falls_back_when_vram_below_minimum(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.mp4"
+        dst = tmp_path / "out.mp4"
+        src.write_bytes(b"in")
+        cfg = UpscaleConfig(backend="seedvr2", min_free_vram_gb=13.0)
+        with mock.patch("video_pipeline.upscale._comfy_reachable", return_value=True):
+            with mock.patch("video_pipeline.upscale.release_vram") as rel:
+                with mock.patch("video_pipeline.upscale.free_vram_gb", return_value=4.5):
+                    with mock.patch("video_pipeline.upscale.lanczos_upscale") as lz:
+                        with mock.patch("video_pipeline.upscale.logger") as log:
+                            name = upscale_video(
+                                src,
+                                dst,
+                                720,
+                                1280,
+                                cfg,
+                                object_info=FAKE_OBJECT_INFO_SEEDVR2,
+                            )
+        rel.assert_called_once_with(cfg.free_vram_urls, request_func_post=mock.ANY)
+        assert name == "lanczos"
+        lz.assert_called_once_with(src, dst, 720, 1280)
+        warning = " ".join(str(c) for c in log.warning.call_args_list)
+        assert "4.5" in warning and "13" in warning
+
+    def test_preflight_proceeds_when_stats_unavailable(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.mp4"
+        dst = tmp_path / "out.mp4"
+        src.write_bytes(b"in")
+        cfg = UpscaleConfig(backend="seedvr2")
+        with mock.patch("video_pipeline.upscale._comfy_reachable", return_value=True):
+            with mock.patch("video_pipeline.upscale.release_vram"):
+                with mock.patch("video_pipeline.upscale.free_vram_gb", return_value=None):
+                    with mock.patch("video_pipeline.upscale.probe", return_value={"has_audio": False, "fps": 24.0}):
+                        with mock.patch(
+                            "video_pipeline.upscale._run_comfy_video_workflow",
+                            return_value=dst,
+                        ) as run_wf:
+                            with mock.patch(
+                                "video_pipeline.upscale.apply_target_box",
+                                return_value=dst,
+                            ):
+                                name = upscale_video(
+                                    src,
+                                    dst,
+                                    720,
+                                    1280,
+                                    cfg,
+                                    object_info=FAKE_OBJECT_INFO_SEEDVR2,
+                                )
+        run_wf.assert_called_once()
+        assert name == "seedvr2"
+
+    def test_preflight_allows_learned_backend_when_vram_sufficient(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.mp4"
+        dst = tmp_path / "out.mp4"
+        src.write_bytes(b"in")
+        cfg = UpscaleConfig(backend="seedvr2", min_free_vram_gb=13.0)
+        with mock.patch("video_pipeline.upscale._comfy_reachable", return_value=True):
+            with mock.patch("video_pipeline.upscale.release_vram"):
+                with mock.patch("video_pipeline.upscale.free_vram_gb", return_value=15.5):
+                    with mock.patch("video_pipeline.upscale.probe", return_value={"has_audio": False, "fps": 24.0}):
+                        with mock.patch(
+                            "video_pipeline.upscale._run_comfy_video_workflow",
+                            return_value=dst,
+                        ) as run_wf:
+                            with mock.patch(
+                                "video_pipeline.upscale.apply_target_box",
+                                return_value=dst,
+                            ):
+                                name = upscale_video(
+                                    src,
+                                    dst,
+                                    720,
+                                    1280,
+                                    cfg,
+                                    object_info=FAKE_OBJECT_INFO_SEEDVR2,
+                                )
+        run_wf.assert_called_once()
+        assert name == "seedvr2"
+
+
+class TestDirectorUpscaleConfigWiring:
+    def test_fills_free_vram_urls_from_director_when_empty(self, tmp_path: Path) -> None:
+        from video_pipeline.config import DeliveryConfig, DirectorConfig, OutputSpec, PipelineConfig
+
+        config = PipelineConfig(
+            project="p",
+            source_dir=tmp_path,
+            outputs=[OutputSpec(format="1:1")],
+            delivery=DeliveryConfig(telegram_chat=1),
+            director_config=DirectorConfig(comfy_url="http://lab:8189"),
+        )
+        wired = _director_upscale_config(config)
+        assert wired.free_vram_urls == ["http://lab:8189"]
+        assert config.upscale.free_vram_urls == []
+
+    def test_does_not_override_explicit_free_vram_urls(self, tmp_path: Path) -> None:
+        from video_pipeline.config import DeliveryConfig, DirectorConfig, OutputSpec, PipelineConfig
+
+        explicit = ["http://custom:9000"]
+        config = PipelineConfig(
+            project="p",
+            source_dir=tmp_path,
+            outputs=[OutputSpec(format="1:1")],
+            delivery=DeliveryConfig(telegram_chat=1),
+            director_config=DirectorConfig(comfy_url="http://lab:8189"),
+            upscale=UpscaleConfig(free_vram_urls=explicit),
+        )
+        wired = _director_upscale_config(config)
+        assert wired.free_vram_urls == explicit
+        assert wired.free_vram_urls is not config.upscale.free_vram_urls
 
 
 class TestUpscaleVideoIntegration:
