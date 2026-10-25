@@ -62,6 +62,17 @@ class AssemblyConfig(BaseModel):
     deliver_assembled: bool = True
 
 
+class UpscaleConfig(BaseModel):
+    """Post-render upscale (SeedVR2 on PROD ComfyUI, ESRGAN, or ffmpeg Lanczos)."""
+
+    backend: Literal["auto", "seedvr2", "esrgan", "lanczos"] = "auto"
+    comfyui_url: str = "http://127.0.0.1:8188"
+    resolution: int = 1080
+    batch_size: int = 5
+    temporal_overlap: int = 3
+    blocks_to_swap: int = 32
+
+
 class DeliveryConfig(BaseModel):
     """Telegram delivery and notification settings."""
 
@@ -89,6 +100,7 @@ class PipelineConfig(BaseModel):
     outputs: list[OutputSpec]
     quality_gates: QualityGates = Field(default_factory=QualityGates)
     interpolation: InterpolationConfig = Field(default_factory=InterpolationConfig)
+    upscale: UpscaleConfig = Field(default_factory=UpscaleConfig)
     assembly: AssemblyConfig = Field(default_factory=AssemblyConfig)
     delivery: DeliveryConfig
     recovery: RecoveryConfig = Field(default_factory=RecoveryConfig)

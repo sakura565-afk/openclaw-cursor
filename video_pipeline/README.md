@@ -28,8 +28,30 @@ python -m video_pipeline.runner --config video_pipeline/configs/furniture_batch.
 | `quality_gates` | object | `max_ar_drift`, `max_render_sec`, `min_resolution_h`, `expected_codec` |
 | `delivery` | object | `telegram_chat`, templates, `progress_every_min` |
 | `recovery` | object | `max_retries`, `retry_backoff_sec`, `resume_from_state`, `state_file` |
+| `upscale` | object | Post-render upscale: `backend`, `comfyui_url`, `resolution`, `batch_size`, … |
 | `director` | string | Director key (`h3` default) |
 | `output_dir` | path | Output directory for rendered videos |
+
+### Upscale (`upscale`)
+
+After each H3 render, the runner upscales to the format’s delivery resolution.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `backend` | `auto` | `auto`, `seedvr2`, `esrgan`, or `lanczos` |
+| `comfyui_url` | `http://127.0.0.1:8188` | PROD ComfyUI for learned backends (not the LAB render URL) |
+| `resolution` | `1080` | SeedVR2 target **short edge** (pixels); aspect ratio preserved |
+| `batch_size` | `5` | SeedVR2 temporal batch size |
+| `temporal_overlap` | `3` | SeedVR2 overlap between batches |
+| `blocks_to_swap` | `32` | SeedVR2 DiT VRAM trade-off |
+
+**Backend order for `auto`:** `seedvr2` → `esrgan` → `lanczos` (probed once via `/object_info` on `comfyui_url`).
+
+- **seedvr2** — requires the `ComfyUI-SeedVR2_VideoUpscaler` custom node pack and model files under `models/SEEDVR2/` on that instance.
+- **esrgan** — `UpscaleModelLoader` + `ImageUpscaleWithModel` with `4x-UltraSharp.pth`, then Lanczos scale+pad to the exact target box.
+- **lanczos** — ffmpeg only; used when ComfyUI is unreachable or nodes are missing (logged warning).
+
+Audio is preserved (VHS audio wiring for Comfy paths; ffmpeg copy/mux for Lanczos).
 
 See `video_pipeline/config.py` for the full Pydantic schema.
 
