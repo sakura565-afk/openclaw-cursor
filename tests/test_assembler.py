@@ -155,6 +155,47 @@ class TestArgvConstruction:
             assert "|" not in token
             assert "&" not in token
 
+    def test_normalize_argv_single_input_when_no_external_audio(self) -> None:
+        src = Path("/tmp/video.mp4")
+        dst = Path("/tmp/out.mp4")
+        argv = build_normalize_argv(
+            src,
+            dst,
+            width=1280,
+            height=720,
+            fps=24,
+            has_audio=True,
+            ensure_audio=True,
+        )
+        assert argv.count("-i") == 1
+        assert str(src) in argv
+        assert "-map" in argv
+        map_idx = argv.index("-map")
+        assert argv[map_idx + 1] == "0:v:0"
+        assert argv[map_idx + 3] == "0:a:0"
+
+    def test_normalize_argv_separate_audio_input(self) -> None:
+        video = Path("/tmp/interp.mp4")
+        audio = Path("/tmp/upscaled.mp4")
+        dst = Path("/tmp/out.mp4")
+        argv = build_normalize_argv(
+            video,
+            dst,
+            width=736,
+            height=1280,
+            fps=48,
+            has_audio=True,
+            ensure_audio=True,
+            audio_src=audio,
+        )
+        assert argv.count("-i") == 2
+        inputs = [argv[i + 1] for i, tok in enumerate(argv) if tok == "-i"]
+        assert inputs == [str(video), str(audio)]
+        assert argv.count("-map") == 2
+        assert "0:v:0" in argv
+        assert "1:a:0" in argv
+        assert "0:a:0" not in argv
+
     def test_concat_demuxer_argv(self) -> None:
         argv = build_concat_demuxer_argv(Path("/tmp/list.txt"), Path("/tmp/out.mp4"))
         assert argv[0] == "ffmpeg"
@@ -305,6 +346,56 @@ def test_validate_workflow_raises_on_missing_required_input() -> None:
     ):
         with pytest.raises(AssemblyError, match="missing required input: 'force_size'"):
             _validate_workflow_against_comfyui("http://127.0.0.1:8188", workflow)
+
+
+def test_concat_needs_audio_from_audio_sources_not_video(tmp_path: Path) -> None:
+    """Interpolated video has no audio; external audio_path must still enable audio track."""
+    video = tmp_path / "interp.mp4"
+    audio = tmp_path / "upscaled.mp4"
+    video.write_bytes(b"v")
+    audio.write_bytes(b"a")
+    out = tmp_path / "assembled.mp4"
+
+    video_info = {
+        "width": 736,
+        "height": 1280,
+        "duration": 3.0,
+        "fps": 48.0,
+        "has_audio": False,
+    }
+    audio_info = {
+        "width": 736,
+        "height": 1280,
+        "duration": 3.0,
+        "fps": 24.0,
+        "has_audio": True,
+    }
+
+    normalize_calls: list[dict] = []
+
+    def fake_probe(path: Path) -> dict:
+        if path == video:
+            return video_info
+        if path == audio:
+            return audio_info
+        raise AssertionError(f"unexpected probe path: {path}")
+
+    def fake_build_normalize_argv(*args, **kwargs):
+        normalize_calls.append(kwargs)
+        return ["ffmpeg", "-y", str(args[1])]
+
+    with (
+        mock.patch("video_pipeline.assembler.probe", side_effect=fake_probe),
+        mock.patch("video_pipeline.assembler.build_normalize_argv", side_effect=fake_build_normalize_argv),
+        mock.patch("video_pipeline.assembler._run_ffmpeg"),
+    ):
+        concat_clips([ClipSpec(path=video, audio_path=audio)], out)
+
+    assert len(normalize_calls) == 1
+    call = normalize_calls[0]
+    assert call["has_audio"] is True
+    assert call["ensure_audio"] is True
+    assert call["audio_src"] == audio
 
 
 def test_assemble_spec_dataclass(tmp_path: Path) -> None:
