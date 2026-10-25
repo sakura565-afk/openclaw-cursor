@@ -15,6 +15,7 @@ from video_pipeline import assembler
 from video_pipeline.assembler import AssemblyError, ClipSpec
 from video_pipeline.config import PipelineConfig, load_config, render_template
 from video_pipeline.director_base import Director
+from video_pipeline.directors.freevideo import FreeVideoDirector
 from video_pipeline.directors.h3 import H3Director
 from video_pipeline.notify import TelegramNotifier, TelegramNotifierError
 from video_pipeline.quality import QualityGate
@@ -50,6 +51,12 @@ def _get_director(config: PipelineConfig) -> Director:
             if config.director_config.workflow_path is not None:
                 kwargs["workflow_path"] = config.director_config.workflow_path
             return H3Director(**kwargs)
+        case "freevideo":
+            return FreeVideoDirector(
+                output_dir=config.output_dir,
+                comfy_url=config.director_config.comfy_url,
+                freevideo_config=config.freevideo,
+            )
         case _:
             raise ValueError(f"Unknown director: {config.director}")
 
