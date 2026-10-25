@@ -46,6 +46,7 @@ def _get_director(config: PipelineConfig) -> Director:
             kwargs: dict[str, object] = {
                 "output_dir": config.output_dir,
                 "comfy_url": config.director_config.comfy_url,
+                "upscale_config": config.upscale,
             }
             if config.director_config.workflow_path is not None:
                 kwargs["workflow_path"] = config.director_config.workflow_path
