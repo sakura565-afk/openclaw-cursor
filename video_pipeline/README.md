@@ -53,6 +53,14 @@ After each H3 render, the runner upscales to the format’s delivery resolution.
 
 Audio is preserved (VHS audio wiring for Comfy paths; ffmpeg copy/mux for Lanczos).
 
+#### VRAM and scheduling (SeedVR2)
+
+The SeedVR2 backend needs about **15 GB of free VRAM** on the GPU (measured peak **15.7 / 16.4 GB** on an RTX 4070 Ti SUPER 16 GB) because it runs a 3B DiT plus a tiled video VAE. On this machine the other ComfyUI instance (**LAB**, port **8189**) idles holding roughly **11 GB** of the card, so SeedVR2 upscale must run either while LAB is idle or released, or in a **separate phase after** the H3 render phase—not at the same time as a live H3 render.
+
+**Timing (SeedVR2, 1080×1880):** about **6.6 s per frame** (~**8 min** for a 73-frame clip, ~**19 min** for 175 frames). For faster turnaround, use a smaller `resolution` or the `esrgan` backend.
+
+In the `upscale` config, `resolution` is the **target short edge** in pixels; aspect ratio is preserved.
+
 See `video_pipeline/config.py` for the full Pydantic schema.
 
 ### Output formats
