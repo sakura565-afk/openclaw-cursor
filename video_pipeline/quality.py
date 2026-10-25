@@ -127,6 +127,38 @@ class QualityGate:
             message=message,
         )
 
+    def check_ar_value(
+        self,
+        video: Path,
+        expected_ar: float,
+        max_drift: float,
+    ) -> CheckResult:
+        """Check aspect ratio drift between video and a numeric expected AR."""
+        info = _ffprobe_video_info(video)
+        stream = _get_video_stream(info)
+        vw = int(stream.get("width", 0))
+        vh = int(stream.get("height", 0))
+        video_ar = vw / vh if vh else 0.0
+
+        if expected_ar == 0.0:
+            drift = 0.0
+        else:
+            drift = abs(video_ar - expected_ar) / expected_ar
+
+        passed = drift <= max_drift
+        message = (
+            f"AR drift {drift:.4f} (video={video_ar:.4f}, expected={expected_ar:.4f})"
+            if passed
+            else f"AR drift {drift:.4f} exceeds max {max_drift}"
+        )
+        return CheckResult(
+            name="aspect_ratio",
+            passed=passed,
+            actual=drift,
+            expected=max_drift,
+            message=message,
+        )
+
     def check_duration(
         self,
         video: Path,
@@ -274,27 +306,34 @@ class QualityGate:
     def check_all(
         self,
         video: Path,
-        source_image: Path,
+        source_image: Path | None,
         gates: QualityGates,
         target_duration_sec: float | None = None,
         include_banding: bool = False,
         banding_max_score: float = 25.0,
+        expected_ar: float | None = None,
     ) -> QualityReport:
         """Run all quality checks and aggregate results.
 
         Args:
             video: Rendered video path.
-            source_image: Original source image.
+            source_image: Original source image (per-clip AR check).
             gates: Quality gate thresholds.
             target_duration_sec: Optional expected duration for duration check.
             include_banding: When True, run horizontal banding detection (opt-in).
             banding_max_score: Maximum allowed banding score when include_banding is set.
+            expected_ar: When set, compare video AR to this value instead of source_image.
 
         Returns:
             QualityReport with all check results.
         """
         report = QualityReport()
-        report.add(self.check_ar(video, source_image, gates.max_ar_drift))
+        if expected_ar is not None:
+            report.add(self.check_ar_value(video, expected_ar, gates.max_ar_drift))
+        elif source_image is not None:
+            report.add(self.check_ar(video, source_image, gates.max_ar_drift))
+        else:
+            raise ValueError("check_all requires source_image or expected_ar")
         report.add(self.check_resolution(video, gates.min_resolution_h))
         report.add(self.check_codec(video, gates.expected_codec))
         if target_duration_sec is not None:
