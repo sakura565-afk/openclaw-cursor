@@ -233,6 +233,33 @@ def test_interpolation_success_reruns_duration_check(tmp_path: Path) -> None:
         quality.check_duration.assert_called_once_with(interp_out, 7.0)
 
 
+def test_assembled_quality_gate_uses_expected_ar_not_source_image(
+    patch_pipeline_deps,
+) -> None:
+    config, _, quality, asm_mod, _ = patch_pipeline_deps
+    config.assembly = AssemblyConfig(enabled=True, output_name="final_cut")
+    assembled = config.output_dir / "final_cut.mp4"
+    assembled.write_bytes(b"asm")
+    asm_mod.concat_clips.return_value = assembled
+    asm_mod.target_resolution.return_value = (1080, 1920)
+
+    assert run_pipeline(config) == 0
+
+    asm_calls = [
+        call
+        for call in quality.check_all.call_args_list
+        if call.args and call.args[0] == assembled
+    ]
+    assert len(asm_calls) == 1
+    asm_call = asm_calls[0]
+    assert asm_call.kwargs.get("expected_ar") == pytest.approx(1080 / 1920)
+    assert asm_call.args[1] is None
+    for call in quality.check_all.call_args_list:
+        if call.args and call.args[0] == assembled:
+            assert call.kwargs.get("expected_ar") is not None
+            assert call.args[1] is None
+
+
 def test_assembly_concat_and_deliver_assembled(patch_pipeline_deps, tmp_path: Path) -> None:
     config, notifier, quality, asm_mod, video_path = patch_pipeline_deps
     config.assembly = AssemblyConfig(enabled=True, output_name="final_cut")

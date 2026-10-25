@@ -390,6 +390,7 @@ def _default_rife_workflow(video_filename: str, target_fps: float) -> dict[str, 
             "inputs": {
                 "video": video_filename,
                 "force_rate": 0,
+                "force_size": "Disabled",
                 "custom_width": 0,
                 "custom_height": 0,
                 "frame_load_cap": 0,
@@ -405,6 +406,10 @@ def _default_rife_workflow(video_filename: str, target_fps: float) -> dict[str, 
                 "fast_mode": True,
                 "ensemble": True,
                 "scale_factor": 1.0,
+                "clear_cache_after_n_frames": 10,
+                "dtype": "float32",
+                "torch_compile": False,
+                "batch_size": 1,
                 "frames": ["1", 0],
             },
         },
@@ -435,6 +440,64 @@ def _upload_video(comfyui_url: str, video_path: Path) -> str:
         )
     payload = response.json()
     return str(payload.get("name", video_path.name))
+
+
+def _fetch_node_object_info(comfyui_url: str, class_type: str) -> dict[str, Any]:
+    """Return ComfyUI ``/object_info/<class_type>`` payload for one node class."""
+    response = requests.get(
+        f"{comfyui_url.rstrip('/')}/object_info/{class_type}",
+        timeout=30,
+    )
+    if response.status_code >= 400:
+        raise AssemblyError(
+            f"ComfyUI object_info for {class_type!r} failed "
+            f"({response.status_code}): {response.text.strip()}"
+        )
+    data = response.json()
+    if isinstance(data, dict) and class_type in data:
+        entry = data[class_type]
+        return entry if isinstance(entry, dict) else {}
+    return data if isinstance(data, dict) else {}
+
+
+def _node_input_field_names(node_info: dict[str, Any]) -> tuple[set[str], set[str]]:
+    """Split declared required and optional input names from object_info."""
+    inputs = node_info.get("input", {})
+    if not isinstance(inputs, dict):
+        return set(), set()
+    required = set(inputs.get("required", {}).keys())
+    optional = set(inputs.get("optional", {}).keys())
+    return required, optional
+
+
+def _validate_workflow_against_comfyui(comfyui_url: str, workflow: dict[str, Any]) -> None:
+    """Ensure workflow inputs match each node's ComfyUI schema before /prompt."""
+    for node_id, node in workflow.items():
+        class_type = str(node.get("class_type", ""))
+        if not class_type:
+            raise AssemblyError(f"Workflow node {node_id!r} has no class_type")
+        node_info = _fetch_node_object_info(comfyui_url, class_type)
+        required, optional = _node_input_field_names(node_info)
+        if not required and not optional:
+            raise AssemblyError(
+                f"ComfyUI has no object_info for node {class_type!r} (workflow id {node_id})"
+            )
+        workflow_inputs = node.get("inputs", {})
+        if not isinstance(workflow_inputs, dict):
+            raise AssemblyError(f"Workflow node {class_type!r} (id {node_id}) inputs must be a mapping")
+
+        missing_required = required - set(workflow_inputs.keys())
+        for input_name in sorted(missing_required):
+            raise AssemblyError(
+                f"Workflow node {class_type!r} (id {node_id}) missing required input: {input_name!r}"
+            )
+
+        allowed = required | optional
+        for input_name in workflow_inputs:
+            if input_name not in allowed:
+                raise AssemblyError(
+                    f"Workflow node {class_type!r} (id {node_id}) sets unknown input: {input_name!r}"
+                )
 
 
 def _submit_prompt(comfyui_url: str, workflow: dict[str, Any]) -> str:
@@ -505,6 +568,7 @@ def interpolate(
     workflow = copy.deepcopy(workflow_json) if workflow_json else _default_rife_workflow(
         uploaded_name, target_fps
     )
+    _validate_workflow_against_comfyui(comfyui_url, workflow)
     prompt_id = _submit_prompt(comfyui_url, workflow)
 
     started = time.time()
