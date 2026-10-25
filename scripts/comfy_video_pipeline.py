@@ -3,7 +3,7 @@
 Универсальный пайплайн генерации видео мебели через ComfyUI API:
 1) Генерация базовых кадров из фото товара (rotate/zoom/pan + изменение света)
 2) Интерполяция кадров через RIFE (например 16 -> 60 FPS)
-3) Финальный upscale через SUPIR (если ноды доступны)
+3) Финальный upscale (SeedVR2 / ESRGAN / Lanczos через video_pipeline.upscale)
 
 Скрипт ориентирован на ComfyUI portable (в том числе Windows portable),
 но работает с любым сервером ComfyUI, доступным по HTTP (по умолчанию localhost:8188).
@@ -221,7 +221,7 @@ class ComfyVideoPipeline:
 
         final_frames = interpolated_frames
         if self.cfg.use_supir:
-            final_frames = self._upscale_supir(interpolated_frames, object_info)
+            final_frames = self._upscale_frames(interpolated_frames, object_info)
 
         self._encode_video(final_frames, self.cfg.output_video, fps=self.cfg.fps)
         self.logger.log("Pipeline done", f"Финальный файл: {self.cfg.output_video.resolve()}")
@@ -483,46 +483,37 @@ class ComfyVideoPipeline:
         return model_files[0].name
 
     @retry
-    def _upscale_supir(self, interpolated_frames: List[Path], object_info: Dict[str, Any]) -> List[Path]:
-        classes = set(object_info.keys())
-        if "SUPIR_Upscale" not in classes and "SUPIR" not in classes:
-            self.logger.log(
-                "SUPIR skipped",
-                "SUPIR ноды не найдены в текущей ComfyUI сборке. Пропускаю upscale.",
-            )
-            return interpolated_frames
+    def _upscale_frames(self, interpolated_frames: List[Path], object_info: Dict[str, Any]) -> List[Path]:
+        from video_pipeline.config import UpscaleConfig
+        from video_pipeline.upscale import upscale_video
 
-        upscaled: List[Path] = []
-        supir_node = "SUPIR_Upscale" if "SUPIR_Upscale" in classes else "SUPIR"
-        for i, frame in enumerate(interpolated_frames):
-            upload_info = self.client.upload_image(frame)
-            image_name = upload_info.get("name") or frame.name
+        pre_video = self.cfg.frames_dir / "pre_upscale.mp4"
+        self._encode_video(interpolated_frames, pre_video, fps=self.cfg.fps)
 
-            workflow = {
-                "1": {"class_type": "LoadImage", "inputs": {"image": image_name, "upload": "image"}},
-                "2": {"class_type": supir_node, "inputs": {"image": ["1", 0], "scale": self.cfg.supir_scale}},
-                "3": {
-                    "class_type": "SaveImage",
-                    "inputs": {"images": ["2", 0], "filename_prefix": "comfy_video_supir"},
-                },
-            }
-            prompt_id = self.client.queue_prompt(workflow)
-            result = self.client.wait_prompt(prompt_id, timeout_sec=1200)
-            image_ref = self._extract_first_image_ref(result)
-            if not image_ref:
-                raise PipelineError(f"SUPIR output image не найден на кадре {i}.")
+        upscale_cfg = UpscaleConfig(
+            backend="auto",
+            comfyui_url=self.cfg.comfy_url,
+            resolution=min(self.cfg.width, self.cfg.height),
+        )
+        post_video = self.cfg.frames_dir / "post_upscale.mp4"
+        backend = upscale_video(
+            pre_video,
+            post_video,
+            self.cfg.width,
+            self.cfg.height,
+            upscale_cfg,
+            object_info=object_info,
+        )
+        self.logger.log(
+            "Upscale done",
+            f"Backend: {backend} (target {self.cfg.width}x{self.cfg.height})",
+        )
 
-            out = self.frames_upscaled_dir / f"up_{i:05d}.png"
-            self.client.download_view_image(
-                filename=image_ref["filename"],
-                subfolder=image_ref["subfolder"],
-                folder_type=image_ref["type"],
-                out_path=out,
-            )
-            upscaled.append(out)
-
-        self.logger.log("SUPIR done", f"Upscaled кадров: {len(upscaled)}")
-        return upscaled
+        self._extract_video_to_frames(post_video, self.frames_upscaled_dir, "up")
+        frames = sorted(self.frames_upscaled_dir.glob("up_*.png"))
+        if not frames:
+            raise PipelineError("Upscale не вернул кадры после извлечения из видео.")
+        return frames
 
     def _encode_video(self, frame_paths: List[Path] | Path, output_video: Path, fps: int) -> None:
         output_video.parent.mkdir(parents=True, exist_ok=True)
@@ -590,7 +581,7 @@ class ComfyVideoPipeline:
 
 def parse_args() -> PipelineConfig:
     parser = argparse.ArgumentParser(
-        description="Генерация и интерполяция видео мебели через ComfyUI (SD + RIFE + SUPIR)."
+        description="Генерация и интерполяция видео мебели через ComfyUI (SD + RIFE + upscale)."
     )
     parser.add_argument("--input_image", required=True, help="Путь к входной фотографии мебели.")
     parser.add_argument(
@@ -626,11 +617,16 @@ def parse_args() -> PipelineConfig:
     parser.add_argument("--cfg", type=float, default=DEFAULT_CFG, help="CFG scale для SD.")
     parser.add_argument("--denoise", type=float, default=DEFAULT_DENOISE, help="Сила denoise в img2img.")
     parser.add_argument("--seed", type=int, default=424242, help="Базовый seed.")
-    parser.add_argument("--supir_scale", type=float, default=1.5, help="Коэффициент SUPIR upscale.")
+    parser.add_argument(
+        "--supir_scale",
+        type=float,
+        default=1.5,
+        help="(Устарело, не используется) Ранее коэффициент SUPIR upscale.",
+    )
     parser.add_argument(
         "--no_supir",
         action="store_true",
-        help="Отключить SUPIR upscale даже если ноды доступны.",
+        help="Отключить финальный upscale (SeedVR2/ESRGAN/Lanczos).",
     )
     parser.add_argument("--retries", type=int, default=4, help="Количество retry для API и операций.")
     parser.add_argument("--retry_backoff_sec", type=float, default=1.5, help="Базовая пауза между retry.")
