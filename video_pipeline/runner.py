@@ -280,7 +280,12 @@ def run_pipeline(
                         ar_drift=ar_check.actual,
                         interpolated=interpolated,
                     )
-                    assembled_clips.append(ClipSpec(path=delivery_path))
+                    assembled_clips.append(
+                        ClipSpec(
+                            path=delivery_path,
+                            audio_path=final_path if interpolated else None,
+                        )
+                    )
                     if first_source_image is None:
                         first_source_image = image_path
                     done_count += 1
