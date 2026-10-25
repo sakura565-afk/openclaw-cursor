@@ -38,6 +38,7 @@ class ClipSpec:
     """Single input clip for assembly."""
 
     path: Path
+    audio_path: Path | None = None
 
 
 @dataclass
@@ -225,9 +226,15 @@ def build_normalize_argv(
     fps: int,
     has_audio: bool,
     ensure_audio: bool,
+    audio_src: Path | None = None,
 ) -> list[str]:
     """Build argv to normalise one clip before concat demuxer."""
+    use_external_audio = (
+        audio_src is not None and Path(audio_src) != Path(src) and has_audio
+    )
     cmd: list[str] = ["ffmpeg", "-y", "-v", "error", "-i", str(src)]
+    if use_external_audio:
+        cmd += ["-i", str(audio_src)]
     add_silence = ensure_audio and not has_audio
     if add_silence:
         cmd += [
@@ -238,9 +245,10 @@ def build_normalize_argv(
         ]
     cmd += ["-map", "0:v:0"]
     if add_silence:
-        cmd += ["-map", "1:a:0"]
+        silence_input = 2 if use_external_audio else 1
+        cmd += ["-map", f"{silence_input}:a:0"]
     elif has_audio:
-        cmd += ["-map", "0:a:0"]
+        cmd += ["-map", "1:a:0" if use_external_audio else "0:a:0"]
     cmd += [
         "-vf",
         scale_pad_filter(width, height, fps),
@@ -305,11 +313,13 @@ def concat_clips(
     if not clips:
         raise AssemblyError("concat_clips: no clips provided")
 
-    clip_paths = [Path(c.path) for c in clips]
-    infos = [probe(p) for p in clip_paths]
-    width, height = target_resolution(infos, target_ar=target_ar)
-    target_fps = max(1, int(round(max(i["fps"] for i in infos) or DEFAULT_FPS)))
-    needs_audio = any(i["has_audio"] for i in infos)
+    video_infos = [probe(Path(c.path)) for c in clips]
+    audio_infos = [
+        probe(Path(c.audio_path) if c.audio_path is not None else c.path) for c in clips
+    ]
+    width, height = target_resolution(video_infos, target_ar=target_ar)
+    target_fps = max(1, int(round(max(i["fps"] for i in video_infos) or DEFAULT_FPS)))
+    needs_audio = any(i["has_audio"] for i in audio_infos)
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -317,7 +327,11 @@ def concat_clips(
     temp_root = Path(tempfile.mkdtemp(prefix="vp-assemble-"))
     try:
         normalized: list[Path] = []
-        for index, (clip_path, info) in enumerate(zip(clip_paths, infos)):
+        for index, clip in enumerate(clips):
+            clip_path = Path(clip.path)
+            audio_path = Path(clip.audio_path) if clip.audio_path is not None else clip_path
+            audio_info = audio_infos[index]
+            audio_src = audio_path if audio_path != clip_path else None
             staged = temp_root / f"part_{index:03d}.mp4"
             cmd = build_normalize_argv(
                 clip_path,
@@ -325,8 +339,9 @@ def concat_clips(
                 width=width,
                 height=height,
                 fps=target_fps,
-                has_audio=info["has_audio"],
+                has_audio=audio_info["has_audio"],
                 ensure_audio=needs_audio,
+                audio_src=audio_src,
             )
             _run_ffmpeg(cmd, f"concat_clips normalize[{index}]")
             normalized.append(staged)
