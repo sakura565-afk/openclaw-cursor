@@ -1,6 +1,11 @@
 # Video Pipeline
 
-Declarative YAML-config-driven orchestrator for ComfyUI MiniMax H3 image-to-video renders.
+Declarative YAML-config-driven orchestrator for ComfyUI image-to-video renders.
+
+Supported directors:
+
+- **h3** (default) — MiniMax H3 on LAB or PROD ComfyUI (workflow JSON).
+- **freevideo** — [FreeVideo](https://github.com/FlashML-org/FreeVideo) (`FreeVideoGenerate`, Video DeltaNet). **LAB only** (`http://127.0.0.1:8189`); the pack is not installed on PROD (`:8188`). Set `director_config.comfy_url` to LAB when using `director: freevideo`. The node writes outputs under `G:/FreeVideo_output/<date>/<hash>/` (not ComfyUI `output/`); the pipeline snapshots that tree and copies the newest new `.mp4` into `output_dir`. Finished videos embed the ComfyUI workflow in MP4 metadata (drag back onto the canvas).
 
 ## Quick start
 
@@ -29,7 +34,9 @@ python -m video_pipeline.runner --config video_pipeline/configs/furniture_batch.
 | `delivery` | object | `telegram_chat`, templates, `progress_every_min` |
 | `recovery` | object | `max_retries`, `retry_backoff_sec`, `resume_from_state`, `state_file` |
 | `upscale` | object | Post-render upscale: `backend`, `comfyui_url`, `resolution`, `batch_size`, … |
-| `director` | string | Director key (`h3` default) |
+| `director` | string | Director key: `h3` (default) or `freevideo` (LAB only) |
+| `director_config` | object | `comfy_url` (LAB `:8189` for FreeVideo), optional `workflow_path` (H3) |
+| `freevideo` | object | FreeVideo settings (when `director: freevideo`): `width`, `height`, `seconds`, `seed`, `two_pass`, `base_steps`, `refine_steps`, `preview`, `output_root` (default `G:/FreeVideo_output`) |
 | `output_dir` | path | Output directory for rendered videos |
 
 ### Upscale (`upscale`)
