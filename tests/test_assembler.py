@@ -280,6 +280,40 @@ class TestConcatIntegration:
         assert info_out["width"] == tw
         assert info_out["height"] == th
 
+    def test_concat_interpolated_video_muxes_audio_from_audio_path(self, tmp_path: Path) -> None:
+        """RIFE output is video-only; assembly must take audio from the pre-interpolation file."""
+        upscaled = tmp_path / "upscaled.mp4"
+        interpolated = tmp_path / "interp.mp4"
+        out = tmp_path / "assembled.mp4"
+        self._make_clip(upscaled, "736x1280", 2.0, 440)
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=736x1280:rate=48:duration=2.0",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-an",
+                str(interpolated),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert probe(interpolated)["has_audio"] is False
+        assert probe(upscaled)["has_audio"] is True
+
+        concat_clips([ClipSpec(path=interpolated, audio_path=upscaled)], out)
+
+        info_out = probe(out)
+        assert info_out["has_audio"] is True
+        assert abs(info_out["duration"] - 2.0) <= 0.3
+
 
 # Required input names on production ComfyUI (:8188) — regression table for RIFE workflow.
 _RIFE_NODE_REQUIRED_INPUTS: dict[str, frozenset[str]] = {

@@ -15,6 +15,7 @@ from video_pipeline.config import (
     OutputSpec,
     PipelineConfig,
     QualityGates,
+    UpscaleConfig,
     load_config,
 )
 from video_pipeline.directors.h3 import DEFAULT_WORKFLOW_PATH
@@ -52,12 +53,24 @@ class TestAssemblyConfigDefaults:
         assert cfg.deliver_assembled is True
 
 
+class TestUpscaleConfigDefaults:
+    def test_upscale_defaults(self) -> None:
+        cfg = UpscaleConfig()
+        assert cfg.backend == "auto"
+        assert cfg.comfyui_url == "http://127.0.0.1:8188"
+        assert cfg.resolution == 1080
+        assert cfg.batch_size == 5
+        assert cfg.temporal_overlap == 3
+        assert cfg.blocks_to_swap == 32
+
+
 class TestPipelineConfigBackwardCompatible:
     def test_old_yaml_without_new_sections(self, sample_config_path: Path) -> None:
         config = load_config(sample_config_path)
         assert config.quality_gates.include_banding is True
         assert config.interpolation.enabled is False
         assert config.assembly.enabled is False
+        assert config.upscale.backend == "auto"
         assert config.director_config.comfy_url == "http://127.0.0.1:8189"
         assert config.director_config.workflow_path is None
 
@@ -93,9 +106,13 @@ class TestGetDirectorWiring:
         with mock.patch("video_pipeline.runner.H3Director") as h3_cls:
             h3_cls.return_value = mock.Mock()
             _get_director(config)
+            expected_upscale = config.upscale.model_copy(
+                update={"free_vram_urls": [config.director_config.comfy_url]},
+            )
             h3_cls.assert_called_once_with(
                 output_dir=config.output_dir,
                 comfy_url="http://127.0.0.1:8199",
+                upscale_config=expected_upscale,
             )
 
     def test_workflow_path_passed_when_set(self, tmp_path: Path) -> None:
@@ -112,8 +129,12 @@ class TestGetDirectorWiring:
         with mock.patch("video_pipeline.runner.H3Director") as h3_cls:
             h3_cls.return_value = mock.Mock()
             _get_director(config)
+            expected_upscale = config.upscale.model_copy(
+                update={"free_vram_urls": [config.director_config.comfy_url]},
+            )
             h3_cls.assert_called_once_with(
                 output_dir=config.output_dir,
                 comfy_url="http://127.0.0.1:8189",
                 workflow_path=custom,
+                upscale_config=expected_upscale,
             )

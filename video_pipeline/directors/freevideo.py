@@ -213,6 +213,7 @@ class FreeVideoDirector(Director):
             "vram_peak_bytes",
             "ram_peak_bytes",
             "geometry",
+            "profile",
             "sampling_plan",
             "low_memory",
             "thermal",
