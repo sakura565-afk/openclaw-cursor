@@ -244,6 +244,18 @@ def test_interpolated_clip_passes_pre_interp_file_as_audio_path(tmp_path: Path) 
         assert clip_args[0].audio_path == upscaled
 
 
+def test_non_interpolated_clip_audio_path_is_none(patch_pipeline_deps) -> None:
+    config, _, _, asm_mod, _ = patch_pipeline_deps
+    config.assembly = AssemblyConfig(enabled=True, output_name="final_cut")
+    assembled = config.output_dir / "final_cut.mp4"
+    assembled.write_bytes(b"asm")
+    asm_mod.concat_clips.return_value = assembled
+
+    assert run_pipeline(config) == 0
+    clip_args = asm_mod.concat_clips.call_args[0][0]
+    assert clip_args[0].audio_path is None
+
+
 def test_interpolation_success_reruns_duration_check(tmp_path: Path) -> None:
     config, video_path = _base_config(
         tmp_path,
