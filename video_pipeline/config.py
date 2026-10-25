@@ -53,6 +53,8 @@ class FreeVideoConfig(BaseModel):
     refine_steps: int = 3
     preview: bool = False
     output_root: Path = Path("G:/FreeVideo_output")
+    last_frame: Path | None = None
+    frame_lock: bool = True
 
 
 class InterpolationConfig(BaseModel):
