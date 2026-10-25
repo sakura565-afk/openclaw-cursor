@@ -249,13 +249,20 @@ class QualityGate:
         )
         score = float(report.get("score", 0.0))
         verdict = report.get("verdict", "clean")
-        passed = verdict == "clean" and score <= max_score
         band_count = int(report.get("band_count", 0))
-        message = (
-            f"Banding score {score:.1f} ({verdict}, {band_count} band(s))"
-            if passed
-            else f"Banding score {score:.1f} exceeds max {max_score} ({verdict})"
-        )
+        defect_verdicts = frozenset({"banding", "periodic"})
+        score_fail = score > max_score
+        verdict_fail = verdict in defect_verdicts
+        passed = not score_fail and not verdict_fail
+        if passed:
+            message = f"Banding score {score:.1f} ({verdict}, {band_count} band(s))"
+        elif verdict_fail:
+            message = (
+                f"Banding defect: verdict {verdict} "
+                f"(score {score:.1f}, {band_count} band(s))"
+            )
+        else:
+            message = f"Banding score {score:.1f} exceeds max {max_score} ({verdict})"
         return CheckResult(
             name="banding",
             passed=passed,
