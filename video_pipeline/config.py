@@ -29,8 +29,24 @@ class QualityGates(BaseModel):
     banding_max_score: float = 25.0
 
 
+class DirectorConfig(BaseModel):
+    """ComfyUI settings for the render director (H3 I2V).
+
+    ``comfy_url`` is usually the LAB instance (e.g. :8189) with Wan/H3 nodes.
+    This is independent of ``interpolation.comfyui_url``, which typically targets
+    the PROD instance (e.g. :8188) for RIFE / VFI post-processing.
+    """
+
+    comfy_url: str = "http://127.0.0.1:8189"
+    workflow_path: Path | None = None
+
+
 class InterpolationConfig(BaseModel):
-    """Optional RIFE frame interpolation via a dedicated ComfyUI instance."""
+    """Optional RIFE frame interpolation via a dedicated ComfyUI instance.
+
+    ``comfyui_url`` is usually the PROD instance (e.g. :8188), not the render
+    director URL in ``director_config.comfy_url``.
+    """
 
     enabled: bool = False
     target_fps: float = 48.0
@@ -77,6 +93,7 @@ class PipelineConfig(BaseModel):
     delivery: DeliveryConfig
     recovery: RecoveryConfig = Field(default_factory=RecoveryConfig)
     director: str = "h3"
+    director_config: DirectorConfig = Field(default_factory=DirectorConfig)
     output_dir: Path = Path("media/out/main/")
 
 

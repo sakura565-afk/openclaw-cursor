@@ -20,8 +20,9 @@ from video_pipeline.config import OutputSpec
 from video_pipeline.director_base import Director, JobSpec, VideoResult
 from video_pipeline.resolution import apply_resolution, resolve_resolution
 
-DEFAULT_COMFY_URL = "http://127.0.0.1:8183"
-DEFAULT_WORKFLOW_PATH = Path("workflows/minimax_h3_hero_short.json")
+DEFAULT_COMFY_URL = "http://127.0.0.1:8189"
+_PACKAGE_ROOT = Path(__file__).resolve().parent.parent.parent
+DEFAULT_WORKFLOW_PATH = _PACKAGE_ROOT / "workflows/minimax_h3_hero_short.json"
 FPS = 24
 
 # Exact H3 ResolutionSelector aspect ratio strings and target dimensions.
