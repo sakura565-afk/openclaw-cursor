@@ -26,6 +26,10 @@ DEFAULT_OUTPUT_ROOT = Path("G:/FreeVideo_output")
 FPS = 24
 FREEVIDEO_NODE_CLASS = "FreeVideoGenerate"
 LAB_COMFY_URL = "http://127.0.0.1:8189"
+FRAME_LOCK_CLAUSE = (
+    "\nThe entire subject and all extremities remain fully visible inside the frame "
+    "at a constant camera distance; framing never tightens into a close-up."
+)
 
 
 class FreeVideoDirectorError(RuntimeError):
@@ -101,40 +105,56 @@ class FreeVideoDirector(Director):
         """Build shot-list prompt text from motion preset (same as H3)."""
         motion = self.motion_presets.get(output_spec.motion, output_spec.motion)
         duration = output_spec.duration_sec
-        return (
+        prompt = (
             f"{self.subject_template}\n"
             f"{motion}\n"
             f"Duration target: {duration}s at 24fps. No dialogue."
         )
+        if self.freevideo.frame_lock:
+            prompt += FRAME_LOCK_CLAUSE
+        return prompt
 
     def _length_frames(self, seconds: float) -> int:
         """Convert seconds to frame count at 24fps."""
         return max(24, int(seconds * FPS))
 
-    def build_workflow(self, uploaded_name: str, prompt_text: str) -> dict[str, Any]:
+    def build_workflow(
+        self,
+        uploaded_name: str,
+        prompt_text: str,
+        last_uploaded_name: str | None = None,
+    ) -> dict[str, Any]:
         """Build the LoadImage + FreeVideoGenerate graph."""
         fv = self.freevideo
-        return {
+        fv_inputs: dict[str, Any] = {
+            "text": prompt_text,
+            "width": fv.width,
+            "height": fv.height,
+            "seconds": fv.seconds,
+            "seed": fv.seed,
+            "first": ["1", 0],
+            "two_pass": fv.two_pass,
+            "base_steps": fv.base_steps,
+            "refine_steps": fv.refine_steps,
+            "preview": fv.preview,
+        }
+        workflow: dict[str, Any] = {
             "1": {
                 "class_type": "LoadImage",
                 "inputs": {"image": uploaded_name},
             },
             "2": {
                 "class_type": FREEVIDEO_NODE_CLASS,
-                "inputs": {
-                    "text": prompt_text,
-                    "width": fv.width,
-                    "height": fv.height,
-                    "seconds": fv.seconds,
-                    "seed": fv.seed,
-                    "first": ["1", 0],
-                    "two_pass": fv.two_pass,
-                    "base_steps": fv.base_steps,
-                    "refine_steps": fv.refine_steps,
-                    "preview": fv.preview,
-                },
+                "inputs": fv_inputs,
             },
         }
+        if last_uploaded_name is not None:
+            workflow["3"] = {
+                "class_type": "LoadImage",
+                "inputs": {"image": last_uploaded_name},
+            }
+            fv_inputs["last"] = ["3", 0]
+        return workflow
 
     @staticmethod
     def snapshot_mp4_files(output_root: Path) -> set[Path]:
@@ -167,7 +187,17 @@ class FreeVideoDirector(Director):
 
         uploaded_name = self._upload_image(source_image)
         prompt_text = self._build_prompt(output_spec)
-        workflow = self.build_workflow(uploaded_name, prompt_text)
+
+        last_uploaded_name: str | None = None
+        extra: dict[str, Any] = {"uploaded_name": uploaded_name}
+        last_path = self.freevideo.last_frame
+        if last_path is not None:
+            if not last_path.exists():
+                raise FreeVideoDirectorError(f"last_frame file not found: {last_path}")
+            last_uploaded_name = self._upload_image(last_path)
+            extra["last_frame"] = last_uploaded_name
+
+        workflow = self.build_workflow(uploaded_name, prompt_text, last_uploaded_name)
 
         fv = self.freevideo
         length_frames = self._length_frames(fv.seconds)
@@ -185,7 +215,7 @@ class FreeVideoDirector(Director):
             width=fv.width,
             height=fv.height,
             length_frames=length_frames,
-            extra={"uploaded_name": uploaded_name},
+            extra=extra,
         )
 
     def submit(self, job: JobSpec) -> str:
