@@ -16,8 +16,9 @@ from loguru import logger
 
 from PIL import Image
 
-from video_pipeline.assembler import _even, scale_pad_filter
-from video_pipeline.config import OutputSpec
+from video_pipeline.assembler import _even
+from video_pipeline.config import OutputSpec, UpscaleConfig
+from video_pipeline.upscale import upscale_video
 from video_pipeline.director_base import Director, JobSpec, VideoResult
 from video_pipeline.resolution import apply_resolution, resolve_resolution
 
@@ -81,6 +82,7 @@ class H3Director(Director):
         workflow_path: Path = DEFAULT_WORKFLOW_PATH,
         motion_presets: dict[str, str] | None = None,
         subject_template: str = "A studio product shot of the subject in the source image.",
+        upscale_config: UpscaleConfig | None = None,
         request_func: Any = requests.request,
     ) -> None:
         """Initialize H3 director.
@@ -98,6 +100,7 @@ class H3Director(Director):
         self.workflow_path = workflow_path
         self.motion_presets = motion_presets or DEFAULT_MOTION_PRESETS
         self.subject_template = subject_template
+        self.upscale_config = upscale_config or UpscaleConfig()
         self.client_id = str(uuid.uuid4())
         self._request_func = request_func
         self._workflow_template = self._load_workflow_template()
@@ -441,34 +444,26 @@ class H3Director(Director):
         return float(data.get("format", {}).get("duration", 0.0))
 
     def upscale(self, video_path: Path, target_format: str) -> Path:
-        """Upscale video to target format dimensions using ffmpeg Lanczos."""
+        """Upscale video to target format dimensions (SeedVR2 / ESRGAN / Lanczos)."""
         target_w, target_h = upscale_target_dimensions(target_format)
         upscaled_path = video_path.with_name(f"{video_path.stem}_upscaled.mp4")
 
-        vf = scale_pad_filter(target_w, target_h)
-        proc = subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-i",
-                str(video_path),
-                "-vf",
-                vf,
-                "-c:v",
-                "libx264",
-                "-preset",
-                "fast",
-                "-crf",
-                "18",
-                str(upscaled_path),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-        if proc.returncode != 0:
-            raise H3DirectorError(f"ffmpeg upscale failed: {proc.stderr}")
+        def _http_get(url: str, **kwargs: Any) -> requests.Response:
+            return self._request_func("GET", url, **kwargs)
+
+        try:
+            backend = upscale_video(
+                video_path,
+                upscaled_path,
+                target_w,
+                target_h,
+                self.upscale_config,
+                request_func_get=_http_get,
+            )
+        except Exception as exc:
+            raise H3DirectorError(f"upscale failed: {exc}") from exc
+
+        logger.info("Upscale finished with backend={}", backend)
 
         drift = self._verify_ar_drift(upscaled_path, target_w / target_h)
         if drift >= 0.01:
