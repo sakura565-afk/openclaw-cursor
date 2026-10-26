@@ -83,6 +83,23 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not release VRAM before rendering (opt out of the default preflight).",
     )
+    parser.add_argument(
+        "--no-two-pass",
+        action="store_true",
+        help="Single sampling pass instead of the default base pass + refine pass.",
+    )
+    parser.add_argument(
+        "--base-steps",
+        type=int,
+        default=None,
+        help="Base pass denoising steps (engine default: 8).",
+    )
+    parser.add_argument(
+        "--refine-steps",
+        type=int,
+        default=None,
+        help="Refine pass denoising steps (engine default: 3).",
+    )
     return parser
 
 
@@ -216,6 +233,9 @@ def run_render(
     comfy_url: str,
     free_urls: list[str] | None = None,
     no_free: bool = False,
+    no_two_pass: bool = False,
+    base_steps: int | None = None,
+    refine_steps: int | None = None,
 ) -> dict[str, object]:
     """Run FreeVideo and copy a stable mp4 to ``out``."""
     if not image.exists():
@@ -234,6 +254,9 @@ def run_render(
         seed=seed,
         last_frame=last_image,
         frame_lock=True,
+        two_pass=not no_two_pass,
+        **({"base_steps": base_steps} if base_steps is not None else {}),
+        **({"refine_steps": refine_steps} if refine_steps is not None else {}),
     )
     work_dir = out.parent / ".product_shot_work"
     director = FreeVideoDirector(
@@ -306,6 +329,9 @@ def main(argv: list[str] | None = None) -> int:
             comfy_url=args.comfy_url,
             free_urls=args.free_url,
             no_free=args.no_free,
+            no_two_pass=args.no_two_pass,
+            base_steps=args.base_steps,
+            refine_steps=args.refine_steps,
         )
     except FreeVideoDirectorError as exc:
         logger.error("{}", exc)
