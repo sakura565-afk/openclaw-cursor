@@ -261,3 +261,143 @@ class TestFreeVideoDirectorWiring:
         assert config.director == "h3"
         assert config.freevideo.width == 1344
         assert config.freevideo.output_root == Path("G:/FreeVideo_output")
+
+
+class TestFreeVideoVramPreflight:
+    """The director must release VRAM before submitting a render.
+
+    The FreeVideo resident worker keeps ~13.4 GB of weights. When the GPU cannot host
+    them the engine streams them over PCIe for every block, which measured ~80x slower
+    (0.57 s -> ~46 s per block, 312 s -> over 1800 s for the same clip).
+    """
+
+    @staticmethod
+    def _recorder(free_status: int = 200):
+        calls: list[tuple[str, str]] = []
+
+        def request_func(method, url, **kwargs):
+            calls.append((method, url))
+            if url.endswith("/free"):
+                return _fake_response(status=free_status, json_data={})
+            if url.endswith("/system_stats"):
+                return _fake_response(
+                    status=200,
+                    json_data={"devices": [{"vram_free": 4 * 1024**3}]},
+                )
+            if url.endswith("/prompt"):
+                return _fake_response(status=200, json_data={"prompt_id": "pid-1"})
+            return _fake_response(status=200, json_data={})
+
+        return request_func, calls
+
+    @staticmethod
+    def _job(tmp_path: Path) -> "JobSpec":
+        from video_pipeline.director_base import JobSpec
+
+        return JobSpec(
+            source_image=tmp_path / "src.png",
+            output_spec=OutputSpec(format="16:9", motion="slow_push_in", duration_sec=7),
+            workflow={"1": {"class_type": "LoadImage", "inputs": {"image": "src.png"}}},
+            output_path=tmp_path / "out.mp4",
+            prompt_text="prompt",
+            width=8,
+            height=8,
+            length_frames=24,
+        )
+
+    def test_releases_vram_on_own_instance_before_prompt(self, tmp_path: Path) -> None:
+        request_func, calls = self._recorder()
+        director = FreeVideoDirector(
+            output_dir=tmp_path / "out",
+            comfy_url="http://127.0.0.1:8189",
+            request_func=request_func,
+        )
+        director.submit(self._job(tmp_path))
+
+        free_calls = [url for method, url in calls if url.endswith("/free")]
+        prompt_calls = [url for method, url in calls if url.endswith("/prompt")]
+        assert free_calls == ["http://127.0.0.1:8189/free"]
+        assert prompt_calls, "the render must still be submitted"
+        assert calls.index(("POST", "http://127.0.0.1:8189/free")) < calls.index(
+            ("POST", "http://127.0.0.1:8189/prompt")
+        ), "VRAM must be released BEFORE the prompt is submitted"
+
+    def test_extra_urls_are_released_once_each(self, tmp_path: Path) -> None:
+        request_func, calls = self._recorder()
+        director = FreeVideoDirector(
+            output_dir=tmp_path / "out",
+            comfy_url="http://127.0.0.1:8189",
+            free_vram_urls=["http://127.0.0.1:8188", "http://127.0.0.1:8188"],
+            request_func=request_func,
+        )
+        director.submit(self._job(tmp_path))
+
+        free_calls = [url for method, url in calls if url.endswith("/free")]
+        assert free_calls.count("http://127.0.0.1:8189/free") == 1
+        assert free_calls.count("http://127.0.0.1:8188/free") == 1
+        assert len(free_calls) == 2, "no other instance may be touched"
+
+    def test_no_release_when_disabled(self, tmp_path: Path) -> None:
+        request_func, calls = self._recorder()
+        director = FreeVideoDirector(
+            output_dir=tmp_path / "out",
+            comfy_url="http://127.0.0.1:8189",
+            free_vram_before_submit=False,
+            request_func=request_func,
+        )
+        director.submit(self._job(tmp_path))
+
+        assert not [url for method, url in calls if url.endswith("/free")]
+        assert [url for method, url in calls if url.endswith("/prompt")]
+
+    def test_failing_free_is_tolerated(self, tmp_path: Path) -> None:
+        def request_func(method, url, **kwargs):
+            if url.endswith("/free"):
+                return _fake_response(status=500, text="boom")
+            if url.endswith("/system_stats"):
+                return _fake_response(status=200, json_data={"devices": [{"vram_free": 0}]})
+            if url.endswith("/prompt"):
+                return _fake_response(status=200, json_data={"prompt_id": "pid-2"})
+            return _fake_response(status=200, json_data={})
+
+        director = FreeVideoDirector(
+            output_dir=tmp_path / "out",
+            comfy_url="http://127.0.0.1:8189",
+            request_func=request_func,
+        )
+        prompt_id = director.submit(self._job(tmp_path))
+        assert prompt_id == "pid-2"
+
+    def test_free_vram_value_is_reported(self, tmp_path: Path) -> None:
+        request_func, _calls = self._recorder()
+        director = FreeVideoDirector(
+            output_dir=tmp_path / "out",
+            comfy_url="http://127.0.0.1:8189",
+            request_func=request_func,
+        )
+        director.submit(self._job(tmp_path))
+        assert director.last_free_vram_gb == pytest.approx(4.0)
+
+    def test_cli_parser_exposes_free_flags(self) -> None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "product_shot_cli",
+            Path(__file__).resolve().parents[1] / "scripts" / "product_shot.py",
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        parser = module.build_parser()
+        args = parser.parse_args(
+            [
+                "--image", "a.png",
+                "--width", "736",
+                "--height", "1024",
+                "--prompt", "p.txt",
+                "--out", "o.mp4",
+                "--free-url", "http://127.0.0.1:8188",
+                "--no-free",
+            ]
+        )
+        assert args.free_url == ["http://127.0.0.1:8188"]
+        assert args.no_free is True

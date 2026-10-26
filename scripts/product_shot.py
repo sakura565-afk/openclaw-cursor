@@ -68,6 +68,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_COMFY_URL,
         help=f"LAB ComfyUI base URL (default {DEFAULT_COMFY_URL}).",
     )
+    parser.add_argument(
+        "--free-url",
+        action="append",
+        default=None,
+        help=(
+            "Extra ComfyUI instance whose cached models must be released before the render "
+            "(repeatable). The FreeVideo worker keeps ~13 GB of weights in VRAM; an idle "
+            "instance holding models slows the render down by ~80x."
+        ),
+    )
+    parser.add_argument(
+        "--no-free",
+        action="store_true",
+        help="Do not release VRAM before rendering (opt out of the default preflight).",
+    )
     return parser
 
 
@@ -199,6 +214,8 @@ def run_render(
     seed: int,
     timeout: int,
     comfy_url: str,
+    free_urls: list[str] | None = None,
+    no_free: bool = False,
 ) -> dict[str, object]:
     """Run FreeVideo and copy a stable mp4 to ``out``."""
     if not image.exists():
@@ -223,6 +240,8 @@ def run_render(
         output_dir=work_dir,
         comfy_url=comfy_url,
         freevideo_config=fv_config,
+        free_vram_urls=list(free_urls or []),
+        free_vram_before_submit=not no_free,
     )
 
     director._ensure_freevideo_installed()
@@ -285,6 +304,8 @@ def main(argv: list[str] | None = None) -> int:
             seed=args.seed,
             timeout=args.timeout,
             comfy_url=args.comfy_url,
+            free_urls=args.free_url,
+            no_free=args.no_free,
         )
     except FreeVideoDirectorError as exc:
         logger.error("{}", exc)
