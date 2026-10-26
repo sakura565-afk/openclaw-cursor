@@ -20,6 +20,7 @@ from video_pipeline.directors.h3 import (
     H3Director,
     upscale_target_dimensions,
 )
+from video_pipeline.upscale import free_vram_gb, release_vram
 
 DEFAULT_COMFY_URL = "http://127.0.0.1:8189"
 DEFAULT_OUTPUT_ROOT = Path("G:/FreeVideo_output")
@@ -48,6 +49,8 @@ class FreeVideoDirector(Director):
         subject_template: str = "A studio product shot of the subject in the source image.",
         request_func: Any = requests.request,
         output_root: Path | None = None,
+        free_vram_urls: list[str] | None = None,
+        free_vram_before_submit: bool = True,
     ) -> None:
         """Initialize FreeVideo director.
 
@@ -59,6 +62,10 @@ class FreeVideoDirector(Director):
             subject_template: Base subject description for prompts.
             request_func: Injectable HTTP request function.
             output_root: Override for FreeVideo node output root (testing).
+            free_vram_urls: Extra ComfyUI instances whose cached models must be released
+                before the render starts. The FreeVideo worker keeps its weights in VRAM,
+                so an idle instance holding cached models slows the render down by ~80x.
+            free_vram_before_submit: Release VRAM before submitting (default True).
         """
         self.output_dir = output_dir
         self.comfy_url = comfy_url.rstrip("/")
@@ -68,6 +75,9 @@ class FreeVideoDirector(Director):
         self.client_id = str(uuid.uuid4())
         self._request_func = request_func
         self.output_root = Path(output_root or self.freevideo.output_root)
+        self.free_vram_urls = list(free_vram_urls or [])
+        self.free_vram_before_submit = free_vram_before_submit
+        self.last_free_vram_gb: float | None = None
 
     def _http(
         self,
@@ -218,8 +228,56 @@ class FreeVideoDirector(Director):
             extra=extra,
         )
 
+    def _vram_release_targets(self) -> list[str]:
+        """Return the de-duplicated ComfyUI URLs whose VRAM must be released."""
+        targets: list[str] = []
+        for url in [self.comfy_url, *self.free_vram_urls]:
+            cleaned = (url or "").rstrip("/")
+            if cleaned and cleaned not in targets:
+                targets.append(cleaned)
+        return targets
+
+    def _release_vram_before_submit(self) -> list[str]:
+        """Release cached ComfyUI models so the FreeVideo worker fits in VRAM.
+
+        The FreeVideo resident worker holds ~13.4 GB of weights. When the GPU cannot
+        host them, the engine keeps them in host RAM and streams them over PCIe for
+        every transformer block, which measured ~80x slower (0.57 s -> ~46 s per block).
+        Failures are never fatal: an unreachable instance only costs speed.
+        """
+        targets = self._vram_release_targets()
+        if not targets:
+            return []
+
+        def _get(url: str, timeout: int = 15) -> Any:
+            return self._request_func("GET", url, timeout=timeout)
+
+        def _post(url: str, **kwargs: Any) -> Any:
+            return self._request_func("POST", url, **kwargs)
+
+        before = {url: free_vram_gb(url, request_func_get=_get) for url in targets}
+        succeeded = release_vram(targets, request_func_post=_post)
+        after = {url: free_vram_gb(url, request_func_get=_get) for url in targets}
+        for url in targets:
+            logger.info(
+                "FreeVideo VRAM release {}: free before {} GB, free after {} GB",
+                url,
+                before.get(url),
+                after.get(url),
+            )
+        self.last_free_vram_gb = after.get(self.comfy_url)
+        logger.info(
+            "FreeVideo released VRAM on {} of {} instances, free VRAM now {} GB",
+            len(succeeded),
+            len(targets),
+            self.last_free_vram_gb,
+        )
+        return succeeded
+
     def submit(self, job: JobSpec) -> str:
         """Submit workflow to ComfyUI /prompt endpoint."""
+        if self.free_vram_before_submit:
+            self._release_vram_before_submit()
         job.extra["mp4_snapshot_before"] = self.snapshot_mp4_files(self.output_root)
         payload = {"prompt": job.workflow, "client_id": self.client_id}
         response = self._http("POST", "/prompt", json=payload, timeout=60)

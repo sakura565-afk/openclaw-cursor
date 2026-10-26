@@ -149,3 +149,27 @@ Captions are transliterated via `unidecode` for cp1251 safety. Progress messages
 ## Backward compatibility
 
 `scripts/h3_dining_table_v2_compat.py` wraps the runner for existing cron jobs. Env vars: `H3_SOURCE_DIR`, `H3_OUTPUT_DIR`, `H3_PROJECT`, `TELEGRAM_CHAT_ID`.
+
+### VRAM preflight (measured 2026-10-26)
+
+FreeVideo renders in a **separate resident worker** that keeps ~13.4 GB of model weights.
+The weights must live in VRAM: when they do not fit, the engine keeps them in host RAM and
+streams them over PCIe for **every transformer block**, and the render degrades badly.
+
+| state | per-block time | 175-frame 7 s clip |
+|---|---|---|
+| weights resident in VRAM | **0.57 s** | **312 s** |
+| only ~3.75 GB working headroom | ~46 s | over 1800 s and still not done |
+
+Measured cause: an idle ComfyUI instance (PROD :8188) and, worse, a local `llama-server`
+with GPU offload (~8 GB for a 27B Q4 GGUF) were holding VRAM. `POST /free` on a ComfyUI
+instance releases its cached models; a `llama-server` has to be stopped and restarted.
+
+The director therefore releases VRAM **before submitting**: `POST /free` on its own ComfyUI
+plus every URL in `free_vram_urls`. The CLI exposes `--free-url` (repeatable) for other
+instances and `--no-free` to opt out. The measured free VRAM is logged before and after the
+release, so a slow render can be diagnosed from the run log.
+
+Note: releasing VRAM does not move weights that are already spilled to host RAM. If a render
+is already running in the degraded mode, restart the FreeVideo resident worker (the manager
+respawns it) after freeing the GPU.
