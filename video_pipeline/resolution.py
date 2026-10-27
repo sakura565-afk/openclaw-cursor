@@ -238,3 +238,60 @@ def _cli(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_cli())
+
+
+# --- FreeVideo (Video DeltaNet) canvas resolver -------------------------------
+# Calibrated on this box (RTX 4070 Ti SUPER 16 GB, 2026-10-26/27) from measured runs:
+#   768x1024 (786k px), 175 frames -> OK (the chair promos)
+#   736x1024 (754k px), 175 frames -> OK: 0.57 s/block, 14.9 GiB working RAM
+#   1248x832 (1.04M px), 175 frames -> RAM guard: 20.50 GiB > 20.38 GiB budget
+# The FreeVideo resident worker holds ~13.4 GB of weights, so the activations have to
+# fit in whatever VRAM is left; the host working set is a second, separate limit.
+FREEVIDEO_WORKER_WEIGHTS_GB = 13.4
+FREEVIDEO_VRAM_ACTIVATION_GB_PER_MPX = 2.9
+FREEVIDEO_RAM_BASE_GB = 8.5
+FREEVIDEO_RAM_GB_PER_MPX = 11.6
+FREEVIDEO_RAM_BUDGET_GB = 19.0
+FREEVIDEO_MIN_DIM = 256
+
+
+def freevideo_max_pixels(free_vram_gb: float, ram_budget_gb: float = FREEVIDEO_RAM_BUDGET_GB) -> int:
+    """Largest pixel count that fits both the VRAM and the host-RAM budget."""
+    vram_px = 0.0
+    if free_vram_gb > FREEVIDEO_WORKER_WEIGHTS_GB:
+        vram_px = (
+            (free_vram_gb - FREEVIDEO_WORKER_WEIGHTS_GB)
+            / FREEVIDEO_VRAM_ACTIVATION_GB_PER_MPX
+            * 1_000_000
+        )
+    ram_px = max(0.0, (ram_budget_gb - FREEVIDEO_RAM_BASE_GB) / FREEVIDEO_RAM_GB_PER_MPX * 1_000_000)
+    return int(max(0.0, min(vram_px, ram_px)))
+
+
+def resolve_freevideo_resolution(
+    src_w: int,
+    src_h: int,
+    seconds: float = 7.29,
+    free_vram_gb: float = 16.0,
+    ram_budget_gb: float = FREEVIDEO_RAM_BUDGET_GB,
+    step: int = 32,
+) -> tuple[int, int]:
+    """Pick the largest canvas that keeps the source AR and fits the budgets.
+
+    Both sides are multiples of ``step`` (32) because the H3/DiT grid requires it.
+    The frame count does not enter the model: the measured limit was reached with
+    175 frames and the same canvas is used for shorter clips.
+    """
+    if src_w <= 0 or src_h <= 0:
+        raise ValueError("source dimensions must be positive")
+    source_ar = src_w / src_h
+    budget = freevideo_max_pixels(free_vram_gb, ram_budget_gb)
+    best = (FREEVIDEO_MIN_DIM, FREEVIDEO_MIN_DIM)
+    # candidate heights from small to large, pick the one with the best area that fits
+    for height in range(step, 2049, step):
+        width = int(round(height * source_ar / step)) * step
+        if width < FREEVIDEO_MIN_DIM:
+            continue
+        if width * height <= budget:
+            best = (width, height)
+    return best
