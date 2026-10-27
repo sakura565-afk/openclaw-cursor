@@ -19,6 +19,12 @@ from video_pipeline.directors.freevideo import (
     FreeVideoDirector,
     FreeVideoDirectorError,
 )
+from video_pipeline.vram_guard import (
+    acquire_render_lock,
+    pause_named_processes,
+    release_render_lock,
+    restore_processes,
+)
 
 DEFAULT_COMFY_URL = "http://127.0.0.1:8189"
 DEFAULT_SECONDS = 7.29
@@ -82,6 +88,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-free",
         action="store_true",
         help="Do not release VRAM before rendering (opt out of the default preflight).",
+    )
+    parser.add_argument(
+        "--pause-process",
+        action="append",
+        default=None,
+        help=(
+            "Executable name of a GPU-holding process to stop for the duration of the render "
+            "(repeatable), e.g. --pause-process llama-server.exe. FreeVideo needs ~13 GB of "
+            "VRAM for its weights; a local LLM server holding VRAM makes the render ~80x "
+            "slower. The process is restarted with its original command line afterwards."
+        ),
     )
     parser.add_argument(
         "--no-two-pass",
@@ -236,6 +253,7 @@ def run_render(
     no_two_pass: bool = False,
     base_steps: int | None = None,
     refine_steps: int | None = None,
+    pause_process: list[str] | None = None,
 ) -> dict[str, object]:
     """Run FreeVideo and copy a stable mp4 to ``out``."""
     if not image.exists():
@@ -298,8 +316,25 @@ def run_render(
     )
 
     snapshot_before = director.snapshot_mp4_files(director.output_root)
-    prompt_id = director.submit(job)
-    director.poll_until_done_with_job(prompt_id, timeout, job)
+    lock_path = acquire_render_lock("freevideo render") if pause_process else None
+    paused = pause_named_processes(list(pause_process or []))
+    if paused:
+        logger.info(
+            "Paused {} GPU-holding process(es) for the render: {}",
+            len(paused),
+            [p.name for p in paused],
+        )
+    if lock_path is not None:
+        logger.info("Render lock active: {}", lock_path)
+    try:
+        prompt_id = director.submit(job)
+        director.poll_until_done_with_job(prompt_id, timeout, job)
+    finally:
+        if paused:
+            restored = restore_processes(paused)
+            logger.info("Restored {} paused process(es): {}", len(restored), [p.name for p in paused])
+        if lock_path is not None:
+            release_render_lock()
 
     render_mp4 = discover_new_render_mp4(director.output_root, snapshot_before)
     if render_mp4 is None:
@@ -332,6 +367,7 @@ def main(argv: list[str] | None = None) -> int:
             no_two_pass=args.no_two_pass,
             base_steps=args.base_steps,
             refine_steps=args.refine_steps,
+            pause_process=args.pause_process,
         )
     except FreeVideoDirectorError as exc:
         logger.error("{}", exc)
