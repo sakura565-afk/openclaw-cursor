@@ -378,13 +378,38 @@ def run_render(
     watch = partial if partial.exists() else render_mp4
     copy_when_stable(watch, out)
 
-    # Optional post chain: interpolate -> upscale. Both stages drop the audio
-    # track, so it is muxed back from the rendered clip after every stage.
-    final = out
+    final = post_process(
+        out,
+        interpolate_fps=interpolate_fps,
+        interpolate_url=interpolate_url,
+        upscale_backend=upscale_backend,
+        upscale_height=upscale_height,
+        upscale_url=upscale_url,
+    )
+
+    return probe_video_summary(final)
+
+
+def post_process(
+    src: Path,
+    *,
+    interpolate_fps: float | None = None,
+    interpolate_url: str = "http://127.0.0.1:8188",
+    upscale_backend: str | None = None,
+    upscale_height: int | None = None,
+    upscale_url: str = "http://127.0.0.1:8188",
+) -> Path:
+    """Run the optional post chain on a rendered clip and return the final path.
+
+    Interpolate -> upscale. Both stages write video frames only, so the original
+    audio track is muxed back after every stage.
+    """
+    src = Path(src)
+    final = src
     if interpolate_fps:
-        interp = out.with_name(f"{out.stem}_interp{out.suffix}")
+        interp = src.with_name(f"{src.stem}_interp{src.suffix}")
         interpolate(final, interp, interpolate_fps, comfyui_url=interpolate_url)
-        final = mux_audio_from_source(interp, out, out.with_name(f"{out.stem}_ip{out.suffix}"))
+        final = mux_audio_from_source(interp, src, src.with_name(f"{src.stem}_ip{src.suffix}"))
         logger.info("Interpolated to {} fps -> {}", interpolate_fps, final)
     if upscale_backend:
         info = probe(final)
@@ -392,7 +417,7 @@ def run_render(
         src_w = int(info.get("width") or 0) or 1
         height = upscale_height or src_h
         width = max(32, int(round(height * src_w / src_h / 32)) * 32)
-        target = out.with_name(f"{out.stem}_up{out.suffix}")
+        target = src.with_name(f"{src.stem}_up{src.suffix}")
         upscale_video(
             final,
             target,
@@ -400,10 +425,9 @@ def run_render(
             height,
             UpscaleConfig(backend=upscale_backend, comfyui_url=upscale_url),
         )
-        final = mux_audio_from_source(target, final, out.with_name(f"{out.stem}_final{out.suffix}"))
+        final = mux_audio_from_source(target, final, src.with_name(f"{src.stem}_final{src.suffix}"))
         logger.info("Upscaled to {}x{} -> {}", width, height, final)
-
-    return probe_video_summary(final)
+    return final
 
 
 def main(argv: list[str] | None = None) -> int:
