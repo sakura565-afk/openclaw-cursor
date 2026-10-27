@@ -12,13 +12,15 @@ from pathlib import Path
 
 from loguru import logger
 
-from video_pipeline.config import FreeVideoConfig, OutputSpec
+from video_pipeline.assembler import interpolate, probe
+from video_pipeline.config import FreeVideoConfig, OutputSpec, UpscaleConfig
 from video_pipeline.director_base import JobSpec
 from video_pipeline.directors.freevideo import (
     FRAME_LOCK_CLAUSE,
     FreeVideoDirector,
     FreeVideoDirectorError,
 )
+from video_pipeline.upscale import mux_audio_from_source, upscale_video
 from video_pipeline.vram_guard import (
     acquire_render_lock,
     pause_named_processes,
@@ -88,6 +90,34 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-free",
         action="store_true",
         help="Do not release VRAM before rendering (opt out of the default preflight).",
+    )
+    parser.add_argument(
+        "--interpolate",
+        type=float,
+        default=None,
+        help="Interpolate the render to this fps with RIFE (PROD ComfyUI), e.g. 48.",
+    )
+    parser.add_argument(
+        "--interpolate-url",
+        default="http://127.0.0.1:8188",
+        help="ComfyUI instance that runs RIFE (default http://127.0.0.1:8188).",
+    )
+    parser.add_argument(
+        "--upscale",
+        default=None,
+        choices=["seedvr2", "lanczos"],
+        help="Upscale the result after rendering (seedvr2 on PROD, or plain lanczos).",
+    )
+    parser.add_argument(
+        "--upscale-height",
+        type=int,
+        default=None,
+        help="Target height for the upscale (width follows the source AR).",
+    )
+    parser.add_argument(
+        "--upscale-url",
+        default="http://127.0.0.1:8188",
+        help="ComfyUI instance that runs the upscaler (default http://127.0.0.1:8188).",
     )
     parser.add_argument(
         "--pause-process",
@@ -254,6 +284,11 @@ def run_render(
     base_steps: int | None = None,
     refine_steps: int | None = None,
     pause_process: list[str] | None = None,
+    interpolate_fps: float | None = None,
+    interpolate_url: str = "http://127.0.0.1:8188",
+    upscale_backend: str | None = None,
+    upscale_height: int | None = None,
+    upscale_url: str = "http://127.0.0.1:8188",
 ) -> dict[str, object]:
     """Run FreeVideo and copy a stable mp4 to ``out``."""
     if not image.exists():
@@ -343,7 +378,32 @@ def run_render(
     watch = partial if partial.exists() else render_mp4
     copy_when_stable(watch, out)
 
-    return probe_video_summary(out)
+    # Optional post chain: interpolate -> upscale. Both stages drop the audio
+    # track, so it is muxed back from the rendered clip after every stage.
+    final = out
+    if interpolate_fps:
+        interp = out.with_name(f"{out.stem}_interp{out.suffix}")
+        interpolate(final, interp, interpolate_fps, comfyui_url=interpolate_url)
+        final = mux_audio_from_source(interp, out, out.with_name(f"{out.stem}_ip{out.suffix}"))
+        logger.info("Interpolated to {} fps -> {}", interpolate_fps, final)
+    if upscale_backend:
+        info = probe(final)
+        src_h = int(info.get("height") or 0) or 1
+        src_w = int(info.get("width") or 0) or 1
+        height = upscale_height or src_h
+        width = max(32, int(round(height * src_w / src_h / 32)) * 32)
+        target = out.with_name(f"{out.stem}_up{out.suffix}")
+        upscale_video(
+            final,
+            target,
+            width,
+            height,
+            UpscaleConfig(backend=upscale_backend, comfyui_url=upscale_url),
+        )
+        final = mux_audio_from_source(target, final, out.with_name(f"{out.stem}_final{out.suffix}"))
+        logger.info("Upscaled to {}x{} -> {}", width, height, final)
+
+    return probe_video_summary(final)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -368,6 +428,11 @@ def main(argv: list[str] | None = None) -> int:
             base_steps=args.base_steps,
             refine_steps=args.refine_steps,
             pause_process=args.pause_process,
+            interpolate_fps=args.interpolate,
+            interpolate_url=args.interpolate_url,
+            upscale_backend=args.upscale,
+            upscale_height=args.upscale_height,
+            upscale_url=args.upscale_url,
         )
     except FreeVideoDirectorError as exc:
         logger.error("{}", exc)
