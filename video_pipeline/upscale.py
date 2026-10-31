@@ -37,7 +37,11 @@ POLL_TIMEOUT_SEC = 14400
 _ENV_TIMEOUT = "UPSCALE_POLL_TIMEOUT"
 _ENV_NO_FALLBACK = "UPSCALE_NO_FALLBACK"
 
-SEEDVR2_DIT_MODEL = "seedvr2_ema_3b_fp8_e4m3fn.safetensors"
+# The published weights moved on: the official repo now ships
+# seedvr2_3b_int8_convrot / seedvr2_7b_int8_convrot and no longer carries the old
+# fp8 file. Override with SEEDVR2_DIT_MODEL to A/B them.
+SEEDVR2_DIT_MODEL = os.environ.get(
+    "SEEDVR2_DIT_MODEL", "seedvr2_ema_3b_fp8_e4m3fn.safetensors")
 SEEDVR2_VAE_MODEL = "ema_vae_fp16.safetensors"
 ESRGAN_MODEL = "4x-UltraSharp.pth"
 
@@ -369,11 +373,11 @@ def _poll_timeout_sec() -> float:
         try:
             value = float(raw)
         except ValueError:
-            logger.warning("Invalid %s=%r; using %s", _ENV_TIMEOUT, raw, POLL_TIMEOUT_SEC)
+            logger.warning("Invalid {}={!r}; using {}", _ENV_TIMEOUT, raw, POLL_TIMEOUT_SEC)
         else:
             if value > 0:
                 return value
-            logger.warning("Ignoring non-positive %s=%r", _ENV_TIMEOUT, raw)
+            logger.warning("Ignoring non-positive {}={!r}", _ENV_TIMEOUT, raw)
     return float(POLL_TIMEOUT_SEC)
 
 
@@ -488,7 +492,7 @@ def upscale_video(
                 "and UPSCALE_NO_FALLBACK is set"
             )
         logger.error(
-            "Upscale backend %r unavailable at %s; falling back to lanczos - the result "
+            "Upscale backend {!r} unavailable at {}; falling back to lanczos - the result "
             "has NO learned detail",
             requested,
             config.comfyui_url,
@@ -505,7 +509,7 @@ def upscale_video(
                 f"ComfyUI unreachable at {config.comfyui_url} and UPSCALE_NO_FALLBACK is set"
             )
         logger.error(
-            "ComfyUI unreachable at %s; falling back to lanczos upscale - the result "
+            "ComfyUI unreachable at {}; falling back to lanczos upscale - the result "
             "has NO learned detail",
             config.comfyui_url,
         )
@@ -522,7 +526,7 @@ def upscale_video(
                 "and UPSCALE_NO_FALLBACK is set"
             )
         logger.error(
-            "Insufficient free VRAM for %s upscale: %.2f GB free, %.2f GB required; "
+            "Insufficient free VRAM for {} upscale: {:.2f} GB free, {:.2f} GB required; "
             "falling back to lanczos - the result has NO learned detail",
             backend,
             free_gb,
