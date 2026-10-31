@@ -29,6 +29,14 @@ from scripts import h3_i2v_run as h3  # noqa: E402
 from scripts import qwen_edit_run as qwen  # noqa: E402
 
 
+def _guide_id(graph) -> str:
+    return next(k for k, v in graph.items() if v["class_type"] == "MiniMaxH3AddGuide")
+
+
+def _h3node_id(graph) -> str:
+    return next(k for k, v in graph.items() if v["class_type"] == "MiniMaxH3ImageToVideo")
+
+
 def _h3_args(**overrides):
     args = argparse.Namespace(
         image="frame.jpg",
@@ -42,6 +50,9 @@ def _h3_args(**overrides):
         seed=42,
         steps=14,
         prefix="test",
+        last_frame="",
+        guide_image="",
+        guide_frame=0,
     )
     for key, value in overrides.items():
         setattr(args, key, value)
@@ -139,3 +150,35 @@ class TestFreeVideoRunner:
         monkeypatch.setattr(fv, "LLAMA_CMD", tmp_path / "missing.json")
         fv.restore_llama(True)
         assert not lock.exists()
+
+
+class TestH3NewCoreFeatures:
+    """Features that only exist in the ComfyUI 2026-10 core."""
+
+    def test_last_frame_is_wired_when_requested(self) -> None:
+        graph = h3.build_workflow(_h3_args(last_frame="end.jpg"))
+        node = next(v for v in graph.values() if v["class_type"] == "MiniMaxH3ImageToVideo")
+        assert "last_frame" in node["inputs"]
+        scale_id = node["inputs"]["last_frame"][0]
+        assert graph[scale_id]["class_type"] == "ImageScaleToTotalPixels"
+        loader = graph[scale_id]["inputs"]["image"][0]
+        assert graph[loader]["inputs"]["image"] == "end.jpg"
+
+    def test_no_last_frame_by_default(self) -> None:
+        graph = h3.build_workflow(_h3_args())
+        node = next(v for v in graph.values() if v["class_type"] == "MiniMaxH3ImageToVideo")
+        assert "last_frame" not in node["inputs"]
+
+    def test_guide_image_adds_a_guide_node_and_repoints_the_sampler(self) -> None:
+        graph = h3.build_workflow(_h3_args(guide_image="ref.jpg", guide_frame=42))
+        guide = next(v for v in graph.values() if v["class_type"] == "MiniMaxH3AddGuide")
+        assert guide["inputs"]["frame_idx"] == 42
+        sampler = next(v for v in graph.values() if v["class_type"] == "KSampler")
+        # the sampler takes the guide conditioning but the ORIGINAL latent
+        assert sampler["inputs"]["positive"] == [_guide_id(graph), 0]
+        assert sampler["inputs"]["latent_image"] == [_h3node_id(graph), 1]
+
+    def test_without_guide_the_sampler_uses_the_video_conditioning(self) -> None:
+        graph = h3.build_workflow(_h3_args())
+        sampler = next(v for v in graph.values() if v["class_type"] == "KSampler")
+        assert sampler["inputs"]["positive"] == [_h3node_id(graph), 0]
