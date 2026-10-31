@@ -14,7 +14,11 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from video_pipeline.assembler import validate_workflow_against_object_info
 
 BASE = os.environ.get("COMFYUI_PROD_URL", "http://127.0.0.1:8188")
 COMFYUI_INPUT_DIR = os.environ.get("COMFYUI_INPUT_DIR", r"E:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\input")
@@ -142,6 +146,22 @@ def build_workflow(a):
     return nodes
 
 
+
+def _validate_against_live_comfyui(workflow: dict) -> list[str]:
+    """Catch unknown inputs and wrong COMBO values before ComfyUI answers HTTP 400.
+
+    A typo in a LoRA file name is invisible until the core rejects the whole graph,
+    and the error message does not name the offending value.
+    """
+    try:
+        raw = urllib.request.urlopen(BASE + "/object_info", timeout=120).read().decode("utf-8", "replace")
+        object_info = json.loads(raw)
+    except Exception as exc:  # the live check is a convenience, never a hard gate
+        print("object_info недоступен, пропускаю локальную проверку:", exc, flush=True)
+        return []
+    return validate_workflow_against_object_info(workflow, object_info)
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--image", required=True)
@@ -177,9 +197,17 @@ def main():
     a = p.parse_args()
     a.prompt = a.prompt_prefix + "\n" + open(a.prompt_file, encoding="utf-8").read()
 
-    req = urllib.request.Request(BASE + "/prompt", data=json.dumps({"prompt": build_workflow(a)}).encode(),
+    workflow = build_workflow(a)
+    problems = _validate_against_live_comfyui(workflow)
+    if problems:
+        raise SystemExit("workflow rejected before sending:\n  " + "\n  ".join(problems))
+    req = urllib.request.Request(BASE + "/prompt", data=json.dumps({"prompt": workflow}).encode(),
                                  headers={"Content-Type": "application/json"}, method="POST")
-    pid = json.loads(urllib.request.urlopen(req, timeout=120).read().decode())["prompt_id"]
+    try:
+        pid = json.loads(urllib.request.urlopen(req, timeout=120).read().decode())["prompt_id"]
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")
+        raise SystemExit("ComfyUI rejected the graph (HTTP %s):\n%s" % (exc.code, body))
     print("prompt_id", pid, flush=True)
 
     t0 = time.time()

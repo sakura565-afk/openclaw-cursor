@@ -483,9 +483,12 @@ def validate_workflow_against_object_info(
             if spec and not isinstance(inputs[key], (list, dict)):
                 value = inputs[key]
                 if value not in spec:
+                    options = sorted(spec)
+                    shown = options[:6]
+                    more = f" (+{len(options) - len(shown)} more)" if len(options) > len(shown) else ""
                     errors.append(
                         f"node {node_id} ({class_type}): input {key!r} value {value!r} "
-                        f"not in {sorted(spec)}"
+                        f"not in {shown}{more}"
                     )
     return errors
 

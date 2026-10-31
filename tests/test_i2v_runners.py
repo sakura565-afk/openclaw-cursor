@@ -25,7 +25,8 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from scripts import freevideo_lora_run as fv  # noqa: E402
-from scripts import h3_i2v_run as h3  # noqa: E402
+from scripts import h3_i2v_run as h3
+from video_pipeline import assembler as assembler_mod  # noqa: E402
 from scripts import qwen_edit_run as qwen  # noqa: E402
 
 
@@ -243,3 +244,26 @@ class TestH3Turbo:
     def test_i2v_mode_keeps_the_fp16_video_vae(self) -> None:
         graph = h3.build_workflow(_h3_args())
         assert graph["4"]["inputs"]["vae_name"] == "minimax_h3_video_vae_fp16.safetensors"
+
+
+class TestH3PreflightValidation:
+    """The runner must catch a bad graph before ComfyUI answers HTTP 400."""
+
+    def test_a_wrong_lora_name_is_caught_locally(self, monkeypatch) -> None:
+        graph = {"1": {"class_type": "LoraLoader", "inputs": {
+            "lora_name": "does_not_exist.safetensors", "strength_model": 0.5,
+            "strength_clip": 0.5, "model": ["2", 0], "clip": ["3", 0]}}}
+        object_info = {"LoraLoader": {"input": {"required": {
+            "lora_name": [["a.safetensors", "b.safetensors"], {}],
+            "strength_model": ("FLOAT", {"default": 1.0})}}}}
+        errors = assembler_mod.validate_workflow_against_object_info(graph, object_info)
+        assert errors and "not in" in errors[0]
+
+    def test_the_error_message_stays_short(self, monkeypatch) -> None:
+        # a 200-entry COMBO list must not be dumped into the console
+        names = [f"lora_{i}.safetensors" for i in range(200)]
+        object_info = {"LoraLoader": {"input": {"required": {
+            "lora_name": [names, {}]}}}}
+        graph = {"1": {"class_type": "LoraLoader", "inputs": {"lora_name": "nope.safetensors"}}}
+        errors = assembler_mod.validate_workflow_against_object_info(graph, object_info)
+        assert len(errors[0]) < 300, errors[0][:400]
