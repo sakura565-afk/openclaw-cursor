@@ -78,9 +78,9 @@ class TestSeedVR2Workflow:
         assert upscaler["batch_size"] == 5
         assert upscaler["temporal_overlap"] == 3
         combine = wf["5"]["inputs"]
-        assert combine["pix_fmt"] == "yuv420p"
-        assert combine["crf"] == 19
-        assert combine["save_metadata"] is True
+        assert "pix_fmt" not in combine  # removed by VHS 2026-09
+        assert "crf" not in combine  # removed by VHS 2026-09
+        assert "save_metadata" not in combine  # removed by VHS 2026-09
         assert combine["audio"] == ["1", 2]
         assert combine["images"] == ["4", 0]
 
@@ -97,8 +97,8 @@ class TestEsrganWorkflow:
         assert wf["3"]["inputs"]["image"] == ["1", 0]
         combine = wf["4"]["inputs"]
         assert combine["audio"] == ["1", 2]
-        assert combine["pix_fmt"] == "yuv420p"
-        assert combine["save_metadata"] is True
+        assert "pix_fmt" not in combine  # removed by VHS 2026-09
+        assert "save_metadata" not in combine  # removed by VHS 2026-09
         assert wf["1"]["inputs"]["force_size"] == "Disabled"
 
 

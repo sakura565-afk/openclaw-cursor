@@ -75,9 +75,6 @@ def _vhs_combine_inputs(
         "format": "video/h264-mp4",
         "pingpong": False,
         "save_output": True,
-        "pix_fmt": "yuv420p",
-        "crf": 19,
-        "save_metadata": True,
     }
     if audio_node is not None:
         inputs["audio"] = list(audio_node)
