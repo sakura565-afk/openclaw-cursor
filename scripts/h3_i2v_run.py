@@ -55,11 +55,44 @@ def build_workflow(a):
     h3_inputs = {
         "clip": [prev_c, 1] if prev_c != "3" else [prev_c, 0], "vae": ["4", 0], "first_frame": [scale_id, 0],
         "prompt": a.prompt,
-        "negative_prompt": a.negative or ("different face, extra person, blurry, distorted, morphed, "
-                                          "plastic skin, anime, text, identity drift, clothed, "
-                                          "extra limbs, duplicated limbs, distorted hands, "
-                                          "man sitting behind her, gap between the bodies"),
+        # NOTE: the 2026-10 core has no negative_prompt input on the H3 node - ComfyUI
+        # silently ignores unknown inputs, so a negative prompt there was dead weight.
         "width": a.width, "height": a.height, "length": a.length}
+    ref_images = getattr(a, "ref_images", None) or []
+    if ref_images:
+        # REF2VA mode: a reference image carries the subject, the prompt drives the action.
+        nodes["2"]["inputs"]["unet_name"] = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+        nodes["5"] = {"class_type": "VAELoader", "inputs": {"vae_name": "minimax_h3_audio_vae_fp32.safetensors"}}
+        audio_vae_id = "5"
+        nid = 6
+        links = []
+        for name in ref_images:
+            scale_id, nid = _scaled_image(nodes, nid, name, ["1", 0])
+            links.append([scale_id, 0])
+        nodes[str(nid)] = {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": {
+            "clip": [prev_c, 1] if prev_c != "3" else [prev_c, 0],
+            "prompt": a.prompt,
+            "width": a.width, "height": a.height, "length": a.length,
+            "ref_image_size": getattr(a, "ref_image_size", "match"),
+            "ref_images": links,
+            "audio_vae": [audio_vae_id, 0]}}
+        vid = str(nid)
+        nid += 1
+        nodes[str(nid)] = {"class_type": "KSampler", "inputs": {
+            "model": [prev_m, 0], "positive": [vid, 0], "negative": [vid, 0], "latent_image": [vid, 1],
+            "seed": a.seed, "steps": a.steps, "cfg": 1.0, "sampler_name": "euler",
+            "scheduler": "simple", "denoise": 1.0}}
+        samp = str(nid)
+        nid += 1
+        nodes[str(nid)] = {"class_type": "VAEDecode", "inputs": {"samples": [samp, 0], "vae": ["4", 0]}}
+        dec = str(nid)
+        nid += 1
+        nodes[str(nid)] = {"class_type": "CreateVideo", "inputs": {"images": [dec, 0], "fps": 24.0}}
+        cv = str(nid)
+        nid += 1
+        nodes[str(nid)] = {"class_type": "SaveVideo", "inputs": {
+            "video": [cv, 0], "filename_prefix": a.prefix, "format": "auto", "codec": "h264"}}
+        return nodes
     # The 2026-10 core can pin the LAST frame as well (MiniMaxH3ImageToVideo.last_frame).
     if getattr(a, "last_frame", ""):
         last_scale, nid = _scaled_image(nodes, nid, a.last_frame, ["1", 0])
@@ -101,6 +134,10 @@ def main():
                    help="image in ComfyUI/input pinned as the LAST frame of the clip")
     p.add_argument("--guide-image", default="",
                    help="image in ComfyUI/input added as a guide reference (MiniMaxH3AddGuide)")
+    p.add_argument("--ref-image", action="append", default=[],
+                   help="reference image(s) in ComfyUI/input for the REF2VA mode")
+    p.add_argument("--ref-image-size", default="match",
+                   help="'match' (fast) or 'max' (best identity fidelity, much slower)")
     p.add_argument("--guide-frame", type=int, default=0,
                    help="frame index the guide image is pinned to")
     p.add_argument("--prompt-file", required=True)

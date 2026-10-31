@@ -475,6 +475,18 @@ def validate_workflow_against_object_info(
         for key in inputs:
             if key not in allowed:
                 errors.append(f"node {node_id} ({class_type}): unknown input {key!r}")
+                continue
+            # a COMBO input only accepts its listed options - a wrong value is rejected
+            # by ComfyUI with HTTP 400 and a message that names the node, but it is
+            # cheap to catch it here first.
+            spec = combo_options(node_def, key)
+            if spec and not isinstance(inputs[key], (list, dict)):
+                value = inputs[key]
+                if value not in spec:
+                    errors.append(
+                        f"node {node_id} ({class_type}): input {key!r} value {value!r} "
+                        f"not in {sorted(spec)}"
+                    )
     return errors
 
 
@@ -566,6 +578,24 @@ def _node_input_field_names(node_info: dict[str, Any]) -> tuple[set[str], set[st
     return required, optional
 
 
+def combo_options(node_def: dict[str, Any], input_name: str) -> set[str]:
+    """Options of a COMBO input, empty when the input is not a combo."""
+    for section in ("required", "optional"):
+        spec = (node_def.get("input", {}) or {}).get(section, {}) or {}
+        entry = spec.get(input_name)
+        if not entry or not isinstance(entry, (list, tuple)) or not entry:
+            continue
+        # COMBO inputs look like ["COMBO", {"options": [...], "default": ...}]
+        for candidate in (entry[1] if len(entry) > 1 and isinstance(entry[1], dict) else {}, entry[0]):
+            if isinstance(candidate, dict):
+                options = candidate.get("options")
+                if isinstance(options, list) and options and all(isinstance(o, str) for o in options):
+                    return set(options)
+            elif isinstance(candidate, list) and candidate and all(isinstance(o, str) for o in candidate):
+                return set(candidate)
+    return set()
+
+
 def _validate_workflow_against_comfyui(comfyui_url: str, workflow: dict[str, Any]) -> None:
     """Ensure workflow inputs match each node's ComfyUI schema before /prompt."""
     for node_id, node in workflow.items():
@@ -593,6 +623,15 @@ def _validate_workflow_against_comfyui(comfyui_url: str, workflow: dict[str, Any
             if input_name not in allowed:
                 raise AssemblyError(
                     f"Workflow node {class_type!r} (id {node_id}) sets unknown input: {input_name!r}"
+                )
+            # a COMBO input only accepts its listed options - ComfyUI rejects a wrong
+            # value with HTTP 400 naming the node, but catching it here is cheaper.
+            options = combo_options(node_info, input_name)
+            value = workflow_inputs[input_name]
+            if options and not isinstance(value, (list, dict)) and value not in options:
+                raise AssemblyError(
+                    f"Workflow node {class_type!r} (id {node_id}) input {input_name!r} "
+                    f"value {value!r} is not one of {sorted(options)}"
                 )
 
 
