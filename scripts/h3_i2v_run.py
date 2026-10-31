@@ -78,10 +78,13 @@ def build_workflow(a):
             "audio_vae": [audio_vae_id, 0]}}
         vid = str(nid)
         nid += 1
+        # The official ComfyUI R2V template uses res_multistep with a beta/normal
+        # scheduler - both clearly outperform euler/simple on reference-heavy prompts.
         nodes[str(nid)] = {"class_type": "KSampler", "inputs": {
             "model": [prev_m, 0], "positive": [vid, 0], "negative": [vid, 0], "latent_image": [vid, 1],
-            "seed": a.seed, "steps": a.steps, "cfg": 1.0, "sampler_name": "euler",
-            "scheduler": "simple", "denoise": 1.0}}
+            "seed": a.seed, "steps": a.steps, "cfg": 1.0,
+            "sampler_name": getattr(a, "sampler", "res_multistep"),
+            "scheduler": getattr(a, "scheduler", "beta"), "denoise": 1.0}}
         samp = str(nid)
         nid += 1
         nodes[str(nid)] = {"class_type": "VAEDecode", "inputs": {"samples": [samp, 0], "vae": ["4", 0]}}
@@ -136,6 +139,8 @@ def main():
                    help="image in ComfyUI/input added as a guide reference (MiniMaxH3AddGuide)")
     p.add_argument("--ref-image", action="append", default=[],
                    help="reference image(s) in ComfyUI/input for the REF2VA mode")
+    p.add_argument("--sampler", default="res_multistep")
+    p.add_argument("--scheduler", default="beta")
     p.add_argument("--ref-image-size", default="match",
                    help="'match' (fast) or 'max' (best identity fidelity, much slower)")
     p.add_argument("--guide-frame", type=int, default=0,
