@@ -53,6 +53,8 @@ def _h3_args(**overrides):
         last_frame="",
         guide_image="",
         guide_frame=0,
+        ref_images=[],
+        ref_image_size="1024x1024",
     )
     for key, value in overrides.items():
         setattr(args, key, value)
@@ -182,3 +184,32 @@ class TestH3NewCoreFeatures:
         graph = h3.build_workflow(_h3_args())
         sampler = next(v for v in graph.values() if v["class_type"] == "KSampler")
         assert sampler["inputs"]["positive"] == [_h3node_id(graph), 0]
+
+
+class TestH3ReferenceMode:
+    """REF2VA: a reference image carries the subject, the prompt drives the action."""
+
+    def test_reference_mode_uses_the_ref2va_model(self) -> None:
+        graph = h3.build_workflow(_h3_args(ref_images=["ref.jpg"]))
+        assert graph["2"]["inputs"]["unet_name"] == "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+
+    def test_reference_mode_uses_the_reference_node(self) -> None:
+        graph = h3.build_workflow(_h3_args(ref_images=["ref.jpg"]))
+        node = next(v for v in graph.values() if v["class_type"] == "MiniMaxH3ReferenceToVideo")
+        assert node["inputs"]["ref_images"]
+        assert node["inputs"]["ref_image_size"] == "1024x1024"
+        assert "first_frame" not in node["inputs"]
+
+    def test_reference_mode_has_no_image_to_video_node(self) -> None:
+        graph = h3.build_workflow(_h3_args(ref_images=["ref.jpg"]))
+        assert not [v for v in graph.values() if v["class_type"] == "MiniMaxH3ImageToVideo"]
+
+    def test_i2v_mode_keeps_the_image_to_video_node(self) -> None:
+        graph = h3.build_workflow(_h3_args())
+        assert [v for v in graph.values() if v["class_type"] == "MiniMaxH3ImageToVideo"]
+
+    def test_negative_prompt_is_not_sent_to_a_node_without_it(self) -> None:
+        """ComfyUI silently ignores unknown inputs - a dead negative_prompt looked fine."""
+        graph = h3.build_workflow(_h3_args())
+        node = next(v for v in graph.values() if v["class_type"] == "MiniMaxH3ImageToVideo")
+        assert "negative_prompt" not in node["inputs"]
