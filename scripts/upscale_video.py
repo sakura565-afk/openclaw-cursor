@@ -105,15 +105,19 @@ def start_prod():
               "-WorkingDirectory 'E:\\ComfyUI_windows_portable_nvidia_cu126\\ComfyUI_windows_portable' "
               f"-RedirectStandardOutput '{out}' -RedirectStandardError '{err}' -WindowStyle Hidden; 'started'")
     subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], capture_output=True, text=True, timeout=90)
-    for _ in range(60):
+    # ComfyUI needs ~5.5 min to boot on this box (2214 nodes + the manager), and each
+    # failed probe costs its own timeout - so the old 60x5 s budget turned a slow boot
+    # into what looked like a hung script. Log the progress and wait long enough.
+    for attempt in range(1, 121):
         time.sleep(5)
         try:
             import urllib.request
             urllib.request.urlopen(f"{PROD}/system_stats", timeout=10).read()
-            log("PROD поднялся")
+            log(f"PROD поднялся (попытка {attempt})")
             return True
         except Exception:
-            continue
+            if attempt % 12 == 0:
+                log(f"PROD ещё поднимается ({attempt * 5} с)")
     log("PROD не поднялся")
     return False
 
