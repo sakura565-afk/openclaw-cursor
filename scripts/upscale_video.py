@@ -63,26 +63,58 @@ def gpu_mb():
         return -1
 
 
+def pids_on_port(port: int) -> list[int]:
+    """PIDs listening on a TCP port.
+
+    netstat is instant and needs no dependency. The PowerShell Get-NetTCPConnection
+    query took up to a minute and sometimes timed out, which hung this stage instead of
+    failing fast; psutil is used when it happens to be installed.
+    """
+    try:
+        import psutil
+    except ImportError:
+        psutil = None
+    if psutil is not None:
+        out = []
+        for conn in psutil.net_connections(kind="inet"):
+            if conn.laddr and conn.laddr.port == port and conn.status == psutil.CONN_LISTEN and conn.pid:
+                out.append(conn.pid)
+        return sorted(set(out))
+    try:
+        # netstat prints in the OEM code page, not utf-8
+        r = subprocess.run(["netstat", "-ano"], capture_output=True, text=True, timeout=30,
+                           encoding="utf-8", errors="replace")
+    except Exception as exc:
+        log(f"netstat: {exc}")
+        return []
+    out = []
+    for line in (r.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) < 5 or "LISTENING" not in line.upper():
+            continue
+        local = parts[1]
+        if local.rsplit(":", 1)[-1] != str(port):
+            continue
+        if parts[-1].isdigit():
+            out.append(int(parts[-1]))
+    return sorted(set(out))
+
+
 def prod_pids():
-    r = subprocess.run(["powershell", "-NoProfile", "-Command",
-        "$c = Get-NetTCPConnection -LocalPort 8188 -State Listen -ErrorAction SilentlyContinue | "
-        "Select-Object -Expand OwningProcess -Unique; foreach ($p in $c) { $p }"],
-        capture_output=True, text=True, timeout=60)
-    return [int(x) for x in (r.stdout or "").split() if x.strip().isdigit()]
+    return pids_on_port(8188)
 
 
 def lab_pids():
-    pids = []
-    for port in (8189,):
-        r = subprocess.run(["powershell", "-NoProfile", "-Command",
-            f"$c = Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue | "
-            "Select-Object -Expand OwningProcess -Unique; foreach ($p in $c) { $p }"],
-            capture_output=True, text=True, timeout=60)
-        pids += [int(x) for x in (r.stdout or "").split() if x.strip().isdigit()]
-    w = subprocess.run(["powershell", "-NoProfile", "-Command",
-        "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { $_.CommandLine -match 'freevideo_engine' } | "
-        "ForEach-Object { $_.ProcessId }"], capture_output=True, text=True, timeout=60)
-    pids += [int(x) for x in (w.stdout or "").split() if x.strip().isdigit()]
+    """The LAB ComfyUI on 8189 plus any FreeVideo engine worker it left behind."""
+    pids = pids_on_port(8189)
+    try:
+        w = subprocess.run(["powershell", "-NoProfile", "-Command",
+            "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { "
+            "$_.CommandLine -match 'freevideo_engine' } | ForEach-Object { $_.ProcessId }"],
+            capture_output=True, text=True, timeout=25)
+        pids += [int(x) for x in (w.stdout or "").split() if x.strip().isdigit()]
+    except Exception as exc:
+        log(f"поиск freevideo-воркера пропущен: {exc}")
     return sorted(set(pids))
 
 
@@ -104,7 +136,11 @@ def start_prod():
               "-ArgumentList '-s','ComfyUI/main.py','--listen','127.0.0.1','--port','8188','--disable-auto-launch' "
               "-WorkingDirectory 'E:\\ComfyUI_windows_portable_nvidia_cu126\\ComfyUI_windows_portable' "
               f"-RedirectStandardOutput '{out}' -RedirectStandardError '{err}' -WindowStyle Hidden; 'started'")
-    subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], capture_output=True, text=True, timeout=90)
+    # The PowerShell call must NOT keep our stdout pipe: ComfyUI inherits the handles
+    # and stays alive for hours, so subprocess.run(capture_output=True) blocks on the
+    # pipe until the server exits - the script looked hung while PROD was already up.
+    subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90)
     # ComfyUI needs ~5.5 min to boot on this box (2214 nodes + the manager), and each
     # failed probe costs its own timeout - so the old 60x5 s budget turned a slow boot
     # into what looked like a hung script. Log the progress and wait long enough.
