@@ -72,7 +72,13 @@ python scripts/h3_i2v_run.py --image frame.jpg --prompt-file p.txt \
 * `ref_image_size` is `match` (fast) or `max` (best identity fidelity, several times slower);
 * the reference image should be a **portrait of the subject** - a wide shot from behind
   carries no identity for the model;
-* the mode switches the DiT to `minimax_h3_ref2va_pruned_int8_convrot` and loads the audio VAE.
+* the mode switches the DiT to `minimax_h3_ref2va_pruned_int8_convrot`, loads the audio VAE
+  and decodes with the int8 convrot video VAE (2.6 GB instead of 4.9 GB for fp16);
+* `--turbo` is **broken here**: the official 4-step turbo LoRA needs the template's
+  `SamplerCustomAdvanced` graph; with the plain KSampler it blows the frame out. Keep it off
+  until the sampler graph matches the template exactly.
+* the 10 official style embeddings are installed (`models/embeddings/minimaxh3_*.safetensors`)
+  and are referenced in the prompt with the `embedding:` prefix.
 
 ## The H3 node has no negative prompt
 
