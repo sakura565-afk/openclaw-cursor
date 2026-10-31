@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, r"E:/tmp/openclaw-cursor-test")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from video_pipeline.assembler import interpolate  # noqa: E402
 
 FF = os.environ.get("FFMPEG_BIN", r"C:\Users\user\AppData\Local\hermes\tools\ffmpeg-9.0.1-win32-x64\bin\ffmpeg.exe")
