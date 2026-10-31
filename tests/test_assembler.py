@@ -446,9 +446,13 @@ class TestDefaultRifeWorkflow:
         workflow = _default_rife_workflow("clip.mp4", target_fps=48.0)
         combine = workflow["3"]["inputs"]
         assert combine["format"] == "video/h264-mp4"
-        assert combine["pix_fmt"] == "yuv420p"
-        assert combine["crf"] == 19
-        assert combine["save_metadata"] is True
+        # VHS 2026-09 dropped pix_fmt/crf/save_metadata - it derives the pixel
+        # format from `format` itself. Passing the removed keys makes ComfyUI
+        # reject the whole graph, so they must stay out.
+        for removed in ("pix_fmt", "crf", "save_metadata"):
+            assert removed not in combine
+        assert "crf" not in combine  # removed by VHS 2026-09
+        assert "save_metadata" not in combine  # removed by VHS 2026-09
 
     def test_preflight_accepts_workflow_with_format_subwidgets(self) -> None:
         workflow = _default_rife_workflow("clip.mp4", target_fps=48.0)

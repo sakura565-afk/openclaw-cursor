@@ -65,8 +65,7 @@ def build_workflow(a):
     cv = str(nid)
     nid += 1
     nodes[str(nid)] = {"class_type": "SaveVideo", "inputs": {
-        "video": [cv, 0], "filename_prefix": a.prefix, "format": "auto", "codec": "h264",
-        "pix_fmt": "yuv420p", "crf": 18, "save_metadata": False, "pingpong": False}}
+        "video": [cv, 0], "filename_prefix": a.prefix, "format": "auto", "codec": "h264"}}
     return nodes
 
 
