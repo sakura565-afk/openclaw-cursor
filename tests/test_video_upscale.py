@@ -219,8 +219,11 @@ class TestUpscaleVramPreflight:
         rel.assert_called_once_with(cfg.free_vram_urls, request_func_post=mock.ANY)
         assert name == "lanczos"
         lz.assert_called_once_with(src, dst, 720, 1280)
-        warning = " ".join(str(c) for c in log.warning.call_args_list)
-        assert "4.5" in warning and "13" in warning
+        # The fallback must be logged loudly: a Lanczos result looks like an upscale
+        # but has no learned detail, so a WARNING is too easy to miss in a long log.
+        error = " ".join(str(c) for c in log.error.call_args_list)
+        assert "4.5" in error and "13" in error
+        assert "NO learned detail" in error
 
     def test_preflight_proceeds_when_stats_unavailable(self, tmp_path: Path) -> None:
         src = tmp_path / "in.mp4"
