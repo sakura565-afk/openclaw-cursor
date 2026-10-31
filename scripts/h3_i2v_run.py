@@ -152,7 +152,9 @@ def main():
     p.add_argument("--ref-image", action="append", default=[],
                    help="reference image(s) in ComfyUI/input for the REF2VA mode")
     p.add_argument("--turbo", action="store_true",
-                   help="use the official 4-step ref2v turbo LoRA (implies --steps 4)")
+                   help="EXPERIMENTAL, BROKEN in this wiring: the official 4-step ref2v turbo "
+                        "LoRA needs the template's SamplerCustomAdvanced graph; with the plain "
+                        "KSampler it blows out the frame. Keep it off.")
     p.add_argument("--sampler", default="res_multistep")
     p.add_argument("--scheduler", default="beta")
     p.add_argument("--ref-image-size", default="match",
