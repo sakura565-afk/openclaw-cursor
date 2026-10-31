@@ -56,3 +56,25 @@ python scripts/qwen_edit_run.py tag frame.jpg 12345 1.0 prompt.txt 32 1056 704
 5. **FreeVideo pauses `llama-server` and holds `render_vram.lock` for the whole render** - the
    local watchdog otherwise resurrects llama-server mid-render and the render slows 30-40x.
 6. **The H3 runner must not be renamed into a comma-separated CLI.** Use `--loras-json`.
+
+## H3 reference mode (REF2VA) and the prompt tags
+
+The 2026-10 core can drive H3 from a reference image instead of a first frame:
+
+```bash
+python scripts/h3_i2v_run.py --image frame.jpg --prompt-file p.txt \
+    --ref-image ref.jpg --ref-image-size match ...
+```
+
+* the reference enters the prompt as a **tag**: `<Picture 1>`, `<Picture 2>`, `<Video 1>`,
+  `<Audio 1>` (1-based per type) - the model ignores a reference that is only described in
+  words, so the prompt MUST contain the tag;
+* `ref_image_size` is `match` (fast) or `max` (best identity fidelity, several times slower);
+* the reference image should be a **portrait of the subject** - a wide shot from behind
+  carries no identity for the model;
+* the mode switches the DiT to `minimax_h3_ref2va_pruned_int8_convrot` and loads the audio VAE.
+
+## The H3 node has no negative prompt
+
+The 2026-10 `MiniMaxH3ImageToVideo` has no `negative_prompt` input. ComfyUI silently ignores
+unknown inputs, so a negative prompt on that node was dead weight - it is not sent any more.
