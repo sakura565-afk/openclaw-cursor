@@ -32,7 +32,7 @@ NEG = ("blurry, deformed, extra limbs, extra fingers, fused bodies, cartoon, ill
 def run(tag, img_name, positive, seed, denoise=1.0, steps=30, size=(736, 992)):
     graph = {
         "1": {"class_type": "UNETLoader",
-              "inputs": {"unet_name": "qwen_image_edit_2509_fp8_e4m3fn.safetensors", "weight_dtype": "default"}},
+              "inputs": {"unet_name": os.environ.get("QWEN_EDIT_MODEL", "qwen_image_edit_2509_fp8_e4m3fn.safetensors"), "weight_dtype": "default"}},
         "2": {"class_type": "CLIPLoader",
               "inputs": {"clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors", "type": "qwen_image", "device": "default"}},
         "3": {"class_type": "VAELoader", "inputs": {"vae_name": VAE_NAME}},
