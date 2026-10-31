@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import time
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -24,7 +25,17 @@ from video_pipeline.config import UpscaleConfig
 BackendName = Literal["seedvr2", "esrgan", "lanczos"]
 
 POLL_INTERVAL_SEC = 2.0
-POLL_TIMEOUT_SEC = 3600
+# A SeedVR2 upscale of a 173-frame clip takes ~20-25 min on a 16 GB box, and up to
+# ~2 h when the GPU is shared (the VAE tiled-decode step grows from ~6 s to ~270 s
+# per batch). 3600 s was short enough that a slow run silently timed out.
+POLL_TIMEOUT_SEC = 14400
+
+# Environment switches (see the "Silent fallback" section of the module docstring):
+#   UPSCALE_POLL_TIMEOUT   - override POLL_TIMEOUT_SEC (seconds).
+#   UPSCALE_NO_FALLBACK=1  - raise instead of silently substituting Lanczos when the
+#                            learned backend fails, times out or is unavailable.
+_ENV_TIMEOUT = "UPSCALE_POLL_TIMEOUT"
+_ENV_NO_FALLBACK = "UPSCALE_NO_FALLBACK"
 
 SEEDVR2_DIT_MODEL = "seedvr2_ema_3b_fp8_e4m3fn.safetensors"
 SEEDVR2_VAE_MODEL = "ema_vae_fp16.safetensors"
@@ -354,13 +365,55 @@ def apply_target_box(in_path: Path, out_path: Path, width: int, height: int) -> 
     return lanczos_upscale(in_path, out_path, width, height)
 
 
+def _poll_timeout_sec() -> float:
+    """Poll timeout in seconds: ``UPSCALE_POLL_TIMEOUT`` overrides the module default."""
+    raw = os.environ.get(_ENV_TIMEOUT)
+    if raw:
+        try:
+            value = float(raw)
+        except ValueError:
+            logger.warning("Invalid %s=%r; using %s", _ENV_TIMEOUT, raw, POLL_TIMEOUT_SEC)
+        else:
+            if value > 0:
+                return value
+            logger.warning("Ignoring non-positive %s=%r", _ENV_TIMEOUT, raw)
+    return float(POLL_TIMEOUT_SEC)
+
+
+def _fallback_disabled() -> bool:
+    """True when ``UPSCALE_NO_FALLBACK`` asks us to fail loudly instead of using Lanczos."""
+    return os.environ.get(_ENV_NO_FALLBACK, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _fallback_or_raise(exc: BaseException, *, backend: str, elapsed: float | None = None) -> str:
+    """Substitute Lanczos, or raise when the fallback is disabled.
+
+    The learned backend failing must never be indistinguishable from a successful
+    upscale: a Lanczos result has the right resolution and the audio, but zero new
+    detail, so the caller cannot tell the two apart by looking at the file.
+    """
+    if _fallback_disabled():
+        raise UpscaleError(
+            f"ComfyUI {backend} upscale failed and UPSCALE_NO_FALLBACK is set: {exc}"
+        ) from exc
+    logger.error(
+        "ComfyUI %s upscale FAILED (%s) after %.0f s; falling back to lanczos - the result "
+        "has NO learned detail",
+        backend,
+        exc,
+        elapsed if elapsed is not None else -1.0,
+    )
+    return "lanczos"
+
+
 def _poll_comfy_history(
     comfyui_url: str,
     prompt_id: str,
     request_func: Callable[..., Any] = requests.get,
 ) -> dict[str, Any]:
     started = time.time()
-    while time.time() - started < POLL_TIMEOUT_SEC:
+    timeout = _poll_timeout_sec()
+    while time.time() - started < timeout:
         response = request_func(
             f"{comfyui_url.rstrip('/')}/history/{prompt_id}",
             timeout=30,
@@ -378,7 +431,10 @@ def _poll_comfy_history(
         if entry.get("outputs") or status.get("status_str") == "success":
             return entry
         time.sleep(POLL_INTERVAL_SEC)
-    raise UpscaleError(f"ComfyUI upscale timed out for prompt_id={prompt_id}")
+    raise UpscaleError(
+        f"ComfyUI upscale timed out for prompt_id={prompt_id} "
+        f"after {time.time() - started:.0f}s (limit {timeout:.0f}s)"
+    )
 
 
 def _run_comfy_video_workflow(
@@ -429,8 +485,14 @@ def upscale_video(
 
     backend = select_backend(config, object_info)
     if requested != "auto" and requested != "lanczos" and backend != requested:
-        logger.warning(
-            "Upscale backend {!r} unavailable at {}; falling back to lanczos",
+        if _fallback_disabled():
+            raise UpscaleError(
+                f"Upscale backend {requested!r} unavailable at {config.comfyui_url} "
+                "and UPSCALE_NO_FALLBACK is set"
+            )
+        logger.error(
+            "Upscale backend %r unavailable at %s; falling back to lanczos - the result "
+            "has NO learned detail",
             requested,
             config.comfyui_url,
         )
@@ -441,8 +503,13 @@ def upscale_video(
         return "lanczos"
 
     if not _comfy_reachable(config.comfyui_url, request_func_get):
-        logger.warning(
-            "ComfyUI unreachable at {}; falling back to lanczos upscale",
+        if _fallback_disabled():
+            raise UpscaleError(
+                f"ComfyUI unreachable at {config.comfyui_url} and UPSCALE_NO_FALLBACK is set"
+            )
+        logger.error(
+            "ComfyUI unreachable at %s; falling back to lanczos upscale - the result "
+            "has NO learned detail",
             config.comfyui_url,
         )
         lanczos_upscale(in_path, out_path, target_width, target_height)
@@ -451,9 +518,15 @@ def upscale_video(
     release_vram(config.free_vram_urls, request_func_post=request_func_post)
     free_gb = free_vram_gb(config.comfyui_url, request_func_get=request_func_get)
     if free_gb is not None and free_gb < config.min_free_vram_gb:
-        logger.warning(
-            "Insufficient free VRAM for {} upscale: {:.2f} GB free, {:.2f} GB required; "
-            "falling back to lanczos",
+        if _fallback_disabled():
+            raise UpscaleError(
+                f"Insufficient free VRAM for {backend} upscale "
+                f"({free_gb:.2f} GB free, {config.min_free_vram_gb:.2f} GB required) "
+                "and UPSCALE_NO_FALLBACK is set"
+            )
+        logger.error(
+            "Insufficient free VRAM for %s upscale: %.2f GB free, %.2f GB required; "
+            "falling back to lanczos - the result has NO learned detail",
             backend,
             free_gb,
             config.min_free_vram_gb,
@@ -465,6 +538,7 @@ def upscale_video(
     frame_rate = media["fps"] or 24.0
     comfy_raw = out_path.with_name(f"{out_path.stem}_comfy{out_path.suffix}")
 
+    started = time.time()
     try:
         if backend == "seedvr2":
             workflow = build_seedvr2_workflow(
@@ -484,7 +558,7 @@ def upscale_video(
             request_func_post=request_func_post,
         )
     except (AssemblyError, UpscaleError) as exc:
-        logger.warning("ComfyUI {} upscale failed ({}); falling back to lanczos", backend, exc)
+        _fallback_or_raise(exc, backend=backend, elapsed=time.time() - started)
         lanczos_upscale(in_path, out_path, target_width, target_height)
         return "lanczos"
 
