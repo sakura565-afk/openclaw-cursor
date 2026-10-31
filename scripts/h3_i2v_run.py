@@ -62,9 +62,21 @@ def build_workflow(a):
     if ref_images:
         # REF2VA mode: a reference image carries the subject, the prompt drives the action.
         nodes["2"]["inputs"]["unet_name"] = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+        # The official R2V template decodes video with the int8 convrot VAE (2.6 GB
+        # instead of 4.9 GB for fp16) - same pixels, much less VRAM.
+        nodes["4"]["inputs"]["vae_name"] = getattr(
+            a, "ref_vae", "minimax_h3_video_vae_int8_convrot.safetensors")
         nodes["5"] = {"class_type": "VAELoader", "inputs": {"vae_name": "minimax_h3_audio_vae_fp32.safetensors"}}
         audio_vae_id = "5"
         nid = 6
+        if getattr(a, "turbo", False):
+            # 4-step turbo LoRA for the ref2v pipeline (official Comfy-Org model).
+            nodes[str(nid)] = {"class_type": "LoraLoaderModelOnly", "inputs": {
+                "model": [prev_m, 0],
+                "lora_name": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+                "strength_model": 1.0}}
+            prev_m = str(nid)
+            nid += 1
         links = []
         for name in ref_images:
             scale_id, nid = _scaled_image(nodes, nid, name, ["1", 0])
@@ -139,6 +151,8 @@ def main():
                    help="image in ComfyUI/input added as a guide reference (MiniMaxH3AddGuide)")
     p.add_argument("--ref-image", action="append", default=[],
                    help="reference image(s) in ComfyUI/input for the REF2VA mode")
+    p.add_argument("--turbo", action="store_true",
+                   help="use the official 4-step ref2v turbo LoRA (implies --steps 4)")
     p.add_argument("--sampler", default="res_multistep")
     p.add_argument("--scheduler", default="beta")
     p.add_argument("--ref-image-size", default="match",

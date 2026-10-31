@@ -54,7 +54,8 @@ def _h3_args(**overrides):
         guide_image="",
         guide_frame=0,
         ref_images=[],
-        ref_image_size="1024x1024",
+        ref_image_size="match",
+        turbo=False,
     )
     for key, value in overrides.items():
         setattr(args, key, value)
@@ -197,7 +198,7 @@ class TestH3ReferenceMode:
         graph = h3.build_workflow(_h3_args(ref_images=["ref.jpg"]))
         node = next(v for v in graph.values() if v["class_type"] == "MiniMaxH3ReferenceToVideo")
         assert node["inputs"]["ref_images"]
-        assert node["inputs"]["ref_image_size"] == "1024x1024"
+        assert node["inputs"]["ref_image_size"] == "match"
         assert "first_frame" not in node["inputs"]
 
     def test_reference_mode_has_no_image_to_video_node(self) -> None:
@@ -213,3 +214,32 @@ class TestH3ReferenceMode:
         graph = h3.build_workflow(_h3_args())
         node = next(v for v in graph.values() if v["class_type"] == "MiniMaxH3ImageToVideo")
         assert "negative_prompt" not in node["inputs"]
+
+
+class TestH3Turbo:
+    """The official 4-step ref2v turbo LoRA."""
+
+    def test_turbo_adds_a_model_only_lora(self) -> None:
+        graph = h3.build_workflow(_h3_args(ref_images=["ref.jpg"], turbo=True))
+        loras = [v for v in graph.values() if v["class_type"] == "LoraLoaderModelOnly"]
+        assert loras, "expected the turbo LoRA node"
+        assert loras[0]["inputs"]["lora_name"].startswith("minimax_h3_ref2v_turbo_4step")
+
+    def test_without_turbo_there_is_no_turbo_lora(self) -> None:
+        graph = h3.build_workflow(_h3_args(ref_images=["ref.jpg"]))
+        assert not [v for v in graph.values() if v["class_type"] == "LoraLoaderModelOnly"]
+
+    def test_turbo_lora_feeds_the_sampler(self) -> None:
+        graph = h3.build_workflow(_h3_args(ref_images=["ref.jpg"], turbo=True))
+        sampler = next(v for v in graph.values() if v["class_type"] == "KSampler")
+        turbo_id = next(k for k, v in graph.items() if v["class_type"] == "LoraLoaderModelOnly")
+        assert sampler["inputs"]["model"] == [turbo_id, 0]
+
+
+    def test_reference_mode_uses_the_int8_convrot_video_vae(self) -> None:
+        graph = h3.build_workflow(_h3_args(ref_images=["ref.jpg"]))
+        assert graph["4"]["inputs"]["vae_name"] == "minimax_h3_video_vae_int8_convrot.safetensors"
+
+    def test_i2v_mode_keeps_the_fp16_video_vae(self) -> None:
+        graph = h3.build_workflow(_h3_args())
+        assert graph["4"]["inputs"]["vae_name"] == "minimax_h3_video_vae_fp16.safetensors"
