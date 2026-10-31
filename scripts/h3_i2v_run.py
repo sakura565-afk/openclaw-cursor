@@ -22,6 +22,16 @@ COMFYUI_OUTPUT_DIR = os.environ.get("COMFYUI_OUTPUT_DIR", r"E:\ComfyUI_windows_p
 FFMPEG = os.environ.get("FFMPEG_BIN", r"C:\Users\user\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0.1-full_build\bin\ffmpeg.exe")
 
 
+def _scaled_image(nodes: dict, nid: int, image_name: str, source: list) -> tuple[str, int]:
+    """Add a LoadImage + ImageScaleToTotalPixels pair, return (scale node id, next nid)."""
+    nodes[str(nid)] = {"class_type": "LoadImage", "inputs": {"image": image_name}}
+    load_id = str(nid)
+    nid += 1
+    nodes[str(nid)] = {"class_type": "ImageScaleToTotalPixels", "inputs": {
+        "image": [load_id, 0], "upscale_method": "lanczos", "megapixels": 0.73, "resolution_steps": 1}}
+    return str(nid), nid + 1
+
+
 def build_workflow(a):
     loras = json.loads(a.loras_json)
     nodes = {
@@ -42,18 +52,33 @@ def build_workflow(a):
         "image": ["1", 0], "upscale_method": "lanczos", "megapixels": 0.73, "resolution_steps": 1}}
     scale_id = str(nid)
     nid += 1
-    nodes[str(nid)] = {"class_type": "MiniMaxH3ImageToVideo", "inputs": {
+    h3_inputs = {
         "clip": [prev_c, 1] if prev_c != "3" else [prev_c, 0], "vae": ["4", 0], "first_frame": [scale_id, 0],
         "prompt": a.prompt,
         "negative_prompt": a.negative or ("different face, extra person, blurry, distorted, morphed, "
                                           "plastic skin, anime, text, identity drift, clothed, "
                                           "extra limbs, duplicated limbs, distorted hands, "
                                           "man sitting behind her, gap between the bodies"),
-        "width": a.width, "height": a.height, "length": a.length}}
+        "width": a.width, "height": a.height, "length": a.length}
+    # The 2026-10 core can pin the LAST frame as well (MiniMaxH3ImageToVideo.last_frame).
+    if getattr(a, "last_frame", ""):
+        last_scale, nid = _scaled_image(nodes, nid, a.last_frame, ["1", 0])
+        h3_inputs["last_frame"] = [last_scale, 0]
+    nodes[str(nid)] = {"class_type": "MiniMaxH3ImageToVideo", "inputs": h3_inputs}
     vid = str(nid)
     nid += 1
+    positive = [vid, 0]
+    # A guide image can be pinned to a specific frame of the clip (MiniMaxH3AddGuide).
+    if getattr(a, "guide_image", ""):
+        guide_scale, nid = _scaled_image(nodes, nid, a.guide_image, ["1", 0])
+        nodes[str(nid)] = {"class_type": "MiniMaxH3AddGuide", "inputs": {
+            "positive": [vid, 0], "latent": [vid, 1],
+            "frame_idx": getattr(a, "guide_frame", 0),
+            "image": [guide_scale, 0], "vae": ["4", 0]}}
+        positive = [str(nid), 0]
+        nid += 1
     nodes[str(nid)] = {"class_type": "KSampler", "inputs": {
-        "model": [prev_m, 0], "positive": [vid, 0], "negative": [vid, 0], "latent_image": [vid, 1],
+        "model": [prev_m, 0], "positive": positive, "negative": [vid, 0], "latent_image": [vid, 1],
         "seed": a.seed, "steps": a.steps, "cfg": 1.0, "sampler_name": "euler",
         "scheduler": "simple", "denoise": 1.0}}
     samp = str(nid)
@@ -72,6 +97,12 @@ def build_workflow(a):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--image", required=True)
+    p.add_argument("--last-frame", default="",
+                   help="image in ComfyUI/input pinned as the LAST frame of the clip")
+    p.add_argument("--guide-image", default="",
+                   help="image in ComfyUI/input added as a guide reference (MiniMaxH3AddGuide)")
+    p.add_argument("--guide-frame", type=int, default=0,
+                   help="frame index the guide image is pinned to")
     p.add_argument("--prompt-file", required=True)
     p.add_argument("--prompt-prefix", default="")
     p.add_argument("--loras-json", default="[]")
