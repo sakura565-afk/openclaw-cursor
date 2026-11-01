@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -412,6 +413,11 @@ def post_process(
         final = mux_audio_from_source(interp, src, src.with_name(f"{src.stem}_ip{src.suffix}"))
         logger.info("Interpolated to {} fps -> {}", interpolate_fps, final)
     if upscale_backend:
+        # A failed learned upscale must never silently degrade to a Lanczos resize: the
+        # output keeps the right resolution and the audio, so it is indistinguishable
+        # from a real upscale by looking at the file. Fail loudly instead (the caller
+        # can override by exporting UPSCALE_NO_FALLBACK=0 before running).
+        os.environ.setdefault("UPSCALE_NO_FALLBACK", "1")
         info = probe(final)
         src_h = int(info.get("height") or 0) or 1
         src_w = int(info.get("width") or 0) or 1
