@@ -401,3 +401,33 @@ class TestFreeVideoVramPreflight:
         )
         assert args.free_url == ["http://127.0.0.1:8188"]
         assert args.no_free is True
+
+
+
+def test_freevideo_runner_resolves_a_bare_image_name(tmp_path):
+    """--image photo.jpg must not die with a bare FileNotFoundError."""
+    import importlib.util
+    from pathlib import Path as _P
+
+    spec = importlib.util.spec_from_file_location(
+        "fv_lora_run", _P(r"E:/tmp/openclaw-cursor-test/scripts/freevideo_lora_run.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    (scratch / "photo.jpg").write_bytes(b"x")
+
+    original = mod.SCRATCH
+    mod.SCRATCH = scratch
+    try:
+        src = _P("photo.jpg")
+        assert not src.exists()
+        for base in (mod.SCRATCH, mod.LAB / "input", _P.cwd()):
+            candidate = base / src.name
+            if candidate.exists():
+                src = candidate
+                break
+        assert src.exists()
+    finally:
+        mod.SCRATCH = original

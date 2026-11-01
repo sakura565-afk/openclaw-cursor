@@ -180,6 +180,18 @@ def main() -> int:
 
     prompt = Path(args.prompt).read_text(encoding="utf-8").strip()
     src = Path(args.image)
+    if not src.exists():
+        # a bare file name is looked up in the scratch dir - passing "photo.jpg"
+        # instead of the full path used to die with a bare FileNotFoundError
+        for base in (SCRATCH, LAB / "input", Path.cwd()):
+            candidate = base / src.name
+            if candidate.exists():
+                src = candidate
+                log(f"изображение найдено в {base}")
+                break
+        else:
+            raise SystemExit(f"изображение не найдено: {args.image} "
+                             f"(искал в {SCRATCH} и {LAB / 'input'})")
     name = "fvgen_" + src.stem.replace(" ", "_")[:40] + ".jpg"
     shutil.copy2(src, LAB / "input" / name)
 
