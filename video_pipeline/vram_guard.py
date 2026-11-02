@@ -131,6 +131,16 @@ def _process_details(pid: int) -> tuple[str, list[str], str]:
     return exe, _split_windows_command_line(cmdline.strip()), ""
 
 
+def _exe_basename(name: str) -> str:
+    """File name of an executable path, for either separator.
+
+    ``os.path.basename`` only splits on the host separator, so a Windows path
+    (``C:\\Users\\...\\llama-server.exe``) survives intact on POSIX hosts and
+    never matches a plain process name. Split on both separators explicitly.
+    """
+    return name.replace("\\", "/").rsplit("/", 1)[-1].lower()
+
+
 def pause_named_processes(names: list[str]) -> list[HeldProcess]:
     """Stop GPU-holding processes whose executable name matches one of ``names``.
 
@@ -142,10 +152,10 @@ def pause_named_processes(names: list[str]) -> list[HeldProcess]:
         return []
     # nvidia-smi reports the FULL executable path on Windows
     # (e.g. C:\Users\user\llamacpp\llama-server.exe), so match on the file name.
-    wanted = {os.path.basename(n).lower() for n in names}
+    wanted = {_exe_basename(n) for n in names}
     stopped: list[HeldProcess] = []
     for proc in list_gpu_processes():
-        base = os.path.basename(proc.name).lower()
+        base = _exe_basename(proc.name)
         if base not in wanted:
             continue
         exe, argv, cwd = _process_details(proc.pid)
