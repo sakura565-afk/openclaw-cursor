@@ -455,17 +455,16 @@ def post_process(
 ) -> Path:
     """Run the optional post chain on a rendered clip and return the final path.
 
-    Upscale -> interpolate. The order is measured, not conventional: running the
-    learned upscaler BEFORE the frame interpolation loses ~18% of the high-frequency
-    detail (HF 0.01696 vs 0.02075 for the reverse order), because the interpolator
-    then has to invent the in-between frames from already-smoothed material.
-    Interpolating first and upscaling the 48 fps result keeps the detail.
-
-    Both stages write video frames only, so the original audio track is muxed back
-    after every stage.
+    Interpolate -> upscale. Both stages write video frames only, so the original
+    audio track is muxed back after every stage.
     """
     src = Path(src)
     final = src
+    if interpolate_fps:
+        interp = src.with_name(f"{src.stem}_interp{src.suffix}")
+        interpolate(final, interp, interpolate_fps, comfyui_url=interpolate_url)
+        final = mux_audio_from_source(interp, src, src.with_name(f"{src.stem}_ip{src.suffix}"))
+        logger.info("Interpolated to {} fps -> {}", interpolate_fps, final)
     if upscale_backend:
         # A failed learned upscale must never silently degrade to a Lanczos resize: the
         # output keeps the right resolution and the audio, so it is indistinguishable
@@ -487,11 +486,6 @@ def post_process(
         )
         final = mux_audio_from_source(target, final, src.with_name(f"{src.stem}_final{src.suffix}"))
         logger.info("Upscaled to {}x{} -> {}", width, height, final)
-    if interpolate_fps:
-        interp = src.with_name(f"{src.stem}_interp{src.suffix}")
-        interpolate(final, interp, interpolate_fps, comfyui_url=interpolate_url)
-        final = mux_audio_from_source(interp, src, src.with_name(f"{src.stem}_ip{src.suffix}"))
-        logger.info("Interpolated to {} fps -> {}", interpolate_fps, final)
     return final
 
 
