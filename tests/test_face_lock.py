@@ -36,7 +36,8 @@ def test_reactor_workflow_uses_verified_node_schema() -> None:
         "swap_model": "inswapper_128.onnx",
         "facedetection": "retinaface_resnet50",
         "face_restore_model": "GFPGANv1.4.pth",
-        "face_restore_visibility": 1.0,
+        # visibility 1.0 = the airbrushed "fake plastic AI skin" look
+        "face_restore_visibility": 0.7,
         "codeformer_weight": 0.5,
         "detect_gender_input": "no",
         "detect_gender_source": "no",
