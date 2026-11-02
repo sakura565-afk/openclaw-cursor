@@ -148,6 +148,34 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Refine pass denoising steps (engine default: 3).",
     )
+    parser.add_argument(
+        "--tier",
+        choices=["light", "medium", "high", "max"],
+        default=None,
+        help=(
+            "FreeVideo quality tier. light = two_pass + upscale_factor 2 (first pass at "
+            "25 percent of pixels - waxy skin, the micro-texture cannot be born there); "
+            "medium = two_pass + upscale_factor 1.5 (44 percent of pixels); high = single pass, "
+            "16 steps, full resolution; max = single pass, 20 steps, full resolution. "
+            "Overrides --no-two-pass / --base-steps / --step-cache."
+        ),
+    )
+    parser.add_argument(
+        "--step-cache",
+        default=None,
+        help="FreeVideo step cache mode (e.g. easycache-av). Used by the high/max tiers.",
+    )
+    parser.add_argument(
+        "--upscale-factor",
+        type=float,
+        default=None,
+        help="Two-pass learned upscale factor: 2.0 = light, 1.5 = medium.",
+    )
+    parser.add_argument(
+        "--first-frame-reference",
+        action="store_true",
+        help="Ask the engine to treat the first frame as a reference (reduces drift).",
+    )
     return parser
 
 
@@ -284,6 +312,10 @@ def run_render(
     no_two_pass: bool = False,
     base_steps: int | None = None,
     refine_steps: int | None = None,
+    tier: str | None = None,
+    step_cache: str | None = None,
+    upscale_factor: float | None = None,
+    first_frame_reference: bool = False,
     pause_process: list[str] | None = None,
     interpolate_fps: float | None = None,
     interpolate_url: str = "http://127.0.0.1:8188",
@@ -301,6 +333,24 @@ def run_render(
     if not prompt_text:
         raise FreeVideoDirectorError(f"Prompt file is empty: {prompt_path}")
 
+    two_pass = not no_two_pass
+    eff_base_steps = base_steps
+    eff_refine_steps = refine_steps
+    eff_step_cache = step_cache
+    eff_upscale_factor = upscale_factor
+    if tier:
+        # tiers.py: light = two_pass + upscale 2; medium = two_pass + upscale 1.5;
+        # high = single pass 16 steps + easycache-av; max = single pass 20 steps + easycache-av.
+        if tier == "light":
+            two_pass = True
+            eff_upscale_factor = 2.0
+        elif tier == "medium":
+            two_pass = True
+            eff_upscale_factor = 1.5
+        else:
+            two_pass = False
+            eff_base_steps = 16 if tier == "high" else 20
+            eff_step_cache = "easycache-av"
     fv_config = FreeVideoConfig(
         width=width,
         height=height,
@@ -308,9 +358,12 @@ def run_render(
         seed=seed,
         last_frame=last_image,
         frame_lock=True,
-        two_pass=not no_two_pass,
-        **({"base_steps": base_steps} if base_steps is not None else {}),
-        **({"refine_steps": refine_steps} if refine_steps is not None else {}),
+        two_pass=two_pass,
+        first_frame_reference=first_frame_reference,
+        **({"base_steps": eff_base_steps} if eff_base_steps is not None else {}),
+        **({"refine_steps": eff_refine_steps} if eff_refine_steps is not None else {}),
+        **({"step_cache": eff_step_cache} if eff_step_cache else {}),
+        **({"upscale_factor": eff_upscale_factor} if eff_upscale_factor is not None else {}),
     )
     work_dir = out.parent / ".product_shot_work"
     director = FreeVideoDirector(
@@ -457,6 +510,10 @@ def main(argv: list[str] | None = None) -> int:
             no_two_pass=args.no_two_pass,
             base_steps=args.base_steps,
             refine_steps=args.refine_steps,
+            tier=args.tier,
+            step_cache=args.step_cache,
+            upscale_factor=args.upscale_factor,
+            first_frame_reference=args.first_frame_reference,
             pause_process=args.pause_process,
             interpolate_fps=args.interpolate,
             interpolate_url=args.interpolate_url,
