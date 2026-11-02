@@ -54,7 +54,10 @@ def build_reactor_workflow(
                 "swap_model": "inswapper_128.onnx",
                 "facedetection": "retinaface_resnet50",
                 "face_restore_model": restore_model,
-                "face_restore_visibility": 1.0,
+                # visibility 1.0 gives the "airbrushed / fake plastic AI skin" look
+                # (measured: it is exactly the waxy-skin defect we are fighting).
+                # 0.7 keeps the source identity without the plastic smoothing.
+                "face_restore_visibility": 0.7,
                 "codeformer_weight": 0.5,
                 "detect_gender_input": "no",
                 "detect_gender_source": "no",
