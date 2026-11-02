@@ -157,6 +157,7 @@ def graft_texture(target_y: np.ndarray, donors: list[np.ndarray], mask: np.ndarr
 
 # ---------------------------------------------------------------- main pipeline
 def retouch(src: str, dst: str, *, donors: list[str] = (), donor_amount: float = 0.012,
+            ref: str | None = None,
             db_ev: float = 0.05, db_sigma: float = 40.0,
             warm_a: float = 3.0, adapt_lambda: float = 0.30,
             var_amount: float = 0.0025, var_sigma: float = 55.0,
@@ -195,16 +196,27 @@ def retouch(src: str, dst: str, *, donors: list[str] = (), donor_amount: float =
         lin = lin * (Y / np.clip(y_now, EPS, None))[..., None]
 
     # ---- 3. OKLab colour: robust stats + partial Reinhard + variation fields --
+    ref_stats = None
+    if ref:
+        rimg = np.asarray(Image.open(ref).convert("RGB")).astype(np.float32) / 255.0
+        rlab = linear_to_oklab(srgb_to_linear(rimg))
+        rm = gauss(skin_mask(rimg), 15) > 0.5
+        if rm.sum() > 500:
+            ref_stats = robust_stats(rlab[..., 1][rm])
     lab = linear_to_oklab(np.clip(lin, 0, None))
     L, A, B = lab[..., 0], lab[..., 1], lab[..., 2]
     m = mask[..., 0]
     sel = m > 0.5
     if sel.sum() > 1000:
         mu_s, sd_s = robust_stats(A[sel])
-        mu_r, sd_r = robust_stats(A[sel])          # adapt toward the frame's own robust stats
-        scale = float(np.clip(sd_r / sd_s, 0.8, 1.25))
-        A_new = (1 - adapt_lambda) * A + adapt_lambda * ((A - mu_s) * scale + mu_r)
-        A = np.where(sel, A_new, A)
+        if ref_stats is not None:
+            # Адаптация к РЕФЕРЕНСУ (Capture One "Skin Tone -> reference"): источник - реальная
+            # кожа того же человека из исходной фотографии. Раньше адаптировали к собственным
+            # статистикам кадра, то есть к no-op - отсюда остаточная пятнистость тона.
+            mu_r, sd_r = ref_stats
+            scale = float(np.clip(sd_r / sd_s, 0.8, 1.25))
+            A_new = (1 - adapt_lambda) * A + adapt_lambda * ((A - mu_s) * scale + mu_r)
+            A = np.where(sel, A_new, A)
     A = A + warm_a * 0.01 * m
     # two independent low-frequency random fields -> natural colour variation
     rng = np.random.default_rng(seed)
@@ -236,6 +248,7 @@ if __name__ == "__main__":
     ap.add_argument("--src", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--donor", action="append", default=[])
+    ap.add_argument("--ref", default=None, help="reference photo whose skin tone we match")
     ap.add_argument("--donor-amount", type=float, default=0.012)
     ap.add_argument("--db-ev", type=float, default=0.05)
     ap.add_argument("--warm-a", type=float, default=3.0)
@@ -245,7 +258,7 @@ if __name__ == "__main__":
     ap.add_argument("--spec-break", type=float, default=0.30)
     ap.add_argument("--grain", type=float, default=0.005)
     args = ap.parse_args()
-    cover = retouch(args.src, args.out, donors=args.donor, donor_amount=args.donor_amount,
+    cover = retouch(args.src, args.out, donors=args.donor, ref=args.ref, donor_amount=args.donor_amount,
                     db_ev=args.db_ev, warm_a=args.warm_a, adapt_lambda=args.adapt,
                     var_amount=args.var, var_sigma=args.var_sigma,
                     spec_break=args.spec_break, grain=args.grain)
