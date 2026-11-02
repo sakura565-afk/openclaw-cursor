@@ -35,9 +35,12 @@ SCRATCH = os.environ.get(
 )
 # NB: os.path.join("E:", "x") yields "E:x" - a drive-relative path. Keep the
 # drive letter and the rest of the path together as one string.
+# The ComfyUI install dir is machine-specific, so it comes from the environment.
+# NB: os.path.join("E:", "x") yields "E:x" - a drive-relative path - so the
+# drive letter and the rest of the path must stay together in one string.
 PROD_DIR = os.environ.get(
     "COMFYUI_PROD_DIR",
-    "E:\\ComfyUI_windows_portable_nvidia_cu126\\ComfyUI_windows_portable",
+    "E:" + chr(92) + "ComfyUI_windows_portable_nvidia_cu126" + chr(92) + "ComfyUI_windows_portable",
 )
 PROD_IN = os.path.join(PROD_DIR, "ComfyUI", "input")
 PROD_OUT = os.path.join(PROD_DIR, "ComfyUI", "output")
