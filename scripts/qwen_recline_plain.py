@@ -19,9 +19,11 @@ import shutil
 import subprocess
 import time
 
-ROOT = r"E:\tmp\openclaw-cursor-test"
-SCRATCH = r"C:\Users\user\AppData\Local\hermes\cache\scratch"
-PROD_IN = r"E:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\input"
+import local_paths
+
+ROOT = str(local_paths.REPO_ROOT)
+SCRATCH = str(local_paths.SCRATCH)
+PROD_IN = str(local_paths.PROD_IN)
 PY = os.path.join(ROOT, ".venv", "Scripts", "python.exe")
 shutil.copy2(os.path.join(SCRATCH, "qe_recline_src.png"), os.path.join(PROD_IN, "recline_src.png"))
 
@@ -55,7 +57,7 @@ VARIANTS = [
 for tag, prompt, seed in VARIANTS:
     pf = os.path.join(SCRATCH, f"prompt_{tag}.txt")
     open(pf, "w", encoding="utf-8").write(prompt)
-    env = dict(os.environ, PYTHONPATH="E:/tmp/openclaw-cursor-test",
+    env = dict(os.environ, PYTHONPATH=ROOT,
                QWEN_EDIT_CFG="1.0",
                QWEN_EDIT_MODEL="qwen_image_edit_2509_fp8_e4m3fn.safetensors",
                QWEN_NSFW_LORA="qwen_image_edit_plus_nsfw_lora_safetensors.safetensors",
