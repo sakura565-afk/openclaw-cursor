@@ -94,6 +94,7 @@ def retouch(src: str, dst: str, *,
     # --- 1. frequency separation -------------------------------------------------
     low = gauss(rgb, sep_sigma)
     high = rgb - low
+    low_orig, high_orig = low.copy(), high.copy()
 
     # --- 2. dodge & burn on the low (tone/colour) layer --------------------------
     low = local_contrast(low, lb_radius, lb_strength)
@@ -106,6 +107,10 @@ def retouch(src: str, dst: str, *,
 
     # --- 4. colour work in CIELAB inside the skin mask ---------------------------
     mask = gauss(skin_mask(recomb), mask_k)[..., None]
+
+    # Частотная обработка - ТОЛЬКО по коже. По всему кадру микроконтраст превращал ткань
+    # в "хрустящий" рельеф (эксперты так не делают: ретушь кожи не трогает фон).
+    recomb = np.clip(rgb + (low - low_orig) * mask + (high - high_orig) * mask, 0, 1)
     bgr = (np.clip(recomb, 0, 1)[:, :, ::-1] * 255).astype(np.uint8)
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
     L, A, B = lab[..., 0], lab[..., 1], lab[..., 2]
