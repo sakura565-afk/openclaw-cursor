@@ -16,10 +16,12 @@ import time
 import urllib.error
 import urllib.request
 
-SCRATCH = r"C:\Users\user\AppData\Local\hermes\cache\scratch"
-PROD_DIR = r"E:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable"
-PROD_IN = os.path.join(PROD_DIR, "ComfyUI", "input")
-PROD_OUT = os.path.join(PROD_DIR, "ComfyUI", "output")
+import local_paths
+
+SCRATCH = str(local_paths.SCRATCH)
+PROD_DIR = str(local_paths.PROD_DIR)
+PROD_IN = str(local_paths.PROD_IN)
+PROD_OUT = str(local_paths.PROD_OUT)
 BASE = "http://127.0.0.1:8188"
 
 
@@ -93,8 +95,9 @@ def run(tag: str, *, edit: str, source: str, restore: str = "GFPGANv1.4.pth",
 
 
 if __name__ == "__main__":
-    SRC_STAND = (r"C:\Users\user\AppData\Local\hermes\cache\documents\native-inputs"
-                  r"\664dd4bff18f966d9f7f869d66cd50c647d0218edde2c9cf9823dc666bc502be\img_320df09f260d.jpg")
+    SRC_STAND = str(local_paths.NATIVE_INPUTS
+                    / "664dd4bff18f966d9f7f869d66cd50c647d0218edde2c9cf9823dc666bc502be"
+                    / "img_320df09f260d.jpg")
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "both":
         run("stand", edit="qe_undress_hi.png", source=SRC_STAND)

@@ -26,10 +26,12 @@ import time
 import urllib.error
 import urllib.request
 
-SCRATCH = r"C:\Users\user\AppData\Local\hermes\cache\scratch"
-PROD_DIR = r"E:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable"
-PROD_IN = os.path.join(PROD_DIR, "ComfyUI", "input")
-PROD_OUT = os.path.join(PROD_DIR, "ComfyUI", "output")
+import local_paths
+
+SCRATCH = str(local_paths.SCRATCH)
+PROD_DIR = str(local_paths.PROD_DIR)
+PROD_IN = str(local_paths.PROD_IN)
+PROD_OUT = str(local_paths.PROD_OUT)
 BASE = "http://127.0.0.1:8188"
 
 UNET = os.environ.get("ZI_UNET", "z_image_turbo_fp8.safetensors")
