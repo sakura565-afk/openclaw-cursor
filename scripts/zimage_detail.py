@@ -35,7 +35,8 @@ PROD_OUT = str(local_paths.PROD_OUT)
 BASE = "http://127.0.0.1:8188"
 
 UNET = os.environ.get("ZI_UNET", "z_image_turbo_fp8.safetensors")
-VAE = os.environ.get("ZI_VAE", "z_image_ae.safetensors")
+# ВАЖНО: в списке ComfyUI этот VAE называется ровно "ae.safetensors" - иначе HTTP 400
+VAE = os.environ.get("ZI_VAE", "ae.safetensors")
 CLIP = os.environ.get("ZI_CLIP", "qwen_3_4b_fp8_mixed.safetensors")
 LORA = "z_image_skin_texture_v2.1.safetensors"
 UPSCALE = "4x-UltraSharp.pth"
