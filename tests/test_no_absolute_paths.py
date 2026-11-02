@@ -73,6 +73,11 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     ('scripts/rife_interpolate_48.py', 'C' + ':\\Users\\user\\AppData\\Local\\hermes\\tools\\ffmpeg-9.0.1-win32-x64\\bin\\ffmpeg.exe'): "existing workstation default",
     ('scripts/rife_interpolate_48.py', 'C' + ':\\Users\\user\\AppData\\Local\\hermes\\tools\\ffmpeg-9.0.1-win32-x64\\bin\\ffprobe.exe'): "existing workstation default",
 
+    # Existing environment-overridable ComfyUI portable root defaults.
+    ('scripts/bc_skin_texture.py', 'E' + ':\\ComfyUI_windows_portable_nvidia_cu126\\ComfyUI_windows_portable'): "existing workstation default",
+    ('scripts/qwen21_masked_refine.py', 'E' + ':\\ComfyUI_windows_portable_nvidia_cu126\\ComfyUI_windows_portable'): "existing workstation default",
+    ('scripts/qwen_masked_fix.py', 'E' + ':\\ComfyUI_windows_portable_nvidia_cu126\\ComfyUI_windows_portable'): "existing workstation default",
+
     # Existing local logging, launcher and ffmpeg defaults in the upscale workflow.
     ('scripts/upscale_video.py', 'C' + ':\\Users\\user\\AppData\\Local\\hermes\\logs'): "existing log-directory default",
     ('scripts/upscale_video.py', 'C' + ':\\Users\\user\\AppData\\Local\\hermes\\scripts\\start_lab_freevideo.py'): "existing launcher default",

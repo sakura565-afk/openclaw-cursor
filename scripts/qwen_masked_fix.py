@@ -23,10 +23,15 @@ import urllib.error
 import urllib.request
 
 BASE = os.environ.get("COMFYUI_PROD_URL", "http://127.0.0.1:8188")
-PROD_DIR = r"E:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable"
+PROD_DIR = os.environ.get(
+    "COMFYUI_PROD_DIR", r"E:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable"
+)
 PROD_IN = os.path.join(PROD_DIR, "ComfyUI", "input")
 PROD_OUT = os.path.join(PROD_DIR, "ComfyUI", "output")
-SCRATCH = os.environ.get("HERMES_SCRATCH_DIR", r"C:\Users\user\AppData\Local\hermes\cache\scratch")
+SCRATCH = os.environ.get(
+    "HERMES_SCRATCH_DIR",
+    os.path.join(os.path.expanduser("~"), "AppData", "Local", "hermes", "cache", "scratch"),
+)
 
 UNET = os.environ.get("QWEN_EDIT_MODEL", "qwen_image_edit_2509_fp8_e4m3fn.safetensors")
 CLIP = os.environ.get("QWEN_EDIT_CLIP", "qwen_2.5_vl_7b_fp8_scaled.safetensors")

@@ -22,8 +22,13 @@ import time
 import urllib.error
 import urllib.request
 
-SCRATCH = r"C:\Users\user\AppData\Local\hermes\cache\scratch"
-PROD_DIR = r"E:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable"
+SCRATCH = os.environ.get(
+    "HERMES_SCRATCH_DIR",
+    os.path.join(os.path.expanduser("~"), "AppData", "Local", "hermes", "cache", "scratch"),
+)
+PROD_DIR = os.environ.get(
+    "COMFYUI_PROD_DIR", r"E:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable"
+)
 PROD_IN = os.path.join(PROD_DIR, "ComfyUI", "input")
 PROD_OUT = os.path.join(PROD_DIR, "ComfyUI", "output")
 BASE = "http://127.0.0.1:8188"
