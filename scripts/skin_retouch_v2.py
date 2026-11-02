@@ -162,6 +162,7 @@ def retouch(src: str, dst: str, *, donors: list[str] = (), donor_amount: float =
             warm_a: float = 3.0, adapt_lambda: float = 0.30,
             var_amount: float = 0.0025, var_sigma: float = 55.0,
             spec_break: float = 0.30,
+            sss_mix: float = 0.06, sss_sigma: float = 4.0,
             grain: float = 0.005, grain_blur: float = 0.5, seed: int = 11):
     rgb = np.asarray(Image.open(src).convert("RGB")).astype(np.float32) / 255.0
     h, w, _ = rgb.shape
@@ -217,6 +218,13 @@ def retouch(src: str, dst: str, *, donors: list[str] = (), donor_amount: float =
             scale = float(np.clip(sd_r / sd_s, 0.8, 1.25))
             A_new = (1 - adapt_lambda) * A + adapt_lambda * ((A - mu_s) * scale + mu_r)
             A = np.where(sel, A_new, A)
+    # P3 (из экспертного ресёрча): осторожная имитация subsurface scattering.
+    # Настоящий SSS из одного RGB-кадра не восстановить, но мягкий тёплый переход у
+    # terminator-теней можно получить, смешав ТОЛЬКО a,b с их гауссовой копией
+    # (sigma 3-6 px, mix 0.03-0.08). L и high-frequency не трогаем.
+    if sss_mix > 0:
+        A = A + sss_mix * m * (gauss(A, sss_sigma) - A)
+        B = B + sss_mix * m * (gauss(B, sss_sigma) - B)
     A = A + warm_a * 0.01 * m
     # two independent low-frequency random fields -> natural colour variation
     rng = np.random.default_rng(seed)
@@ -256,10 +264,13 @@ if __name__ == "__main__":
     ap.add_argument("--var", type=float, default=0.0025)
     ap.add_argument("--var-sigma", type=float, default=55.0)
     ap.add_argument("--spec-break", type=float, default=0.30)
+    ap.add_argument("--sss-mix", type=float, default=0.06)
+    ap.add_argument("--sss-sigma", type=float, default=4.0)
     ap.add_argument("--grain", type=float, default=0.005)
     args = ap.parse_args()
     cover = retouch(args.src, args.out, donors=args.donor, ref=args.ref, donor_amount=args.donor_amount,
                     db_ev=args.db_ev, warm_a=args.warm_a, adapt_lambda=args.adapt,
                     var_amount=args.var, var_sigma=args.var_sigma,
-                    spec_break=args.spec_break, grain=args.grain)
+                    spec_break=args.spec_break, sss_mix=args.sss_mix,
+                    sss_sigma=args.sss_sigma, grain=args.grain)
     print(f"готово: {args.out} | кожа в маске: {cover*100:.1f}%")
