@@ -84,6 +84,15 @@ def run(tag, src_name, mask_name, positive, seed, denoise=0.55, steps=24,
         "12": {"class_type": "VAEDecode", "inputs": {"samples": ["11", 0], "vae": ["3", 0]}},
         "13": {"class_type": "SaveImage", "inputs": {"images": ["12", 0], "filename_prefix": "qfix_" + tag}},
     }
+    # Второй LoRA-слой (NSFW). Без него Qwen-Edit "выбеливает" нагую кожу: замер - тёплых
+    # пикселей в зоне бедра падает с 82% до 15%, кожа уходит в серый (проверено).
+    lora2 = os.environ.get("QWEN_LORA2", "").strip()
+    if lora2:
+        graph["40"] = {"class_type": "LoraLoaderModelOnly",
+                       "inputs": {"model": ["4", 0], "lora_name": lora2,
+                                  "strength_model": float(os.environ.get("QWEN_LORA2_STRENGTH", "1.0")),
+                                  "strength_clip": 0.0}}
+        graph["11"]["inputs"]["model"] = ["40", 0]
     try:
         resp = api("/prompt", {"prompt": graph, "client_id": "qfix"}, timeout=240)
     except urllib.error.HTTPError as e:
