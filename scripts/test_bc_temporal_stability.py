@@ -24,9 +24,11 @@ SCRATCH = os.environ.get(
     "HERMES_SCRATCH_DIR",
     os.path.join(os.path.expanduser("~"), "AppData", "Local", "hermes", "cache", "scratch"),
 )
+# NB: os.path.join("E:", "x") yields "E:x" - a drive-relative path. Keep the
+# drive letter and the rest of the path together as one string.
 PROD_DIR = os.environ.get(
     "COMFYUI_PROD_DIR",
-    os.path.join("E:", "ComfyUI_windows_portable_nvidia_cu126", "ComfyUI_windows_portable"),
+    "E:\\ComfyUI_windows_portable_nvidia_cu126\\ComfyUI_windows_portable",
 )
 PROD_IN = os.path.join(PROD_DIR, "ComfyUI", "input")
 PROD_OUT = os.path.join(PROD_DIR, "ComfyUI", "output")
