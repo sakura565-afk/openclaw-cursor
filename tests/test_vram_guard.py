@@ -133,6 +133,7 @@ def test_cli_parser_exposes_pause_process() -> None:
 
 def test_pause_matches_full_executable_path(monkeypatch: pytest.MonkeyPatch) -> None:
     """nvidia-smi reports full paths on Windows - matching must use the file name."""
+    monkeypatch.setattr(vram_guard, "IS_WINDOWS", True)
     monkeypatch.setattr(
         vram_guard,
         "list_gpu_processes",

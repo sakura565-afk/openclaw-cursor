@@ -409,8 +409,8 @@ def test_freevideo_runner_resolves_a_bare_image_name(tmp_path):
     import importlib.util
     from pathlib import Path as _P
 
-    spec = importlib.util.spec_from_file_location(
-        "fv_lora_run", _P(r"E:/tmp/openclaw-cursor-test/scripts/freevideo_lora_run.py"))
+    script = _P(__file__).resolve().parents[1] / "scripts" / "freevideo_lora_run.py"
+    spec = importlib.util.spec_from_file_location("fv_lora_run", script)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
 
