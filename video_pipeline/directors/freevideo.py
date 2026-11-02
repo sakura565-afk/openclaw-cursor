@@ -148,6 +148,12 @@ class FreeVideoDirector(Director):
             "refine_steps": fv.refine_steps,
             "preview": fv.preview,
         }
+        if fv.step_cache:
+            fv_inputs["step_cache"] = fv.step_cache
+        if fv.two_pass:
+            fv_inputs["upscale_factor"] = fv.upscale_factor
+        if fv.first_frame_reference:
+            fv_inputs["first_frame_reference"] = True
         workflow: dict[str, Any] = {
             "1": {
                 "class_type": "LoadImage",

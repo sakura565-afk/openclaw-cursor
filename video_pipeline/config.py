@@ -52,6 +52,16 @@ class FreeVideoConfig(BaseModel):
     base_steps: int = 8
     refine_steps: int = 3
     preview: bool = False
+    # FreeVideo quality tiers (freevideo_engine/tiers.py):
+    #   light  = two_pass, upscale_factor 2  -> first pass at HALF size (25% of pixels)
+    #   medium = two_pass, upscale_factor 1.5 -> first pass at 2/3 size (44% of pixels)
+    #   high   = single pass, 16 steps, step_cache easycache-av -> full resolution
+    #   max    = single pass, 20 steps, step_cache easycache-av -> full resolution
+    # The first pass is where the micro-texture is born: a 25%-scale latent cannot
+    # carry pores, so two_pass=light renders waxy skin no matter what the upscaler does.
+    step_cache: str = ""
+    upscale_factor: float = 2.0
+    first_frame_reference: bool = False
     output_root: Path = Path("G:/FreeVideo_output")
     last_frame: Path | None = None
     frame_lock: bool = True
