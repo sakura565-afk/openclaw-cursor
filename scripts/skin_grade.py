@@ -31,13 +31,11 @@ def skin_mask(rgb: np.ndarray) -> np.ndarray:
     y = 0.299 * r + 0.587 * g + 0.114 * b
     cb = 0.5 * (b - y) + 0.5
     cr = 0.5 * (r - y) + 0.5
-    # Тон-независимые признаки: r-g и g-b. Cb/Cr-плашки работают только на исходном
-    # тоне (после цветокоррекции Cb сдвигается 0.46 -> 0.39 и маска сходит на нет).
-    warm = np.clip((r - g - 0.045) / 0.035, 0, 1)
-    warm2 = np.clip((g - b - 0.005) / 0.03, 0, 1)
-    m = warm * warm2
+    m = np.clip((cb - 0.40) / 0.05, 0, 1) * np.clip((0.505 - cb) / 0.035, 0, 1)
+    m *= np.clip((cr - 0.515) / 0.035, 0, 1) * np.clip((0.63 - cr) / 0.06, 0, 1)
+    m *= np.clip((r - g - 0.045) / 0.035, 0, 1)
+    m *= np.clip((g - b - 0.005) / 0.03, 0, 1)
     m *= np.clip((y - 0.06) / 0.08, 0, 1)
-    m *= np.clip((0.95 - y) / 0.08, 0, 1)
     return m
 
 
@@ -56,10 +54,31 @@ def blur(a: np.ndarray, k: int = 9) -> np.ndarray:
     return a
 
 
-def grade(src: str, dst: str, warmth: float, sat: float, micro: float, mask_k: int = 15):
+def face_mask_from_diff(path_a: str, path_b: str, thresh: int = 18, grow: int = 31) -> np.ndarray:
+    """Soft 0..1 mask of the region ReActor actually changed.
+
+    Diffing the pre-swap and post-swap renders gives the exact face footprint with no
+    face detector involved, so the face can be graded with the same warmth/saturation as
+    the body instead of staying bright and sharp against it.
+    """
+    a = np.asarray(Image.open(path_a).convert("RGB"), dtype=np.int16)
+    b = np.asarray(Image.open(path_b).convert("RGB"), dtype=np.int16)
+    d = np.abs(a - b).max(axis=2)
+    m = (d > thresh).astype(np.float32)
+    if m.mean() < 1e-6:
+        return np.zeros(a.shape[:2], dtype=np.float32)
+    grown = blur(m, grow)
+    return np.clip(grown * 4.0, 0, 1)
+
+
+def grade(src: str, dst: str, warmth: float, sat: float, micro: float, mask_k: int = 15,
+          face_a: str | None = None, face_b: str | None = None):
     im = Image.open(src).convert("RGB")
     a = np.asarray(im).astype(np.float32) / 255.0
     m = blur(skin_mask(a), mask_k)[..., None]
+    if face_a and face_b:
+        fm = face_mask_from_diff(face_a, face_b)[..., None]
+        m = np.clip(m + fm * 0.95, 0, 1)
 
     # micro-contrast: unsharp on the luminance channel only
     if micro > 0:
@@ -94,9 +113,12 @@ def main() -> int:
     ap.add_argument("--warmth", type=float, default=1.0)
     ap.add_argument("--sat", type=float, default=0.25)
     ap.add_argument("--micro", type=float, default=0.6)
+    ap.add_argument("--face-a", default=None, help="pre-ReActor render (for the face mask)")
+    ap.add_argument("--face-b", default=None, help="post-ReActor render")
     args = ap.parse_args()
 
-    cover = grade(args.src, args.out, args.warmth, args.sat, args.micro)
+    cover = grade(args.src, args.out, args.warmth, args.sat, args.micro,
+                  face_a=args.face_a, face_b=args.face_b)
     print(f"готово: {args.out} | покрытие кожи в маске: {cover*100:.1f}% пикселей")
     return 0
 
