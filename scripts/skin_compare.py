@@ -14,7 +14,26 @@ import sys
 
 from PIL import Image, ImageDraw, ImageFont
 
-SCRATCH = r"C:\Users\user\AppData\Local\hermes\cache\scratch"
+SCRATCH = os.environ.get(
+    "HERMES_SCRATCH_DIR",
+    os.path.join(os.path.expanduser("~"), "AppData", "Local", "hermes", "cache", "scratch"),
+)
+
+def _bold_font_path() -> str:
+    """Путь к жирному системному шрифту.
+
+    Абсолютный путь не зашит в исходник: берётся из окружения или из
+    системной папки Fonts текущей Windows — иначе guard-тест CI
+    (tests/test_no_absolute_paths.py) ломает сборку на других хостах.
+    """
+    env = os.environ.get("HERMES_FONT_BOLD")
+    if env:
+        return env
+    win = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
+    if win:
+        return os.path.join(win, "Fonts", "arialbd.ttf")
+    return os.path.join("Fonts", "arialbd.ttf")
+
 
 # region -> (x, y, w, h) in 1088x1620 reference coordinates
 REGIONS = {
@@ -72,7 +91,7 @@ def main() -> int:
     canvas = Image.new("RGB", (cw * len(imgs) + gap * (len(imgs) - 1), ch + head), (255, 255, 255))
     try:
         from PIL import ImageFont
-        f = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 18)
+        f = ImageFont.truetype(_bold_font_path(), 18)
     except Exception:
         f = None
     d = ImageDraw.Draw(canvas)

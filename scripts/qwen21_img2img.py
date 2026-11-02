@@ -17,8 +17,30 @@ import time
 import urllib.error
 import urllib.request
 
-SCRATCH = r"C:\Users\user\AppData\Local\hermes\cache\scratch"
-PROD_DIR = r"E:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable"
+def _resolve_prod_dir() -> str:
+    """Корень ComfyUI portable: env-переопределение, иначе поиск на дисках.
+
+    Путь не зашит в исходник — иначе guard-тест CI
+    (tests/test_no_absolute_paths.py) ломает сборку на других хостах.
+    """
+    env = os.environ.get("COMFYUI_PROD_DIR")
+    if env:
+        return env
+    import glob
+
+    for letter in "CDEFGH":
+        for hit in glob.glob(f"{letter}:/ComfyUI_windows_portable*/ComfyUI_windows_portable"):
+            return hit
+    raise SystemExit(
+        "COMFYUI_PROD_DIR не задан и ComfyUI portable не найден на дисках C-H"
+    )
+
+
+SCRATCH = os.environ.get(
+    "HERMES_SCRATCH_DIR",
+    os.path.join(os.path.expanduser("~"), "AppData", "Local", "hermes", "cache", "scratch"),
+)
+PROD_DIR = _resolve_prod_dir()
 PROD_IN = os.path.join(PROD_DIR, "ComfyUI", "input")
 PROD_OUT = os.path.join(PROD_DIR, "ComfyUI", "output")
 BASE = "http://127.0.0.1:8188"
