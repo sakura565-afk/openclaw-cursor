@@ -10,11 +10,25 @@ import os
 import subprocess
 import sys
 
-ROOT = r"E:\tmp\openclaw-cursor-test"
-SCRATCH = r"C:\Users\user\AppData\Local\hermes\cache\scratch"
+from pathlib import Path
+
+ROOT = str(Path(__file__).resolve().parents[1])
+SCRATCH = os.environ.get(
+    "HERMES_SCRATCH_DIR",
+    os.path.join(os.path.expanduser("~"), "AppData", "Local", "hermes", "cache", "scratch"),
+)
 PY = os.path.join(ROOT, ".venv", "Scripts", "python.exe")
-SRC_PHOTO = (r"C:\Users\user\AppData\Local\hermes\cache\documents\native-inputs"
-             r"\664dd4bff18f966d9f7f869d66cd50c647d0218edde2c9cf9823dc666bc502be\img_320df09f260d.jpg")
+NATIVE_INPUTS = os.environ.get(
+    "HERMES_NATIVE_INPUTS",
+    os.path.join(
+        os.path.expanduser("~"), "AppData", "Local", "hermes", "cache", "documents", "native-inputs"
+    ),
+)
+SRC_PHOTO = os.path.join(
+    NATIVE_INPUTS,
+    "664dd4bff18f966d9f7f869d66cd50c647d0218edde2c9cf9823dc666bc502be",
+    "img_320df09f260d.jpg",
+)
 
 sys.path.insert(0, SCRATCH)
 import reactor_restore as rr  # noqa: E402
