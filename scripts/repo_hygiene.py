@@ -7,6 +7,7 @@ import argparse
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any, Literal
@@ -16,9 +17,16 @@ from urllib.parse import quote
 
 
 DEFAULT_REPO = "sakura565-afk/openclaw-cursor"
-DEFAULT_TOKEN_FILE = Path(
-    "C:/Users/user/AppData/Local/hermes/github_token.txt"
-)
+
+
+def default_token_file() -> Path | None:
+    """Token file from ``GITHUB_TOKEN_FILE``; no machine-specific path is baked in.
+
+    A hardcoded absolute path would break the repository's own
+    ``tests/test_no_absolute_paths.py`` guard and CI on any other host.
+    """
+    raw = os.environ.get("GITHUB_TOKEN_FILE", "").strip()
+    return Path(raw) if raw else None
 
 
 Action = Literal["close", "delete", "keep"]
@@ -400,8 +408,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--token-file",
         type=Path,
-        default=DEFAULT_TOKEN_FILE,
-        help="file containing a GitHub token",
+        default=None,
+        help="file containing a GitHub token (default: $GITHUB_TOKEN_FILE)",
     )
     parser.add_argument(
         "--apply",
@@ -432,9 +440,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the repository hygiene CLI."""
     args = build_parser().parse_args(argv)
     try:
-        token = args.token_file.read_text(encoding="utf-8-sig").strip()
+        token = ""
+        token_file = args.token_file or default_token_file()
+        if token_file is not None:
+            token = token_file.read_text(encoding="utf-8-sig").strip()
+            if not token:
+                raise ValueError(f"token file is empty: {token_file}")
         if not token:
-            raise ValueError(f"token file is empty: {args.token_file}")
+            token = os.environ.get("GITHUB_TOKEN", "").strip()
+        if not token:
+            raise ValueError(
+                "no GitHub token: pass --token-file PATH, or set GITHUB_TOKEN_FILE "
+                "or GITHUB_TOKEN"
+            )
         client = GitHubClient(repo=args.repo, token=token)
         pull_requests = client.list_open_pull_requests()
         branch_statuses = [
