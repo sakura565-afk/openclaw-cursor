@@ -26,7 +26,13 @@ SCRATCH = os.environ.get("HERMES_SCRATCH_DIR", r"C:\Users\user\AppData\Local\her
 NEG = ("blurry, deformed, extra limbs, extra fingers, fused bodies, cartoon, illustration, "
        "painting, text, watermark, floating body, duplicated body, disconnected limbs, "
        "gigantic male body, oversized torso, two men, three heads, mannequin, doll, "
-       "man sitting, man crouching, man kneeling, man standing far away, gap between the bodies")
+       "man sitting, man crouching, man kneeling, man standing far away, gap between the bodies, "
+       # Qwen склоняет NSFW-LoRA к идеализированной анатомии: узкая «пережатая» талия,
+       # удлиненный торс, восковая кожа. Это ровно то, что отклоняет пользователь.
+       "pinched waist, unnaturally narrow waist, wasp waist, elongated torso, elongated abdomen, "
+       "smeared anatomy, poorly defined anatomy, melted body parts, undefined body contours, "
+       "smooth skin, airbrushed skin, waxy skin, plastic skin, doll-like skin, overly smooth skin, "
+       "clay skin, wax figure, oversaturated skin")
 
 
 def run(tag, img_name, positive, seed, denoise=1.0, steps=30, size=(736, 992)):
@@ -37,18 +43,27 @@ def run(tag, img_name, positive, seed, denoise=1.0, steps=30, size=(736, 992)):
               "inputs": {"clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors", "type": "qwen_image", "device": "default"}},
         "3": {"class_type": "VAELoader", "inputs": {"vae_name": VAE_NAME}},
         "4": {"class_type": "LoraLoaderModelOnly",
-              "inputs": {"model": ["1", 0], "lora_name": "qwen_image_edit_plus_nsfw_lora_safetensors.safetensors",
-                         "strength_model": 1.0, "strength_clip": 0.0}},
+              "inputs": {"model": ["1", 0], "lora_name": os.environ.get("QWEN_NSFW_LORA", "qwen_image_edit_plus_nsfw_lora_safetensors.safetensors"),
+                         "strength_model": float(os.environ.get("QWEN_NSFW_LORA_STRENGTH", "1.0")), "strength_clip": 0.0}},
         "5": {"class_type": "LoadImage", "inputs": {"image": img_name}},
         "6": {"class_type": "QwenImageIntegratedKSampler",
               "inputs": {"model": ["4", 0], "clip": ["2", 0], "vae": ["3", 0], "image1": ["5", 0],
                          "positive_prompt": positive, "negative_prompt": NEG,
                          "generation_mode": "图生图 image-to-image", "batch_size": 1,
-                         "width": size[0], "height": size[1], "seed": seed, "steps": steps, "cfg": 1.0,
+                         "width": size[0], "height": size[1], "seed": seed, "steps": steps, "cfg": float(os.environ.get("QWEN_EDIT_CFG", "1.0")),
                          "sampler_name": "euler", "scheduler": "simple", "denoise": denoise,
                          "output_filename_prefix": "qedit_" + tag}},
         "7": {"class_type": "SaveImage", "inputs": {"images": ["6", 0], "filename_prefix": "qedit_" + tag}},
     }
+    # Второй LoRA-слой (например anatomy-fix поверх основной NSFW-LoRA). Узел добавляется
+    # ТОЛЬКО если QWEN_LORA2 задан: пустое имя ломает валидацию ComfyUI (HTTP 400).
+    lora2 = os.environ.get("QWEN_LORA2", "").strip()
+    if lora2:
+        graph["40"] = {"class_type": "LoraLoaderModelOnly",
+                       "inputs": {"model": ["4", 0], "lora_name": lora2,
+                                  "strength_model": float(os.environ.get("QWEN_LORA2_STRENGTH", "1.0")),
+                                  "strength_clip": 0.0}}
+        graph["6"]["inputs"]["model"] = ["40", 0]
     req = urllib.request.Request(BASE + "/prompt", data=json.dumps({"prompt": graph}).encode(),
                                  headers={"Content-Type": "application/json"}, method="POST")
     pid = json.loads(urllib.request.urlopen(req, timeout=120).read().decode())["prompt_id"]
