@@ -16,7 +16,7 @@ but sends no `PATCH` or `DELETE` requests.
 ```bash
 python scripts/repo_hygiene.py \
   --repo sakura565-afk/openclaw-cursor \
-  --token-file C:/Users/user/AppData/Local/hermes/github_token.txt \
+  --token-file "$GITHUB_TOKEN_FILE" \
   --include-merged
 ```
 
@@ -82,7 +82,7 @@ Fork-based PRs and PRs whose head branch cannot be found are kept.
 | Flag | Meaning |
 | --- | --- |
 | `--repo owner/name` | Target repository; defaults to `sakura565-afk/openclaw-cursor`. |
-| `--token-file PATH` | GitHub token file; defaults to `C:/Users/user/AppData/Local/hermes/github_token.txt`. |
+| `--token-file PATH` | GitHub token file; defaults to `$GITHUB_TOKEN_FILE`. If neither is set, `GITHUB_TOKEN` is used. |
 | `--apply` | Execute the reviewed mutations. Without it, the run is read-only. |
 | `--pr N [N ...]` | Limit PR close candidates to the listed numbers. |
 | `--max N` | Limit the combined number of close/delete operations. |
