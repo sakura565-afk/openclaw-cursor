@@ -323,12 +323,29 @@ def wait_for(server: str, prompt_id: str, timeout: int = 7200) -> dict:
     raise TimeoutError(f"prompt {prompt_id} did not finish in {timeout}s")
 
 
-def find_output(entry: dict) -> tuple[str, str]:
-    """Return (subfolder, filename) of the produced file."""
-    for node_out in entry.get("outputs", {}).values():
+def find_output(entry: dict, node_id: str = "24") -> tuple[str, str]:
+    """Return (subfolder, filename) of the produced file.
+
+    The node id matters: the graph also contains the LoadVideo node, whose
+    "output" is the INPUT clip. Picking the first video in the history
+    therefore hands back the input unchanged, and the result looks like a
+    successful render of something that was never rendered.
+    """
+    outs = entry.get("outputs", {})
+    node = outs.get(node_id)
+    if node:
+        for key in ("gifs", "videos", "images"):
+            for item in node.get(key) or []:
+                return item.get("subfolder", ""), item["filename"]
+    # Fallback: the SaveVideo node may report under a different key.
+    for name, node_out in outs.items():
+        if not isinstance(node_out, dict):
+            continue
         for key in ("gifs", "videos", "images"):
             for item in node_out.get(key) or []:
-                return item.get("subfolder", ""), item["filename"]
+                fn = item["filename"]
+                if fn.endswith(".mp4") and not fn.endswith("_rife.mp4"):
+                    return item.get("subfolder", ""), fn
     raise RuntimeError("no output file in history entry")
 
 
@@ -508,6 +525,17 @@ def main() -> int:
         return 0
     out = Path(args.out) if args.out else local_paths.SCRATCH / (args.prefix + ".mp4")
     download(args.server, sub, fn, out)
+    # Guard: the graph contains a LoadVideo node, so a mis-picked history
+    # entry hands back the input unchanged. That is not a render.
+    try:
+        same = out.stat().st_size == video.stat().st_size and \
+            out.read_bytes()[:4096] == video.read_bytes()[:4096]
+    except OSError:
+        same = False
+    if same:
+        print(f"ВНИМАНИЕ: результат идентичен входу ({fn}) - "
+              f"рендер не дал нового файла", flush=True)
+        return 3
     print("saved:", out, out.stat().st_size, flush=True)
     return 0
 
