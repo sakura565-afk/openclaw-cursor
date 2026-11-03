@@ -71,6 +71,23 @@ CIVARCHIVE_URL = "https://civarchive.com/latest-models"
 H3_HINTS = ("minimax", "h3", "mmh3")
 
 
+def _force_utf8_stdio() -> None:
+    """Make stdout/stderr UTF-8 safe on a Windows console.
+
+    The Windows CI runner's console codec is cp1251/cp437, and printing a
+    Cyrillic verdict there raises UnicodeEncodeError and kills the script.
+    Reconfiguring the streams is a no-op on Linux and harmless elsewhere.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
 def _get_json(url: str, timeout: int = 45) -> dict:
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -353,6 +370,7 @@ def default_lora_roots() -> list:
 
 
 def main() -> int:
+    _force_utf8_stdio()
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", action="append", default=[],
                     help="local LoRA dir (repeatable)")
