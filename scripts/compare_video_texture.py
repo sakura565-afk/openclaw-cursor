@@ -25,6 +25,12 @@ So: compare texture across anything, compare flicker only between renders of
 the same motion at the same frame rate. The seed-to-seed noise floor on
 texture is about 1%, which is the bar a real effect has to clear.
 
+This bit us once: a SeedVR2 -> RIFE post chain was measured against the 24
+fps raw source and the flicker numbers read as "+34.7%", which was RIFE's
+frame rate doing it, not flicker. The texture number (-7.5%) was real.
+`scripts/eval_detail_candidates.py` applies these rules and refuses to print
+a flicker verdict where the comparability does not hold.
+
     python scripts/compare_video_texture.py A.mp4 B.mp4 [--frames 24]
     python scripts/compare_video_texture.py --ref still.png A.mp4 B.mp4
 """
