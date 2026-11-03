@@ -75,7 +75,7 @@ def perceptual_key(path: str, size: int = 16) -> str:
     except ImportError:
         return hashlib.sha256(open(path, "rb").read()).hexdigest()
     try:
-        im = Image.open(path).convert("L").resize((size, size), Image.LANCZOS)
+        im = _open_capped(path).convert("L").resize((size, size), Image.LANCZOS)
         a = np.asarray(im).astype("float32")
         a = a - a.mean()
         # A FLAT image has a==0 everywhere, so the sign pattern is all-False
@@ -89,23 +89,40 @@ def perceptual_key(path: str, size: int = 16) -> str:
             structure = (((a / scale) > 0.25).flatten()).tobytes()
         # The colour signature is part of the key: without it a solid red
         # frame and a solid blue frame would collide as "duplicates".
-        rgb = Image.open(path).convert("RGB").resize((4, 4), Image.LANCZOS)
+        rgb = _open_capped(path).resize((4, 4), Image.LANCZOS)
         colour = np.asarray(rgb).astype("uint8").tobytes()
         return hashlib.sha256(structure + colour).hexdigest()
     except Exception:
         return hashlib.sha256(open(path, "rb").read()).hexdigest()
 
 
+# A phone camera can produce 100+ megapixel files. Reading them at full size
+# is slow and PIL refuses them as a decompression bomb, so every image is
+# capped before it is measured or copied.
+MAX_SIDE = 2048
+
+
+def _open_capped(path: str):
+    """Open an image, downscaling anything larger than MAX_SIDE."""
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None
+    im = Image.open(path)
+    im.draft("RGB", (MAX_SIDE, MAX_SIDE))  # fast JPEG downscale during decode
+    im = im.convert("RGB")
+    if max(im.size) > MAX_SIDE:
+        im.thumbnail((MAX_SIDE, MAX_SIDE), Image.LANCZOS)
+    return im
+
+
 def sharpness(path: str) -> float:
     """Variance of the Laplacian - the standard focus measure."""
     try:
-        from PIL import Image
         import numpy as np
         from scipy import ndimage
     except ImportError:
         return 0.0
     try:
-        im = Image.open(path).convert("L")
+        im = _open_capped(path).convert("L")
         if max(im.size) > 1600:
             im.thumbnail((1600, 1600), Image.LANCZOS)
         a = np.asarray(im).astype("float32")
@@ -167,6 +184,8 @@ def main() -> int:
     ap.add_argument("--min-images", type=int, default=20)
     ap.add_argument("--max-per-burst", type=int, default=3,
                     help="how many near-duplicates to keep from one burst")
+    ap.add_argument("--max-images", type=int, default=0,
+                    help="keep only the N sharpest images (0 = keep all)")
     ap.add_argument("--min-sharpness", type=float, default=0.0,
                     help="drop frames whose Laplacian variance is below this")
     ap.add_argument("--validate", type=int, default=3,
@@ -245,6 +264,10 @@ def main() -> int:
 
     # hold out a validation split
     chosen_sorted = sorted(chosen, key=lambda p: -sharp[p])
+    if args.max_images and len(chosen_sorted) > args.max_images:
+        dropped = len(chosen_sorted) - args.max_images
+        chosen_sorted = chosen_sorted[: args.max_images]
+        print(f"  оставлено {args.max_images} самых резких (отброшено {dropped})")
     validate = chosen_sorted[: args.validate]
     train = chosen_sorted[args.validate:]
 
@@ -252,8 +275,9 @@ def main() -> int:
     for p in train:
         dst = os.path.join(args.out, os.path.basename(p))
         try:
-            shutil.copy2(p, dst)
-        except OSError as e:
+            im = _open_capped(p)
+            im.save(dst)  # re-encoded at the capped size, not copied verbatim
+        except (OSError, ValueError) as e:
             print(f"  не скопирован {os.path.basename(p)}: {e}", file=sys.stderr)
             continue
         cap = caption_for(p, args.trigger, args.caption_extra)
@@ -265,7 +289,10 @@ def main() -> int:
     os.makedirs(vdir, exist_ok=True)
     for p in validate:
         dst = os.path.join(vdir, os.path.basename(p))
-        shutil.copy2(p, dst)
+        try:
+            _open_capped(p).save(dst)
+        except (OSError, ValueError):
+            pass
 
     summary = {
         "source": args.source, "out": args.out, "trigger": args.trigger,
