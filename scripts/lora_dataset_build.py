@@ -41,6 +41,23 @@ from collections import defaultdict
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 
 
+def _force_utf8_stdio() -> None:
+    """Make stdout/stderr UTF-8 safe on a Windows console.
+
+    The Windows CI runner's console codec is cp1251, and this script prints
+    Cyrillic, so the output would die with UnicodeEncodeError. Reconfiguring
+    the streams is a no-op on Linux.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
 def list_images(source: str) -> list:
     out = []
     for dp, dn, fn in os.walk(source):
@@ -126,6 +143,7 @@ def caption_for(path: str, trigger: str, extra: str = "") -> str:
 
 
 def main() -> int:
+    _force_utf8_stdio()
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", required=True)
     ap.add_argument("--out", default="")

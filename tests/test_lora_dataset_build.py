@@ -20,6 +20,18 @@ def _make_image(path, color=(120, 90, 70), size=(64, 96)):
     Image.new("RGB", size, color).save(path)
 
 
+def _subprocess_env() -> dict:
+    """Env for a child that must not depend on the console codec.
+
+    The Windows CI console is cp1251 and the script prints Cyrillic, so a
+    child with the default stdout encoding dies with UnicodeEncodeError.
+    """
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    return env
+
+
 def test_list_images_finds_only_images(tmp_path):
     _make_image(tmp_path / "a.jpg")
     _make_image(tmp_path / "b.png")
@@ -115,7 +127,8 @@ def test_audit_writes_nothing(tmp_path):
     r = subprocess.run(
         [sys.executable, str(SCRIPTS / "lora_dataset_build.py"),
          "--source", str(src), "--audit"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace")
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=_subprocess_env())
     assert r.returncode == 0, r.stderr
     assert not out.exists()
 
@@ -132,7 +145,8 @@ def test_build_writes_image_and_caption(tmp_path):
         [sys.executable, str(SCRIPTS / "lora_dataset_build.py"),
          "--source", str(src), "--out", str(out), "--trigger", "tperson",
          "--validate", "1"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace")
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=_subprocess_env())
     assert r.returncode == 0, r.stderr
     assert (out / "dataset_summary.json").exists()
     caps = list(out.glob("*.txt"))
@@ -151,5 +165,6 @@ def test_build_without_out_is_rejected(tmp_path):
     r = subprocess.run(
         [sys.executable, str(SCRIPTS / "lora_dataset_build.py"),
          "--source", str(src)],
-        capture_output=True, text=True, encoding="utf-8", errors="replace")
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=_subprocess_env())
     assert r.returncode != 0
