@@ -194,10 +194,16 @@ def main() -> int:
         for fr in frames:
             shutil.copy2(fr, os.path.join(out_dir, os.path.basename(fr)))
 
-    subprocess.run(["ffmpeg", "-y", "-v", "error", "-framerate", str(args.fps),
-                    "-i", os.path.join(out_dir, "f_%05d.png"),
-                    "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p",
-                    "-c:a", "copy", args.out], check=True, timeout=1800)
+    # The source audio has to be muxed back explicitly: the PNG sequence carries
+    # no audio, and "-c:a copy" without an audio input silently produces a file
+    # with no audio track (which then breaks the RIFE step that maps 1:a:0).
+    cmd = ["ffmpeg", "-y", "-v", "error",
+           "-framerate", str(args.fps), "-i", os.path.join(out_dir, "f_%05d.png"),
+           "-i", args.video,
+           "-map", "0:v:0", "-map", "1:a:0?",
+           "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p",
+           "-c:a", "aac", "-b:a", "192k", "-shortest", args.out]
+    subprocess.run(cmd, check=True, timeout=1800)
     print(f"готово: {args.out} ({os.path.getsize(args.out) // 1024} КБ, "
           f"поры на {ok}/{len(frames)} кадрах)", flush=True)
     return 0
