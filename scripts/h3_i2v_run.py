@@ -63,7 +63,8 @@ def build_workflow(a):
         # silently ignores unknown inputs, so a negative prompt there was dead weight.
         "width": a.width, "height": a.height, "length": a.length}
     ref_images = getattr(a, "ref_images", None) or []
-    if ref_images:
+    guide_video = getattr(a, "guide_video", "") or ""
+    if ref_images or guide_video:
         # REF2VA mode: a reference image carries the subject, the prompt drives the action.
         nodes["2"]["inputs"]["unet_name"] = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
         # The official R2V template decodes video with the int8 convrot VAE (2.6 GB
@@ -94,10 +95,30 @@ def build_workflow(a):
             "audio_vae": [audio_vae_id, 0]}}
         vid = str(nid)
         nid += 1
+        # ALIGNED GUIDE: the whole source clip is fed back as the guide, so the
+        # guide latents sit at the SAME temporal and spatial positions as the
+        # output. That is what keeps motion, timing and framing intact while
+        # the sampler adds detail - the mechanism the LMS sharpness LoRA was
+        # trained on, and the same one Tessera uses.
+        if guide_video:
+            nodes[str(nid)] = {"class_type": "LoadVideo", "inputs": {"file": guide_video}}
+            lv = str(nid)
+            nid += 1
+            nodes[str(nid)] = {"class_type": "GetVideoComponents", "inputs": {"video": [lv, 0]}}
+            gv = str(nid)
+            nid += 1
+            nodes[str(nid)] = {"class_type": "MiniMaxH3AddGuide", "inputs": {
+                "positive": [vid, 0], "latent": [vid, 1],
+                "frame_idx": getattr(a, "guide_frame", 0),
+                "image": [gv, 0], "vae": ["4", 0]}}
+            guide_pos = [str(nid), 0]
+            nid += 1
+        else:
+            guide_pos = [vid, 0]
         # The official ComfyUI R2V template uses res_multistep with a beta/normal
         # scheduler - both clearly outperform euler/simple on reference-heavy prompts.
         nodes[str(nid)] = {"class_type": "KSampler", "inputs": {
-            "model": [prev_m, 0], "positive": [vid, 0], "negative": [vid, 0], "latent_image": [vid, 1],
+            "model": [prev_m, 0], "positive": guide_pos, "negative": [vid, 0], "latent_image": [vid, 1],
             "seed": a.seed, "steps": a.steps, "cfg": 1.0,
             "sampler_name": getattr(a, "sampler", "res_multistep"),
             "scheduler": getattr(a, "scheduler", "beta"), "denoise": 1.0}}
@@ -179,6 +200,11 @@ def main():
                    help="image in ComfyUI/input pinned as the LAST frame of the clip")
     p.add_argument("--guide-image", default="",
                    help="image in ComfyUI/input added as a guide reference (MiniMaxH3AddGuide)")
+    p.add_argument("--guide-video", default="",
+                   help="clip in ComfyUI/input used as the ALIGNED guide: the whole clip is "
+                        "fed back so its guide latents sit at the same temporal and spatial "
+                        "positions as the output. This is the mechanism the LMS sharpness "
+                        "LoRA was trained on and the same one Tessera uses.")
     p.add_argument("--ref-image", action="append", default=[],
                    help="reference image(s) in ComfyUI/input for the REF2VA mode")
     p.add_argument("--turbo", action="store_true",
@@ -211,6 +237,21 @@ def main():
     p.add_argument("--wait", type=int, default=7200)
     a = p.parse_args()
     a.prompt = a.prompt_prefix + "\n" + open(a.prompt_file, encoding="utf-8").read()
+
+    # LoadVideo wants a file NAME inside ComfyUI's input dir. Accept a path
+    # here and place it there, so the caller does not have to know the layout.
+    if a.guide_video and os.path.sep in a.guide_video:
+        from pathlib import Path as _P
+        import shutil as _sh
+        try:
+            from scripts import local_paths as _lp
+        except ImportError:
+            import local_paths as _lp  # type: ignore[no-redef]
+        src = _P(a.guide_video)
+        dst = _lp.PROD_IN / src.name
+        if not dst.exists() or dst.stat().st_size != src.stat().st_size:
+            _sh.copy2(src, dst)
+        a.guide_video = src.name
 
     workflow = build_workflow(a)
     problems = _validate_against_live_comfyui(workflow)
