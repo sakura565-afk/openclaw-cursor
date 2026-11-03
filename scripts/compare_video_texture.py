@@ -21,9 +21,20 @@ TWO TRAPS IN COMPARING, both measured here:
    construction (-27% RGB, -31% HF here). That is a change of sampling, not
    an improvement.
 
-So: compare texture across anything, compare flicker only between renders of
-the same motion at the same frame rate. The seed-to-seed noise floor on
-texture is about 1%, which is the bar a real effect has to clear.
+The calibration is brutal and worth stating plainly:
+
+- TEXTURE: two renders of the same scene with different seeds measured
+  5.36e10 and 5.32e10 pore energy - 1% apart. Texture is stable across
+  seeds and is the metric you can trust.
+- FLICKER: those same two renders measured 3.68 and 0.32 RGB delta - 91%
+  apart. Flicker metrics move almost entirely with the take, so a flicker
+  number means NOTHING unless both clips are the same take (same seed, same
+  everything).
+
+So: compare texture across anything; compare flicker only between identical
+takes at the same frame rate. Every A/B we run has to hold the seed fixed,
+because that is the only way the flicker half of the measurement says
+anything at all.
 
 This bit us once: a SeedVR2 -> RIFE post chain was measured against the 24
 fps raw source and the flicker numbers read as "+34.7%", which was RIFE's
