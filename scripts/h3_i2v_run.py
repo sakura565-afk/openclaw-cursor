@@ -129,6 +129,16 @@ def build_workflow(a):
             "image": [guide_scale, 0], "vae": ["4", 0]}}
         positive = [str(nid), 0]
         nid += 1
+    # Temporal State Transport (SelfLift): a MODEL -> MODEL patch that corrects
+    # the temporal attention of H3, so details stop flickering between frames.
+    # It cannot create detail the model does not have - it only makes what is
+    # already there stable.
+    if getattr(a, "tst_tau", 0.0) > 0:
+        nodes[str(nid)] = {"class_type": "SelfLiftH3TST", "inputs": {
+            "model": [prev_m, 0], "tau": a.tst_tau,
+            "log_diagnostics": bool(getattr(a, "tst_log", False))}}
+        prev_m = str(nid)
+        nid += 1
     nodes[str(nid)] = {"class_type": "KSampler", "inputs": {
         "model": [prev_m, 0], "positive": positive, "negative": [vid, 0], "latent_image": [vid, 1],
         "seed": a.seed, "steps": a.steps, "cfg": 1.0, "sampler_name": "euler",
@@ -181,6 +191,11 @@ def main():
                    help="'match' (fast) or 'max' (best identity fidelity, much slower)")
     p.add_argument("--guide-frame", type=int, default=0,
                    help="frame index the guide image is pinned to")
+    p.add_argument("--tst-tau", type=float, default=0.0,
+                   help="SelfLift Temporal State Transport strength for H3 "
+                        "(0 disables it, 0.2 is the paper setting)")
+    p.add_argument("--tst-log", action="store_true",
+                   help="log the per-forward Spectral Tension diagnostics")
     p.add_argument("--prompt-file", required=True)
     p.add_argument("--prompt-prefix", default="")
     p.add_argument("--loras-json", default="[]")
