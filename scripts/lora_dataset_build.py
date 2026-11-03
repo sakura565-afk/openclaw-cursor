@@ -18,14 +18,14 @@ It also does the mechanical parts a trainer expects:
 USAGE
 -----
   # audit only - no files written
-  python scripts/lora_dataset_build.py --source "G:/Polina" --audit
+  python scripts/lora_dataset_build.py --source "<photo folder>" --audit
 
-  # build a dataset with an auto trigger
-  python scripts/lora_dataset_build.py --source "G:/Polina" \
-      --out "G:/AI/lora/datasets/polina" --trigger polina_person --min-images 20
+  # build a dataset with a trigger token
+  python scripts/lora_dataset_build.py --source "<photo folder>" \
+      --out "<dataset folder>" --trigger <unique_token> --min-images 20
 
   # cap the number of near-duplicates kept from one burst
-  python scripts/lora_dataset_build.py --source "G:/Polina" --out ... --max-per-burst 3
+  python scripts/lora_dataset_build.py --source "<photo folder>" --out ... --max-per-burst 3
 """
 from __future__ import annotations
 
