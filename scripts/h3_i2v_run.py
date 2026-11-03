@@ -240,9 +240,11 @@ def main():
 
     # LoadVideo wants a file NAME inside ComfyUI's input dir. Accept a path
     # here and place it there, so the caller does not have to know the layout.
+    # os.path.sep is a backslash on Windows, but these paths use forward
+    # slashes, so test for absoluteness instead of for a separator.
     for attr in ("image", "guide_video"):
         val = getattr(a, attr, "") or ""
-        if val and os.path.sep in val:
+        if val and ("/" in val or "\\" in val):
             from pathlib import Path as _P
             import shutil as _sh
             try:
@@ -250,6 +252,9 @@ def main():
             except ImportError:
                 import local_paths as _lp  # type: ignore[no-redef]
             src = _P(val)
+            if not src.exists():
+                print(f"файл не найден: {src}", flush=True)
+                return 2
             dst = _lp.PROD_IN / src.name
             if not dst.exists() or dst.stat().st_size != src.stat().st_size:
                 _sh.copy2(src, dst)
