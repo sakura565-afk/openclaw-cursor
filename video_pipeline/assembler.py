@@ -493,7 +493,7 @@ def validate_workflow_against_object_info(
     return errors
 
 
-def _default_rife_workflow(video_filename: str, target_fps: float) -> dict[str, Any]:
+def _default_rife_workflow(video_filename: str, target_fps: float, multiplier: int = 2) -> dict[str, Any]:
     """Minimal ComfyUI API workflow for VHS + RIFE-style interpolation."""
     return {
         "1": {
@@ -513,7 +513,7 @@ def _default_rife_workflow(video_filename: str, target_fps: float) -> dict[str, 
             "class_type": "RIFE VFI",
             "inputs": {
                 "ckpt_name": "rife47.pth",
-                "multiplier": 2,
+                "multiplier": multiplier,
                 "fast_mode": True,
                 "ensemble": True,
                 "scale_factor": 1.0,
@@ -692,8 +692,14 @@ def interpolate(
     target_fps: float,
     comfyui_url: str = DEFAULT_COMFY_URL,
     workflow_json: dict[str, Any] | None = None,
+    multiplier: int = 2,
 ) -> Path:
-    """Run RIFE interpolation via ComfyUI; raises if ComfyUI is unreachable."""
+    """Run RIFE interpolation via ComfyUI; raises if ComfyUI is unreachable.
+
+    `multiplier` is the RIFE factor: 2 doubles the frame rate, 4 quadruples
+    it. The target fps only drives the output container, so a 12 fps source
+    needs multiplier=4 to land on 48.
+    """
     in_path = Path(in_path)
     out_path = Path(out_path)
     if not _comfy_reachable(comfyui_url):
@@ -704,7 +710,7 @@ def interpolate(
 
     uploaded_name = _upload_video(comfyui_url, in_path)
     workflow = copy.deepcopy(workflow_json) if workflow_json else _default_rife_workflow(
-        uploaded_name, target_fps
+        uploaded_name, target_fps, multiplier=multiplier
     )
     _validate_workflow_against_comfyui(comfyui_url, workflow)
     prompt_id = _submit_prompt(comfyui_url, workflow)
