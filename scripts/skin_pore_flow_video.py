@@ -65,7 +65,7 @@ def farneback_flow(frames, winsize=21, levels=3, iterations=3, poly_n=5, poly_si
     return flows
 
 
-def warm_skin_mask(frames, smooth_sigma=2.0):
+def warm_skin_mask(frames, smooth_sigma=2.0, tight=False):
     """Skin prior that also works on wet, dark, warm-lit skin.
 
     The YCrCb prior in skin_detail_inject.auto_skin_mask returns an empty mask
@@ -90,7 +90,21 @@ def warm_skin_mask(frames, smooth_sigma=2.0):
         m = (warm_hue & (s > 0.10) & (v > 0.12) & (v < 0.97)
              & (r > g * 1.01) & (g > b * 0.95)).astype(np.float32)
         m = cv2.GaussianBlur(m, (0, 0), smooth_sigma)
-        masks.append(np.clip(m * 1.6, 0.0, 1.0))
+        m = np.clip(m * 1.6, 0.0, 1.0)
+        if tight:
+            # Keep only the body: drop the foam and the background. Skin is
+            # more saturated than the lit foam, so raise the saturation floor,
+            # then keep the largest connected blob.
+            m = (m * (s > 0.28)).astype(np.float32)
+            m = cv2.GaussianBlur(m, (0, 0), smooth_sigma)
+            binm = (m > 0.35).astype(np.uint8)
+            n, lab, stats, _ = cv2.connectedComponentsWithStats(binm, 8)
+            if n > 1:
+                biggest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+                if stats[biggest, cv2.CC_STAT_AREA] > 0.02 * m.size:
+                    m = ((lab == biggest) | (m > 0.85)).astype(np.float32)
+                    m = cv2.GaussianBlur(m, (0, 0), smooth_sigma)
+        masks.append(m)
     return masks
 
 
@@ -107,6 +121,7 @@ def main() -> int:
     ap.add_argument("--max-frames", type=int, default=0)
     ap.add_argument("--single-octave", action="store_true")
     ap.add_argument("--no-flow", action="store_true")
+    ap.add_argument("--tight-mask", action="store_true")
     args = ap.parse_args()
 
     src = Path(args.video)
@@ -126,7 +141,7 @@ def main() -> int:
 
     out_frames = inject_skin_detail(
         frames,
-        skin_mask=warm_skin_mask(frames),
+        skin_mask=warm_skin_mask(frames, tight=args.tight_mask),
         strength=args.strength,
         detail_sigma=args.detail_sigma,
         pore_sigma=args.pore_sigma,
