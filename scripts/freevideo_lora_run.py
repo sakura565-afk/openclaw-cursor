@@ -143,6 +143,9 @@ def main() -> int:
     ap.add_argument("--refine-steps", type=int, default=3)
     ap.add_argument("--lora", action="append", default=[], help="name.safetensors:strength")
     ap.add_argument("--timeout", type=int, default=5400)
+    ap.add_argument("--tier-high", action="store_true",
+                    help="single sampling pass at the full resolution (tier high) "
+                         "instead of the default two_pass light tier")
     ap.add_argument("--last", default=None,
                     help="optional LAST frame image: the clip will end on it "
                          "(node 3 LoadImage -> FreeVideoGenerate.last)")
@@ -232,9 +235,16 @@ def main() -> int:
     fv_inputs = {
         "text": prompt, "width": args.width, "height": args.height,
         "seconds": args.seconds, "seed": args.seed, "first": ["1", 0],
-        "two_pass": True, "base_steps": args.base_steps,
+        # FreeVideo tiers (freevideo_engine/tiers.py):
+        #   light = two_pass + upscale_factor 2 -> first pass at 25% of the pixels
+        #   high  = single pass, 16 steps, easycache-av -> full resolution
+        # The micro-texture of the skin is born in the first pass, so the light tier
+        # cannot carry pores no matter what the upscaler does afterwards.
+        "two_pass": not args.tier_high, "base_steps": args.base_steps,
         "refine_steps": args.refine_steps,
     }
+    if args.tier_high:
+        fv_inputs["step_cache"] = "easycache-av"
     graph = {
         "1": {"class_type": "LoadImage", "inputs": {"image": name}},
         "2": {"class_type": "FreeVideoGenerate", "inputs": fv_inputs},
