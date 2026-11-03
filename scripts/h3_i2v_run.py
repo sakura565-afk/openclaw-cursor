@@ -71,9 +71,14 @@ def build_workflow(a):
         # instead of 4.9 GB for fp16) - same pixels, much less VRAM.
         nodes["4"]["inputs"]["vae_name"] = getattr(
             a, "ref_vae", "minimax_h3_video_vae_int8_convrot.safetensors")
-        nodes["5"] = {"class_type": "VAELoader", "inputs": {"vae_name": "minimax_h3_audio_vae_fp32.safetensors"}}
-        audio_vae_id = "5"
-        nid = 6
+        # The audio VAE gets its own id: node "5" may already hold a LoRA node
+        # created by the loop above, and overwriting it silently swapped the
+        # KSampler's MODEL input for a VAE - the graph then failed validation
+        # with "received_type(VAE) mismatch input_type(MODEL)", and the LoRA
+        # never applied at all.
+        nodes[str(nid)] = {"class_type": "VAELoader", "inputs": {"vae_name": "minimax_h3_audio_vae_fp32.safetensors"}}
+        audio_vae_id = str(nid)
+        nid += 1
         if getattr(a, "turbo", False):
             # 4-step turbo LoRA for the ref2v pipeline (official Comfy-Org model).
             nodes[str(nid)] = {"class_type": "LoraLoaderModelOnly", "inputs": {
