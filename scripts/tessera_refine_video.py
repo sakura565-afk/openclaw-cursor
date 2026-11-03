@@ -122,6 +122,8 @@ def build_graph(
     anchor_strength: float = 1.0,
     anchor_spread: int = 4,
     anchor_name: str = "",
+    audio_name: str = "",
+    audio_vae_name: str = "minimax_h3_audio_vae_fp32.safetensors",
     plan_only: bool = False,
 ) -> dict:
     g: dict = {
@@ -236,6 +238,29 @@ def build_graph(
         "14b": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
     }
 
+    # H3's forward reads the latent as [video, audio] - `audio_src = x[1]` -
+    # so a video-only latent makes the model raise IndexError. The audio half
+    # is silent on purpose: the refine must not touch the sound, and the
+    # original track is muxed back afterwards. The silent audio has to match
+    # the clip's length, because the two halves are aligned frame by frame.
+    if audio_name:
+        g["30"] = {"class_type": "LoadAudio", "inputs": {"audio": audio_name}}
+        g["31"] = {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": audio_vae_name},
+        }
+        g["32"] = {
+            "class_type": "VAEEncodeAudio",
+            "inputs": {"audio": ["30", 0], "vae": ["31", 0]},
+        }
+        g["33"] = {
+            "class_type": "LTXVConcatAVLatent",
+            "inputs": {"video_latent": ["9", 1], "audio_latent": ["32", 0]},
+        }
+        latent_src = ["33", 0]
+    else:
+        latent_src = ["9", 1]
+
     model_src = "4"
     if lora_name:
         g["15"] = {
@@ -255,7 +280,7 @@ def build_graph(
             "clip": ["5", 0],
             "positive": ["9", 0],
             "negative": ["10", 0],
-            "latent": ["9", 1],
+            "latent": latent_src,
             "vae": ["6", 0],
             "sampler": ["14", 0],
             "sampler_fine": ["14b", 0],
@@ -389,6 +414,10 @@ def main() -> int:
     ap.add_argument("--anchor-strength", type=float, default=1.0)
     ap.add_argument("--anchor-spread", type=int, default=4,
                     help="how many frames around the anchor keep the identity constraint")
+    ap.add_argument("--silent-audio", action="store_true",
+                    help="generate a silent track matching the clip length and feed it to "
+                         "the model. H3's latent is [video, audio], so the refine needs "
+                         "an audio half even when the sound is not being touched.")
     ap.add_argument("--prefix", default="tessera")
     ap.add_argument("--prompt", default=TESSERA_PROMPT)
     ap.add_argument("--unet", default="minimax_h3_ref2va_pruned_int8_convrot.safetensors")
@@ -459,6 +488,22 @@ def main() -> int:
         width, height = crop_w, crop_h
 
     name = upload_video(video, args.server)
+    audio_name = ""
+    if args.silent_audio:
+        # The audio half of H3's latent is aligned frame by frame with the
+        # video half, so the silent track has to be exactly as long.
+        dur = length / max(fps, 0.1)
+        wav = local_paths.SCRATCH / (video.stem + "_silent.wav")
+        subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+             f"anullsrc=channel_layout=stereo:sample_rate=44100",
+             "-t", f"{dur:.3f}", "-c:a", "pcm_s16le", str(wav)],
+            check=True, timeout=600)
+        dst = local_paths.PROD_IN / wav.name
+        if not dst.exists() or dst.stat().st_size != wav.stat().st_size:
+            shutil.copy2(wav, dst)
+        audio_name = wav.name
+        print(f"silent audio: {audio_name} ({dur:.2f}s)", flush=True)
     anchor_name = ""
     if args.anchor_image:
         anchor_path = Path(args.anchor_image)
@@ -511,6 +556,7 @@ def main() -> int:
         anchor_strength=args.anchor_strength,
         anchor_spread=args.anchor_spread,
         anchor_name=anchor_name,
+        audio_name=audio_name,
         plan_only=args.plan_only,
     )
     print("nodes:", len(graph), flush=True)
