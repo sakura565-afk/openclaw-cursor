@@ -119,6 +119,9 @@ def build_graph(
     vae_name: str,
     lora_name: str = "",
     lora_strength: float = 0.0,
+    anchor_strength: float = 1.0,
+    anchor_spread: int = 4,
+    anchor_name: str = "",
     plan_only: bool = False,
 ) -> dict:
     g: dict = {
@@ -156,8 +159,9 @@ def build_graph(
             },
         },
         "8": {
-            "class_type": "ImageFromBatch",
-            "inputs": {"image": ["3", 0], "batch_index": 0, "length": 1},
+            "class_type": "LoadImage" if anchor_name else "ImageFromBatch",
+            "inputs": ({"image": anchor_name} if anchor_name
+                       else {"image": ["3", 0], "batch_index": 0, "length": 1}),
         },
         "9": {
             "class_type": "TesseraEncode",
@@ -165,7 +169,13 @@ def build_graph(
                 "images": ["3", 0],
                 "vae": ["6", 0],
                 "positive": ["7", 0],
+                # The anchor is the identity source. The upstream recipe anchors
+                # on the FIRST frame of the clip; a stronger still (our own
+                # 9.2/10 portrait) anchors better, and the spread decides how
+                # many frames around the anchor keep the identity constraint.
                 "anchor": ["8", 0],
+                "anchor_strength": anchor_strength,
+                "anchor_spread": anchor_spread,
                 "upscale_by": upscale_by,
                 "upscale_method": "lanczos",
                 "segment_frames": segment_frames,
@@ -353,6 +363,12 @@ def main() -> int:
     ap.add_argument("--hero-min", type=int, default=896)
     ap.add_argument("--hero-fit", default="median")
     ap.add_argument("--segment-frames", type=int, default=56)
+    ap.add_argument("--anchor-image", default="",
+                    help="identity anchor still (our strongest portrait). Anchoring on a "
+                         "9.2/10 still holds the face better than the clip's own first frame.")
+    ap.add_argument("--anchor-strength", type=float, default=1.0)
+    ap.add_argument("--anchor-spread", type=int, default=4,
+                    help="how many frames around the anchor keep the identity constraint")
     ap.add_argument("--prefix", default="tessera")
     ap.add_argument("--prompt", default=TESSERA_PROMPT)
     ap.add_argument("--unet", default="minimax_h3_ref2va_pruned_int8_convrot.safetensors")
@@ -423,6 +439,14 @@ def main() -> int:
         width, height = crop_w, crop_h
 
     name = upload_video(video, args.server)
+    anchor_name = ""
+    if args.anchor_image:
+        anchor_path = Path(args.anchor_image)
+        dst = local_paths.PROD_IN / anchor_path.name
+        if not dst.exists() or dst.stat().st_size != anchor_path.stat().st_size:
+            shutil.copy2(anchor_path, dst)
+        anchor_name = anchor_path.name
+        print("anchor:", anchor_name, flush=True)
     graph = build_graph(
         name,
         width=width,
@@ -450,6 +474,9 @@ def main() -> int:
         vae_name=args.vae,
         lora_name=args.lora,
         lora_strength=args.lora_strength,
+        anchor_strength=args.anchor_strength,
+        anchor_spread=args.anchor_spread,
+        anchor_name=anchor_name,
         plan_only=args.plan_only,
     )
     print("nodes:", len(graph), flush=True)
