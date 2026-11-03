@@ -445,6 +445,20 @@ def main() -> int:
     anchor_name = ""
     if args.anchor_image:
         anchor_path = Path(args.anchor_image)
+        # The anchor has to sit in the same pixel grid as the frames it
+        # anchors, so scale it to the exact output size instead of hoping the
+        # node resamples it our way.
+        try:
+            from PIL import Image as _Image
+            with _Image.open(anchor_path) as im:
+                target = (width * args.upscale_by, height * args.upscale_by)
+                if im.size != target:
+                    scaled = anchor_path.with_name(anchor_path.stem + "_anchor.png")
+                    im.convert("RGB").resize(target, _Image.LANCZOS).save(scaled)
+                    anchor_path = scaled
+                    print(f"anchor scaled to {target[0]}x{target[1]}", flush=True)
+        except Exception as exc:  # keep going - the node can still take it
+            print(f"anchor not scaled ({exc}); passing it as is", flush=True)
         dst = local_paths.PROD_IN / anchor_path.name
         if not dst.exists() or dst.stat().st_size != anchor_path.stat().st_size:
             shutil.copy2(anchor_path, dst)
