@@ -34,9 +34,15 @@ def probe(p):
 def main():
     src, out = Path(sys.argv[1]), Path(sys.argv[2])
     tmp = out.with_name(out.stem + "_rife.mp4")
-    print(f"RIFE 24->48: {src.name}", flush=True)
+    v0, _a0, _d0 = probe(src)
+    src_fps = float(v0.get("r_frame_rate", "24/1").split("/")[0]) / max(
+        1.0, float(v0.get("r_frame_rate", "24/1").split("/")[1]))
+    target = 48.0
+    # RIFE works in whole multiples: 24->48 is x2, 12->48 is x4.
+    multiplier = max(1, int(round(target / max(src_fps, 0.1))))
+    print(f"RIFE {src_fps:.3f}->{target:.0f} fps (x{multiplier}): {src.name}", flush=True)
     t0 = time.time()
-    interpolate(src, tmp, 48.0, comfyui_url=PROD)
+    interpolate(src, tmp, target, comfyui_url=PROD, multiplier=multiplier)
     print(f"  интерполяция за {time.time()-t0:.0f} с -> {tmp.name}", flush=True)
     v, a, d = probe(tmp)
     dur = float(d["format"]["duration"])
