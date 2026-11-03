@@ -268,6 +268,7 @@ def main():
         raise SystemExit("ComfyUI rejected the graph (HTTP %s):\n%s" % (exc.code, body))
     print("prompt_id", pid, flush=True)
 
+    save_ids = [k for k, v in workflow.items() if v.get("class_type") == "SaveVideo"]
     t0 = time.time()
     last = -1
     while time.time() - t0 < a.wait:
@@ -277,7 +278,13 @@ def main():
             if st.get("status_str") == "error":
                 print("ERROR:", str(st.get("messages"))[:600], flush=True)
                 return 1
-            for _, o in h[pid].get("outputs", {}).items():
+            outs = h[pid].get("outputs", {})
+            # The SaveVideo node's output is the render. Other nodes report
+            # too - VHS's LoadVideo lists the INPUT clip - and taking the
+            # first video in the history silently hands back the input.
+            ordered = [(sid, outs[sid]) for sid in save_ids if sid in outs]
+            ordered += [(k, v) for k, v in outs.items() if k not in save_ids]
+            for _sid, o in ordered:
                 for v in o.get("videos", []) + o.get("images", []):
                     fn = v.get("filename", "")
                     sub = v.get("subfolder", "")
@@ -288,10 +295,30 @@ def main():
                             continue
                         src = os.path.join(COMFYUI_OUTPUT_DIR, sub, cand[0])
                     print("видео:", src, flush=True)
+                    dur = 0.0
+                    try:
+                        from video_pipeline.assembler import probe as _probe
+                        _v, _a, _d = _probe(Path(src))
+                        dur = float(_d["format"]["duration"])
+                    except Exception:
+                        dur = 0.0
                     cmd = [FFMPEG, "-y", "-stream_loop", "-1", "-i", src, "-i", a.audio,
-                           "-t", "7.3", "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+                           "-t", f"{dur:.3f}" if dur > 0.1 else "7.3",
+                           "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
                            "-map", "0:v:0", "-map", "1:a:0", "-shortest", a.output]
                     subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                    # Guard: VHS's LoadVideo reports the input clip as an
+                    # output too, so a mis-picked history entry produces a
+                    # file identical to the source. That is not a render.
+                    try:
+                        in_size = os.path.getsize(src)
+                        out_size = os.path.getsize(a.output)
+                        same = in_size == out_size and open(src, "rb").read(4096) == open(a.output, "rb").read(4096)
+                    except OSError:
+                        same = False
+                    if same:
+                        print("ВНИМАНИЕ: результат идентичен входу - рендер не дал нового файла", flush=True)
+                        return 3
                     print("готово:", a.output, round(os.path.getsize(a.output) / 1e6, 2), "МБ", flush=True)
                     return 0
             return 0
