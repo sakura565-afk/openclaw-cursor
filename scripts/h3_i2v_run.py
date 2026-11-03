@@ -240,18 +240,20 @@ def main():
 
     # LoadVideo wants a file NAME inside ComfyUI's input dir. Accept a path
     # here and place it there, so the caller does not have to know the layout.
-    if a.guide_video and os.path.sep in a.guide_video:
-        from pathlib import Path as _P
-        import shutil as _sh
-        try:
-            from scripts import local_paths as _lp
-        except ImportError:
-            import local_paths as _lp  # type: ignore[no-redef]
-        src = _P(a.guide_video)
-        dst = _lp.PROD_IN / src.name
-        if not dst.exists() or dst.stat().st_size != src.stat().st_size:
-            _sh.copy2(src, dst)
-        a.guide_video = src.name
+    for attr in ("image", "guide_video"):
+        val = getattr(a, attr, "") or ""
+        if val and os.path.sep in val:
+            from pathlib import Path as _P
+            import shutil as _sh
+            try:
+                from scripts import local_paths as _lp
+            except ImportError:
+                import local_paths as _lp  # type: ignore[no-redef]
+            src = _P(val)
+            dst = _lp.PROD_IN / src.name
+            if not dst.exists() or dst.stat().st_size != src.stat().st_size:
+                _sh.copy2(src, dst)
+            setattr(a, attr, src.name)
 
     workflow = build_workflow(a)
     problems = _validate_against_live_comfyui(workflow)
