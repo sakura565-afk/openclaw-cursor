@@ -232,6 +232,8 @@ def build_graph(
             "inputs": {"sigmas_string": "1, 0.7, 0.4, 0.0", "interpolate_to_steps": 3},
         },
         "14": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "er_sde"}},
+        # The v3 recipe uses euler for the fine pass and er_sde for the base.
+        "14b": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
     }
 
     model_src = "4"
@@ -256,6 +258,7 @@ def build_graph(
             "latent": ["9", 1],
             "vae": ["6", 0],
             "sampler": ["14", 0],
+            "sampler_fine": ["14b", 0],
             "sigmas": ["13", 0],
             "plan": ["11", 3],
             "args": ["12", 0],
