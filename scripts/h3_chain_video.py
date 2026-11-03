@@ -57,6 +57,52 @@ def first_frame(video: Path, out_png: Path) -> Path:
     return out_png
 
 
+def build_audio_weld_filters(boundaries: list[int]) -> list[str]:
+    """Filter graph that welds an audio track at the chunk boundaries.
+
+    The track is cut at each boundary and the pieces are joined with a 40 ms
+    equal-power crossfade, so there is neither a click nor a gap.
+
+    Two ffmpeg facts this encodes, both learned the hard way:
+    - the equal-power curve is `qsin`; `c1=equal` is rejected outright
+      (`tri` and `exp` are the other valid curve names);
+    - filter labels already carry their brackets, so the graph reads
+      `[s0][s1]acrossfade=...`. Stripping one bracket yields
+      "No such filter".
+    """
+    edges = [0] + list(boundaries) + [None]
+    filters: list[str] = []
+    labels: list[str] = []
+    for i in range(len(edges) - 1):
+        seg = f"[0:a]atrim=start={edges[i]}"
+        if edges[i + 1] is not None:
+            seg += f":end={edges[i + 1]}"
+        filters.append(seg + f",asetpts=PTS-STARTPTS[s{i}]")
+        labels.append(f"[s{i}]")
+    cur = labels[0]
+    for i in range(1, len(labels)):
+        out_lab = f"[x{i}]"
+        filters.append(
+            f"{cur}{labels[i]}"
+            f"acrossfade=d=0.04:c1=qsin:c2=qsin{out_lab}")
+        cur = out_lab
+    filters.append(f"{cur}apad=pad_dur=0.5[aout]")
+    return filters
+
+
+def weld_audio(audio: Path, boundaries: list[int], out: Path) -> Path:
+    """Write the welded audio track to `out`."""
+    if not boundaries:
+        shutil.copy2(audio, out)
+        return out
+    filters = build_audio_weld_filters(boundaries)
+    subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-i", str(audio), "-filter_complex", ";".join(filters),
+         "-map", "[aout]", "-c:a", "aac", "-b:a", "192k", str(out)],
+        check=True, timeout=1800)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", required=True, help="first still (already in ComfyUI/input or a path)")
@@ -137,32 +183,7 @@ def main() -> int:
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     boundaries = [args.length * (i + 1) for i in range(args.chunks - 1)]
-    if boundaries:
-        # Cut the track at the chunk boundaries and join the pieces with a
-        # 40 ms equal-power crossfade, so there is neither a click nor a gap.
-        edges = [0] + boundaries + [None]
-        filters = []
-        labels = []
-        for i in range(len(edges) - 1):
-            seg = f"[0:a]atrim=start={edges[i]}" + (f":end={edges[i + 1]}" if edges[i + 1] is not None else "")
-            filters.append(seg + f",asetpts=PTS-STARTPTS[s{i}]")
-            labels.append(f"[s{i}]")
-        cur = labels[0]
-        for i in range(1, len(labels)):
-            out_lab = f"[x{i}]"
-            # qsin is ffmpeg's equal-power curve (tri/exp are the other valid
-            # ones; "equal" is not a curve name and ffmpeg rejects it).
-            filters.append(
-                f"{cur}{labels[i]}"
-                f"acrossfade=d=0.04:c1=qsin:c2=qsin{out_lab}")
-            cur = out_lab
-        filters.append(f"{cur}apad=pad_dur=0.5[aout]")
-        subprocess.run(
-            ["ffmpeg", "-y", "-v", "error", "-i", str(args.audio), "-filter_complex", ";".join(filters),
-             "-map", "[aout]", "-c:a", "aac", "-b:a", "192k", str(work / "audio.m4a")],
-            check=True, timeout=1800)
-    else:
-        shutil.copy2(args.audio, work / "audio.m4a")
+    weld_audio(Path(args.audio), boundaries, work / "audio.m4a")
 
     subprocess.run(
         ["ffmpeg", "-y", "-v", "error", "-i", str(video_only), "-i", str(work / "audio.m4a"),
