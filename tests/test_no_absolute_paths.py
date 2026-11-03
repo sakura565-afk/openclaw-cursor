@@ -77,6 +77,11 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     # Existing environment-overridable render output and scratch defaults.
     ('scripts/qwen_edit_run.py', 'C' + ':\\Users\\user\\AppData\\Local\\hermes\\cache\\scratch'): "existing workstation default",
     ('scripts/qwen_edit_run.py', 'E' + ':\\ComfyUI_windows_portable_nvidia_cu126\\ComfyUI_windows_portable\\ComfyUI\\output'): "existing workstation default",
+
+    # The video un-dress runner needs ComfyUI's input and output folders; both
+    # are overridable via COMFYUI_PROD_INPUT / COMFYUI_PROD_OUTPUT.
+    ('scripts/undress_video.py', 'E' + ':\\ComfyUI_windows_portable_nvidia_cu126\\ComfyUI_windows_portable\\ComfyUI\\input'): "existing workstation default",
+    ('scripts/undress_video.py', 'E' + ':\\ComfyUI_windows_portable_nvidia_cu126\\ComfyUI_windows_portable\\ComfyUI\\output'): "existing workstation default",
     ('scripts/rife_interpolate_48.py', 'C' + ':\\Users\\user\\AppData\\Local\\hermes\\tools\\ffmpeg-9.0.1-win32-x64\\bin\\ffmpeg.exe'): "existing workstation default",
     ('scripts/rife_interpolate_48.py', 'C' + ':\\Users\\user\\AppData\\Local\\hermes\\tools\\ffmpeg-9.0.1-win32-x64\\bin\\ffprobe.exe'): "existing workstation default",
 

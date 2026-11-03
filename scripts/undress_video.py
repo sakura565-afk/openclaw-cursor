@@ -43,6 +43,9 @@ SCRATCH = os.environ.get(
     "HERMES_SCRATCH_DIR",
     os.path.join(os.path.expanduser("~"), "AppData", "Local", "hermes", "cache", "scratch"))
 BASE = os.environ.get("COMFYUI_PROD", "http://127.0.0.1:8188")
+# Machine-specific by nature: the ComfyUI install directory. Both are
+# overridable from the environment for another host, and the pair is recorded
+# in the path guard's ALLOWLIST with the reason.
 PROD_IN = os.environ.get(
     "COMFYUI_PROD_INPUT",
     r"E:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\input")
