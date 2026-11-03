@@ -7,6 +7,24 @@ texture side uses the pore band (3-12 px) rather than a plain Laplacian,
 because a Laplacian mixes pores, highlights and sharpening halo into one
 number and has misled us before.
 
+TWO TRAPS IN COMPARING, both measured here:
+
+1. Temporal numbers (RGB delta, HF delta, face drift) are only comparable
+   between clips with THE SAME MOTION. A different seed changes the movement
+   entirely, and the temporal metrics move with it: two high-tier renders of
+   the same portrait with different seeds differ by +510% RGB delta while
+   their pore energy differs by 1%. Texture survives a seed change; flicker
+   does not.
+
+2. A 48 fps clip is not comparable to its 24 fps source. RIFE inserts smooth
+   interpolated frames, so the frame-to-frame delta is roughly halved by
+   construction (-27% RGB, -31% HF here). That is a change of sampling, not
+   an improvement.
+
+So: compare texture across anything, compare flicker only between renders of
+the same motion at the same frame rate. The seed-to-seed noise floor on
+texture is about 1%, which is the bar a real effect has to clear.
+
     python scripts/compare_video_texture.py A.mp4 B.mp4 [--frames 24]
     python scripts/compare_video_texture.py --ref still.png A.mp4 B.mp4
 """
