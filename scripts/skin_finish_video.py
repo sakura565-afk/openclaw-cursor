@@ -180,7 +180,11 @@ def main() -> int:
                 src = gp
 
         res = bc_pores(src, mp, args.seed, args.texture, args.detail, f"f{i:05d}")
-        dst = os.path.join(out_dir, os.path.basename(fr))
+        # The output sequence has to be CONTIGUOUS. ffmpeg's image2 pattern
+        # stops at the first missing index, so a single frame that failed to
+        # land silently truncated the whole video. Number by position, not by
+        # the source file name.
+        dst = os.path.join(out_dir, f"f_{i + 1:05d}.png")
         if res:
             shutil.copy2(res, dst)
             ok += 1
@@ -191,14 +195,15 @@ def main() -> int:
 
     if ok == 0:
         print("ни один кадр не обработан - копирую исходник", flush=True)
-        for fr in frames:
-            shutil.copy2(fr, os.path.join(out_dir, os.path.basename(fr)))
+        for i, fr in enumerate(frames):
+            shutil.copy2(fr, os.path.join(out_dir, f"f_{i + 1:05d}.png"))
 
     # The source audio has to be muxed back explicitly: the PNG sequence carries
     # no audio, and "-c:a copy" without an audio input silently produces a file
     # with no audio track (which then breaks the RIFE step that maps 1:a:0).
     cmd = ["ffmpeg", "-y", "-v", "error",
-           "-framerate", str(args.fps), "-i", os.path.join(out_dir, "f_%05d.png"),
+           "-framerate", str(args.fps), "-start_number", "1",
+           "-i", os.path.join(out_dir, "f_%05d.png"),
            "-i", args.video,
            "-map", "0:v:0", "-map", "1:a:0?",
            "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p",
