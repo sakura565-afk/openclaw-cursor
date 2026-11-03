@@ -18,6 +18,18 @@ _spec.loader.exec_module(review)
 MANIFEST = json.loads((SCRIPTS / "h3_lora_manifest.json").read_text(encoding="utf-8"))
 
 
+def _subprocess_env() -> dict:
+    """Env for a child that must not depend on the console codec.
+
+    The Windows CI console is cp1251, so a child that prints Cyrillic with
+    the default stdout encoding dies with UnicodeEncodeError.
+    """
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    return env
+
+
 def test_classify_uses_manifest_categories():
     assert review.classify(
         "Realism People - MinimaxH3 - r34l1sm,0.6-1str.safetensors", MANIFEST) == "realism"
@@ -114,13 +126,14 @@ def test_review_reports_new_only_once(tmp_path):
     # run the module twice through its argparse entry point
     import subprocess
     import sys
-    env = dict(os.environ)
+    env = _subprocess_env()
     for _ in range(2):
         r = subprocess.run(
             [sys.executable, str(SCRIPTS / "h3_lora_daily_review.py"),
              "--root", str(root), "--ledger", ledger, "--no-network",
              "--json-out", str(tmp_path / "out.json")],
-            capture_output=True, text=True, env=env)
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env=env)
         assert r.returncode == 0, r.stderr
     out = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
     # no-network means the local audit only; the LoRA on disk must be listed
@@ -136,7 +149,8 @@ def test_review_marks_manual_reviewed(tmp_path):
         [sys.executable, str(SCRIPTS / "h3_lora_daily_review.py"),
          "--no-network", "--ledger", ledger,
          "--mark-reviewed", "Add Micro Details"],
-        capture_output=True, text=True)
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=_subprocess_env())
     assert r.returncode == 0, r.stderr
     data = json.loads(Path(ledger).read_text(encoding="utf-8"))
     assert any(v.get("how") == "manual" for v in data["seen"].values())
@@ -158,5 +172,6 @@ def test_review_exit_code_zero_without_network(tmp_path):
         [sys.executable, str(SCRIPTS / "h3_lora_daily_review.py"),
          "--no-network", "--ledger", str(tmp_path / "l.json"),
          "--root", str(tmp_path)],
-        capture_output=True, text=True)
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=_subprocess_env())
     assert r.returncode == 0, r.stderr
