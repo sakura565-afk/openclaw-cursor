@@ -187,6 +187,12 @@ def main() -> int:
     ap.add_argument("--width", type=int, default=0,
                     help="target width; 0 = derive from the source aspect ratio")
     ap.add_argument("--restart-prod", action="store_true")
+    ap.add_argument("--temporal-overlap", type=int, default=3,
+                    help="frames shared between neighbouring SeedVR2 temporal "
+                         "windows; more overlap = more temporal context")
+    ap.add_argument("--batch-size", type=int, default=5,
+                    help="frames SeedVR2 processes together; a larger batch "
+                         "gives the temporal attention more context")
     args = ap.parse_args()
 
     src, out = Path(args.src), Path(args.out)
@@ -247,7 +253,9 @@ def main() -> int:
         log(f"таймаут поллинга: {_up.POLL_TIMEOUT_SEC} с")
         backend = upscale_video(
             src, out, w, args.height,
-            UpscaleConfig(backend="seedvr2", comfyui_url=PROD),
+            UpscaleConfig(backend="seedvr2", comfyui_url=PROD,
+                          temporal_overlap=args.temporal_overlap,
+                          batch_size=args.batch_size),
         )
         log(f"бэкенд: {backend} -> {out}")
         if backend != "seedvr2":
