@@ -119,8 +119,8 @@ def main() -> int:
             "prompt_id": prompt_id, "elapsed_seconds": round(elapsed, 2),
             "video": str(output_path), "first_frame": str(frame),
             "gpu_peak_used_mib": max((s["used_mib"] for s in samples), default=0),
-            "report_vram_peak_bytes": (report or {}).get("vram_peak_bytes"),
-            "report_ram_peak_bytes": (report or {}).get("ram_peak_bytes"),
+            "report_vram_peak_bytes": (report or {}).get("resources", {}).get("gpu", {}).get("gpu_peak_bytes"),
+            "report_ram_peak_bytes": (report or {}).get("resources", {}).get("ram", {}).get("process_tree_peak_private_working_set_bytes"),
             "video_duration_seconds": result.duration_sec,
         }
         (args.out_dir / f"{args.tag}.summary.json").write_text(
