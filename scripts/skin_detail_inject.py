@@ -67,7 +67,7 @@ def local_variance(img, sigma):
 def inject_skin_detail(frames, skin_mask=None, strength=0.35,
                        detail_sigma=1.6, pore_sigma=0.55,
                        flow=None, seed=1234, temporal_sigma=0.0,
-                       detail_floor=0.35):
+                       detail_floor=0.35, two_octave=True):
     """
     frames      : list of float32 HxWx3 in [0,1]
     skin_mask   : list of float32 HxW in [0,1] (optional). If None, auto-detect skin.
@@ -95,6 +95,21 @@ def inject_skin_detail(frames, skin_mask=None, strength=0.35,
     # Shape it into pore-like blobs: highpass of noise, then blur tiny.
     noise_hp = highpass(noise, pore_sigma)
     noise_hp /= (np.std(noise_hp) + 1e-8)
+
+    # Two band-passed octaves plus sparse darker pits - the shape BCNodes uses
+    # for its pore field, which reads better than a single high-passed octave.
+    # BCNodes draws a DIFFERENT random field per frame from one seed, so its
+    # pores crawl by construction; here the same field is warped by optical
+    # flow instead, which keeps the shape and drops the crawl.
+    if two_octave:
+        fine = highpass(noise, pore_sigma * 0.55)
+        coarse = highpass(noise, pore_sigma * 1.6)
+        fine /= (np.std(fine) + 1e-8)
+        coarse /= (np.std(coarse) + 1e-8)
+        pits = -np.maximum(coarse - 1.25, 0.0) * 1.5
+        field = 0.65 * fine + 0.35 * coarse + pits
+        field /= (np.std(field) + 1e-8)
+        noise_hp = field.astype(np.float32)
 
     # --- 2. per-frame skin mask --------------------------------------------
     if skin_mask is None:
