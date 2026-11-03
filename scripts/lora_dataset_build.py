@@ -123,16 +123,31 @@ def aspect(path: str) -> float:
         return 0.0
 
 
+# Camera filenames carry no semantic value: "_DSC9679" or "P1060626" is just
+# a shutter counter. Feeding it to the trainer teaches the model a token that
+# does not exist in the real world and pollutes the caption embedding.
+_MEANINGLESS = re.compile(
+    r"^(?:img|p|dsc|pxl|wix|screenshot|default|unnamed|"
+    r"imgp|scan|dscn|img_?p|q)\d*[a-z]?$", re.I)
+
+
 def caption_for(path: str, trigger: str, extra: str = "") -> str:
     """Caption: trigger first, then only the VARIABLE description.
 
     An identity LoRA must not repeat the constant features (face shape, hair
-    colour) in every caption - those have to be what the trigger encodes.
+    colour) in every caption - those have to be what the trigger encodes, and
+    the variable part (pose, angle, clothing) is what teaches the LoRA that
+    the trigger means "this person" and not "this pose".
+
+    Camera-file counters are stripped: they carry no meaning and would just
+    pollute the caption embedding.
     """
     base = os.path.splitext(os.path.basename(path))[0]
     base = re.sub(r"[_\-]+", " ", base)
     base = re.sub(r"\b(20\d{2})\b|\b\d{4,}\b", "", base).strip()
     base = re.sub(r"\s+", " ", base)
+    if _MEANINGLESS.match(base.replace(" ", "")) or not base:
+        base = ""
     parts = [trigger]
     if base:
         parts.append(f"photo of {base}")
