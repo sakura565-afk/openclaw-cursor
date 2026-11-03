@@ -46,8 +46,17 @@ def main():
     print(f"  интерполяция за {time.time()-t0:.0f} с -> {tmp.name}", flush=True)
     v, a, d = probe(tmp)
     dur = float(d["format"]["duration"])
+    # An empty or frame-less intermediate makes ffmpeg fail with a confusing
+    # "Error parsing options for output file". It happens when the RIFE job
+    # could not get the GPU, so check it here and say what actually went wrong.
+    if not v.get("nb_frames") or int(v.get("nb_frames")) == 0:
+        print(f"ПУСТОЙ ПРОМЕЖУТОЧНЫЙ ФАЙЛ {tmp.name} "
+              f"({tmp.stat().st_size if tmp.exists() else 0} байт) - "
+              f"RIFE не отработал (занятый GPU?). Исходник не тронут.", flush=True)
+        return 1
     r = subprocess.run([FF, "-v", "error", "-y", "-i", str(tmp), "-i", str(src),
-                        "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
+                        "-map", "0:v:0", "-map", "1:a:0?",
+                        "-c:v", "copy",
                         "-c:a", "aac", "-b:a", "192k", "-shortest", str(out)],
                        capture_output=True, text=True)
     if r.returncode != 0:
