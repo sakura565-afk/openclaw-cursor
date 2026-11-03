@@ -1,0 +1,1400 @@
+{
+  "schema_version": 1,
+  "updated": "2026-11-03",
+  "notes": [
+    "Trigger words and strengths are publisher hints, not measured quality guarantees.",
+    "The baseline receives the same prompt, including the trigger, seed and sampler settings.",
+    "HF EllaPriest45/MinimaxH3_Actions is a mirror; its embedded text is attributed to the original author where possible.",
+    "REF2VA guide/edit LoRAs must not be benchmarked as plain FL2VA I2V adapters."
+  ],
+  "asset_classes": {
+    "realism": {
+      "assets": [
+        "P01_front_skin",
+        "P02_three_quarter_skin"
+      ],
+      "photo": "1536x1024 PNG, adult, front or 30-45 degree yaw, face 35-55% of frame height, visible pores and flyaway hair, soft 45-degree key plus weak fill, no beauty filter, no HDR halos, no pre-sharpening",
+      "video": "Optional 124-frame 24fps guide for REF2VA only; plain realism/detail I2V uses the photo",
+      "acceptance": "Keep an unretouched but well-focused source; detail LoRA cannot recover information absent from the source"
+    },
+    "detail": {
+      "assets": [
+        "P01_front_skin",
+        "V04_soft_source"
+      ],
+      "photo": "Same as realism; include one naturally sharp and one mildly soft/compressed copy, never an artificially pixelated face for the main test",
+      "video": "V04: 1024x576, 124 frames, 24fps, single locked shot, mild real compression/softness, same aspect ratio at output; REF2VA restore and sharpness require guide/Add Guide wiring",
+      "acceptance": "Compare same seed and prompt; reject HF temporal growth above 10% even if static Laplacian rises"
+    },
+    "motion": {
+      "assets": [
+        "V01_human_motion",
+        "V02_collisions",
+        "P03_full_body"
+      ],
+      "photo": "1024x1536 full-body or medium-wide, all articulating limbs visible, no motion blur, feet and contact surfaces visible",
+      "video": "1024x576, 107 or 124 frames at 24fps (4.46/5.17s), one continuous take, fixed camera unless camera LoRA is tested; motion must begin and end inside the clip",
+      "audio": "Not required except speech/audio-specific adapters; use silent 48kHz stereo for the common runner",
+      "acceptance": "Score temporal continuity and parked-frame runs, not just per-frame detail"
+    },
+    "face": {
+      "assets": [
+        "P01_front_skin",
+        "P04_speech_face",
+        "V03_speech"
+      ],
+      "photo": "Minimum 1024px long side, neutral expression, open eyes, unobstructed jaw/forehead, face at least 256px and 35% of image height, front view for identity; 3/4 view as a second test",
+      "video": "V03: 1024x576 or 720x1280, 124 frames, 24fps, one adult speaker, fixed camera, intelligible dry speech; 48kHz mono dialogue plus silent stereo carrier as required by runner",
+      "acceptance": "Face MAE is a fixed-ROI pixel proxy, not identity recognition; inspect expression and lip sync separately"
+    },
+    "anatomy": {
+      "assets": [
+        "A01_front_anatomy",
+        "A02_rear_anatomy",
+        "A03_action_start"
+      ],
+      "photo": "Consensual adult synthetic/reference asset, 1024x1536, target anatomy and interacting hand/object unobstructed and in the starting pose, front/rear/below angle stated explicitly, even soft light, no cropped contact point",
+      "video": "Optional 2:3 124-frame 24fps guide, fixed medium shot, action and contact point visible throughout; use 5-10s for insertion/withdrawal or repeated motion",
+      "acceptance": "Keep face and anatomy tests separate; do not infer skin improvement from an anatomy adapter"
+    },
+    "camera": {
+      "assets": [
+        "P03_full_body",
+        "V05_camera_plate"
+      ],
+      "photo": "1536x1024 medium-wide with clear foreground/background separation, subject entirely in frame, no existing extreme lens blur",
+      "video": "V05: 1024x576, 124 frames, 24fps, static plate with parallax objects; POV tests need visible body parts appropriate to the requested viewpoint",
+      "acceptance": "Use fixed seed and prompt; evaluate unwanted zoom/shake in the baseline as well as intended camera motion"
+    },
+    "nsfw": {
+      "assets": [
+        "A03_action_start",
+        "A04_repetitive_action"
+      ],
+      "photo": "Adult-only, consensual dataset, 1024x1536, exact starting pose, anatomy and hands visible, no occlusion at contact point, simple background, soft light",
+      "video": "2:3, 124-241 frames at 24fps (5-10s), one static medium shot; complete movement cycles inside the clip; audio only for adapters explicitly trained with audio",
+      "acceptance": "Run separately from skin/identity benchmarks; count frozen adjacent-frame pairs and inspect anatomy/contact drift"
+    },
+    "utility": {
+      "assets": [
+        "V06_edit_plate",
+        "P05_identity_reference"
+      ],
+      "photo": "P05: at least output resolution, clean single-subject identity reference; edited first frame must have the same geometry as the guide",
+      "video": "V06: 1024x576 or source-matched aspect, 73 or 124 frames at 24fps, one shot, no cuts; Add Guide/frame-aligned source for edit LoRAs; no turbo for Character Swap Pro",
+      "acceptance": "These are not drop-in I2V realism boosters; use their required REF2VA guide/reference graph"
+    }
+  },
+  "loras": {
+    "add_micro_details": {
+      "aliases": [
+        "Add Micro Details"
+      ],
+      "category": "detail",
+      "classes": [
+        "detail",
+        "realism"
+      ],
+      "trigger_words": [
+        "addmicrodetails"
+      ],
+      "recommended_strength": 0.5,
+      "strength_range": [
+        0.25,
+        1.0
+      ],
+      "expected_effect": "Adds fine detail and microcontrast; temporal safety unproven",
+      "asset_class": "detail",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 1242 downloads, 144 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/1377820",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "little_more_sharpness_r64": {
+      "aliases": [
+        "A Little More Sharpness R64",
+        "Sharpness_R64",
+        "minimax_h3_lms_v1.0_r64"
+      ],
+      "category": "detail",
+      "classes": [
+        "detail",
+        "utility"
+      ],
+      "trigger_words": [
+        "Enhance this video with sharp, crisp details while preserving a natural photorealistic appearance."
+      ],
+      "recommended_strength": 0.5,
+      "strength_range": [
+        0.2,
+        1.0
+      ],
+      "expected_effect": "Second-pass human-video detail enhancement, not an upscaler; REF2VA guide latents",
+      "asset_class": "detail",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 2991 downloads, 223 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/2923395",
+        "https://huggingface.co/Alissonerdx/Minimax-H3-ComfyUI"
+      ]
+    },
+    "restore_enhance_improve": {
+      "aliases": [
+        "Restore Enhance Improve REF2VA",
+        "Restore_Enhance_REF2VA"
+      ],
+      "category": "detail",
+      "classes": [
+        "detail",
+        "utility"
+      ],
+      "trigger_words": [
+        "Restore this video to high visual quality by recovering fine detail, reducing pixelation, block artifacts and compression noise while preserving the original scene, natural colors and motion"
+      ],
+      "recommended_strength": 1.0,
+      "strength_range": [
+        1.0,
+        1.0
+      ],
+      "expected_effect": "Restores low-quality guided video, reduces blur/block/compression artifacts",
+      "asset_class": "detail",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 2392 downloads, 174 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/2989135",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "photorealistic_image_generator": {
+      "aliases": [
+        "Photorealistic Image Generator",
+        "Photorealistic_Image_Generator"
+      ],
+      "category": "realism",
+      "classes": [
+        "realism"
+      ],
+      "trigger_words": [
+        "ph0t0r34l"
+      ],
+      "recommended_strength": 1.0,
+      "strength_range": [
+        0.9,
+        1.5
+      ],
+      "expected_effect": "Photorealistic still-image generation with H3 (1 or 22 frames); I2V use is secondary, not a dedicated video-skin adapter",
+      "asset_class": "realism",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "5073 downloads, 155 likes; two step variants, 3990 described as sharper/more contrasty; no temporal evidence",
+      "sources": [
+        "https://civitai.com/models/2884206",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "realism_slider": {
+      "aliases": [
+        "Realism Slider",
+        "MMH3-RealismSlider"
+      ],
+      "category": "realism",
+      "classes": [
+        "realism",
+        "detail"
+      ],
+      "trigger_words": [],
+      "recommended_strength": 1.0,
+      "strength_range": [
+        0.25,
+        2.0
+      ],
+      "expected_effect": "Less oily skin, more natural pores/wrinkles/freckles; publisher recommends 1-1.5 and testing without turbo",
+      "asset_class": "realism",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 6281 downloads, 325 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/3014078"
+      ]
+    },
+    "icy_realism": {
+      "aliases": [
+        "ICY Realism",
+        "ICY_Realism"
+      ],
+      "category": "realism",
+      "classes": [
+        "realism"
+      ],
+      "trigger_words": [
+        "icyrealism"
+      ],
+      "recommended_strength": 0.7,
+      "strength_range": [
+        0.4,
+        1.0
+      ],
+      "expected_effect": "Photorealistic/cinematic look; exact skin mechanism and temporal behavior unverified",
+      "asset_class": "realism",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 3922 downloads, 176 likes, 1 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/2924293",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "polyhedron_perfect": {
+      "aliases": [
+        "Polyhedron Perfect Eyes",
+        "Polyhedron_Perfect",
+        "perfe8ct"
+      ],
+      "category": "face",
+      "classes": [
+        "face",
+        "realism",
+        "anatomy"
+      ],
+      "trigger_words": [
+        "perfe8ct"
+      ],
+      "recommended_strength": 0.7,
+      "strength_range": [
+        0.4,
+        1.0
+      ],
+      "expected_effect": "Eyes, skin and hands refinement for T2VA; not a dedicated temporal stabilizer",
+      "asset_class": "face",
+      "verification": "Civitai publisher card",
+      "community_evidence": "3980 downloads, 143 likes; author warns final version may be overtrained and prompt-sensitive; use lower weights",
+      "sources": [
+        "https://civitai.com/models/2899220"
+      ]
+    },
+    "bunny_motion_continuity": {
+      "aliases": [
+        "BUNNY General Motion Continuity Repair"
+      ],
+      "category": "motion",
+      "classes": [
+        "motion",
+        "utility"
+      ],
+      "trigger_words": [],
+      "recommended_strength": 0.9,
+      "strength_range": [
+        0.25,
+        0.9
+      ],
+      "expected_effect": "General dynamic-motion continuity repair for running/sport/dance/acrobatics/interactions/combat; V2 targets difficult motion failure zones",
+      "asset_class": "motion",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 9354 downloads, 610 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/2890788",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "spatial_and_physics": {
+      "aliases": [
+        "Spatial and Physics",
+        "Jojocodex_spatial_physics"
+      ],
+      "category": "motion",
+      "classes": [
+        "motion"
+      ],
+      "trigger_words": [
+        "clear spatial layout",
+        "visible depth",
+        "consistent trajectories",
+        "gravity-consistent movement"
+      ],
+      "recommended_strength": 0.8,
+      "strength_range": [
+        0.8,
+        1.0
+      ],
+      "expected_effect": "Moderate improvement in collisions, trajectories and physical feedback",
+      "asset_class": "motion",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 610 downloads, 26 likes, 0 thumbs-down; no controlled temporal benchmark; author explicitly calls it unstable, cites bad footage/labels and plans retraining; cleaned 3000-step version named",
+      "sources": [
+        "https://civitai.com/models/2914769",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "cant_stop_shaking": {
+      "aliases": [
+        "Can't Stop Shaking"
+      ],
+      "category": "motion",
+      "classes": [
+        "motion",
+        "nsfw"
+      ],
+      "trigger_words": [
+        "endface1",
+        "endbody1"
+      ],
+      "recommended_strength": 0.8,
+      "strength_range": [
+        0.5,
+        1.0
+      ],
+      "expected_effect": "Adds face/body shaking; intentionally increases motion, not a stabilizer",
+      "asset_class": "motion",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 6296 downloads, 365 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/2867574",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "sss_slow_smooth": {
+      "aliases": [
+        "SSS slow and smooth animations",
+        "SSS_SlowSmooth"
+      ],
+      "category": "motion",
+      "classes": [
+        "motion"
+      ],
+      "trigger_words": [],
+      "recommended_strength": 0.7,
+      "strength_range": [
+        0.5,
+        1.0
+      ],
+      "expected_effect": "Unprompted slower/smoother animation and audio-input sync; may remove audio without input and lean cartoon in some Ref2Vid modes",
+      "asset_class": "motion",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 2329 downloads, 163 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/2985070",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "natural_face_speech": {
+      "aliases": [
+        "Natural Face & Speech",
+        "Natural Face and Speech"
+      ],
+      "category": "face",
+      "classes": [
+        "face",
+        "motion"
+      ],
+      "trigger_words": [
+        "he is speaking into a mic",
+        "he maintains eye contact with the viewer saying XYZ"
+      ],
+      "recommended_strength": 0.7,
+      "strength_range": [
+        0.6,
+        0.8
+      ],
+      "expected_effect": "Natural speaking face, eye contact and speech performance",
+      "asset_class": "face",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 4503 downloads, 218 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/2925394",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "bfs_best_face_swap": {
+      "aliases": [
+        "BFS - Best Face Swap",
+        "BFS Character Swap"
+      ],
+      "category": "face",
+      "classes": [
+        "face",
+        "utility"
+      ],
+      "trigger_words": [
+        "body_swap"
+      ],
+      "recommended_strength": 1.0,
+      "strength_range": [
+        0.7,
+        1.0
+      ],
+      "expected_effect": "Replaces guide subject while preserving performance/camera; v1.1 explicitly targets identity drift and flicker",
+      "asset_class": "utility",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 13584 downloads, 859 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/2027766",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "character_swap_pro_4500": {
+      "aliases": [
+        "Character Swap Pro 4500"
+      ],
+      "category": "face",
+      "classes": [
+        "face",
+        "utility"
+      ],
+      "trigger_words": [
+        "Replace the shown person of <Video 1> with the person of <Picture 1>"
+      ],
+      "recommended_strength": 1.0,
+      "strength_range": [
+        1.0,
+        1.0
+      ],
+      "expected_effect": "Guided character replacement with preserved camera/background/pose",
+      "asset_class": "utility",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 1685 downloads, 47 likes, 0 thumbs-down; no controlled temporal benchmark; author reports turbo issues and prompt sensitivity; no download/quality statistics",
+      "sources": [
+        "https://civitai.com/models/2988187",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "male_anatomy": {
+      "aliases": [
+        "Male Anatomy v2.02"
+      ],
+      "category": "anatomy",
+      "classes": [
+        "anatomy",
+        "nsfw"
+      ],
+      "trigger_words": [
+        "penis",
+        "glans",
+        "testicles",
+        "ass",
+        "anus gap"
+      ],
+      "recommended_strength": 0.9,
+      "strength_range": [
+        0.4,
+        1.5
+      ],
+      "expected_effect": "Male anatomical structure from front/behind; V2 trained at 2048, not trained on motion",
+      "asset_class": "anatomy",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "H3 versions: 9192 downloads, 451 likes; author notes occasional misplaced anus and recommends changing strength/seed; no motion training",
+      "sources": [
+        "https://civitai.com/models/2839513",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "hmpussy": {
+      "aliases": [
+        "HMPussy v2.0",
+        "HMPussy"
+      ],
+      "category": "anatomy",
+      "classes": [
+        "anatomy",
+        "nsfw"
+      ],
+      "trigger_words": [
+        "pussy",
+        "vagina",
+        "anus"
+      ],
+      "recommended_strength": 0.6,
+      "strength_range": [
+        0.4,
+        0.8
+      ],
+      "expected_effect": "Female anatomical detail; V2 current, earlier hmpussy motion version used 0.35",
+      "asset_class": "anatomy",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "H3 versions: 57970 downloads, 1737 likes; earlier versions documented hit/miss anus anatomy; V2 temporal quality unverified",
+      "sources": [
+        "https://civitai.com/models/2846342",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "innie_pussy": {
+      "aliases": [
+        "Innie Pussy"
+      ],
+      "category": "anatomy",
+      "classes": [
+        "anatomy",
+        "nsfw"
+      ],
+      "trigger_words": [
+        "inniepussy"
+      ],
+      "recommended_strength": 0.8,
+      "strength_range": [
+        0.5,
+        1.0
+      ],
+      "expected_effect": "Specific external anatomical shape in front/rear views",
+      "asset_class": "anatomy",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "13490 downloads, 474 likes; same HMInnie family; no controlled temporal evidence",
+      "sources": [
+        "https://civitai.com/models/2853405",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "synth_pussy": {
+      "aliases": [
+        "Synth Pussy"
+      ],
+      "category": "anatomy",
+      "classes": [
+        "anatomy",
+        "nsfw"
+      ],
+      "trigger_words": [],
+      "recommended_strength": 0.8,
+      "strength_range": [
+        0.5,
+        1.0
+      ],
+      "expected_effect": "Specific smooth/glossy anatomical appearance and reveal actions",
+      "asset_class": "anatomy",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "H3 versions: 25331 downloads, 1009 likes; no official trigger; quality evidence is publisher examples",
+      "sources": [
+        "https://civitai.com/models/2509189",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "hminnie": {
+      "aliases": [
+        "HMInnie"
+      ],
+      "category": "anatomy",
+      "classes": [
+        "anatomy",
+        "nsfw"
+      ],
+      "trigger_words": [
+        "inniepussy shown from the front",
+        "inniepussy shown from behind",
+        "inniepussy shown from below"
+      ],
+      "recommended_strength": 0.8,
+      "strength_range": [
+        0.5,
+        1.0
+      ],
+      "expected_effect": "Controlled anatomical shape with explicit camera-side and shape language",
+      "asset_class": "anatomy",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 13490 downloads, 474 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/2853405",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "pussy_anus_preview2": {
+      "aliases": [
+        "Pussy & Anus Preview2",
+        "Pussy and Anus Preview2"
+      ],
+      "category": "anatomy",
+      "classes": [
+        "anatomy",
+        "nsfw"
+      ],
+      "trigger_words": [
+        "pussy4nus"
+      ],
+      "recommended_strength": 0.8,
+      "strength_range": [
+        0.8,
+        0.87
+      ],
+      "expected_effect": "Anatomical preview/visibility; trigger unverified",
+      "asset_class": "anatomy",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "H3 previews: 14158 downloads, 554 likes; author gives no recommended setting, examples use 0.8-0.87",
+      "sources": [
+        "https://civitai.com/models/2838518",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "hmnsfw": {
+      "aliases": [
+        "HMNSFW v2.5",
+        "HMNSFW"
+      ],
+      "category": "nsfw",
+      "classes": [
+        "nsfw",
+        "motion",
+        "anatomy"
+      ],
+      "trigger_words": [],
+      "recommended_strength": 0.7,
+      "strength_range": [
+        0.5,
+        0.9
+      ],
+      "expected_effect": "General explicit action/anatomy; V2.5 has no trained trigger, older V2 used hmmotion",
+      "asset_class": "nsfw",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "H3 versions: 79211 downloads, 2681 likes; V3 Extreme Realism exists; V2.5/V3 trainedWords empty",
+      "sources": [
+        "https://civitai.com/models/2834417",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "fingering": {
+      "aliases": [
+        "Fingering"
+      ],
+      "category": "nsfw",
+      "classes": [
+        "nsfw",
+        "anatomy",
+        "motion"
+      ],
+      "trigger_words": [
+        "She slides two fingers into her vagina",
+        "She moves her fingers in and out of her vagina"
+      ],
+      "recommended_strength": 0.8,
+      "strength_range": [
+        0.8,
+        1.0
+      ],
+      "expected_effect": "Specific hand action with rhythmic insertion/withdrawal",
+      "asset_class": "nsfw",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "H3 v1.1: 6583 downloads, 305 likes; author tested 0.8; independent catalog notes solo-female bias",
+      "sources": [
+        "https://civitai.com/models/2007360",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions",
+        "https://huggingface.co/nyxia/H3-Loras/raw/main/loras.json"
+      ]
+    },
+    "beanflk_masturbation": {
+      "aliases": [
+        "BEANFLK Masturbation",
+        "BEANFLK - Masturbation"
+      ],
+      "category": "nsfw",
+      "classes": [
+        "nsfw",
+        "anatomy",
+        "motion"
+      ],
+      "trigger_words": [
+        "BEANFLK"
+      ],
+      "recommended_strength": 0.4,
+      "strength_range": [
+        0.4,
+        0.4
+      ],
+      "expected_effect": "Specific hand action, depth control, climax motion and jointly generated audio",
+      "asset_class": "nsfw",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "H3: 6032 downloads, 240 likes; author reports clean 0.4 and artifacts far above normal strength (nipple/breast desync or growth)",
+      "sources": [
+        "https://civitai.com/models/2829335",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "jerking_off": {
+      "aliases": [
+        "Jerking Off"
+      ],
+      "category": "nsfw",
+      "classes": [
+        "nsfw",
+        "anatomy",
+        "motion"
+      ],
+      "trigger_words": [
+        "He is jerking off",
+        "She is jerking off"
+      ],
+      "recommended_strength": 0.8,
+      "strength_range": [
+        0.5,
+        1.0
+      ],
+      "expected_effect": "Repetitive hand motion; author recommends separate penis helper",
+      "asset_class": "nsfw",
+      "verification": "mirrored author text",
+      "community_evidence": "dependency and starting-visibility requirements documented; quality unknown",
+      "sources": [
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "dildo_masturbation": {
+      "aliases": [
+        "Dildo Masturbation v2.0",
+        "Dildo Masturbation"
+      ],
+      "category": "nsfw",
+      "classes": [
+        "nsfw",
+        "anatomy",
+        "motion"
+      ],
+      "trigger_words": [
+        "She slide a dildo in and out of her pussy"
+      ],
+      "recommended_strength": 0.8,
+      "strength_range": [
+        0.5,
+        1.0
+      ],
+      "expected_effect": "Object insertion/withdrawal action",
+      "asset_class": "nsfw",
+      "verification": "CivArchive card and HF mirror",
+      "community_evidence": "card calls v2 early version; quality evidence sparse",
+      "sources": [
+        "https://civarchive.com/models/2890955?modelVersionId=3285564",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "side_splits_start": {
+      "aliases": [
+        "Side splits start"
+      ],
+      "category": "nsfw",
+      "classes": [
+        "nsfw",
+        "motion"
+      ],
+      "trigger_words": [
+        "splits_pose"
+      ],
+      "recommended_strength": 0.8,
+      "strength_range": [
+        0.5,
+        1.0
+      ],
+      "expected_effect": "Splits pose with FL2VA zoom-out feature",
+      "asset_class": "nsfw",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "H3 FL2VA: 1462 downloads, 88 likes; publisher examples, no temporal metrics",
+      "sources": [
+        "https://civitai.com/models/1855103",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "shaky_handheld_camera": {
+      "aliases": [
+        "Shaky handheld camera",
+        "Shaky, handheld camera"
+      ],
+      "category": "camera",
+      "classes": [
+        "camera",
+        "motion"
+      ],
+      "trigger_words": [
+        "shaky, handheld"
+      ],
+      "recommended_strength": 1.5,
+      "strength_range": [
+        1.0,
+        1.7
+      ],
+      "expected_effect": "Stronger intentional documentary handheld shake; experimental and intrinsically bad for flicker",
+      "asset_class": "camera",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 937 downloads, 57 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/2592748",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "telephoto_zoom": {
+      "aliases": [
+        "Telephoto Zoom"
+      ],
+      "category": "camera",
+      "classes": [
+        "camera"
+      ],
+      "trigger_words": [],
+      "recommended_strength": 1.0,
+      "strength_range": [
+        1.0,
+        2.0
+      ],
+      "expected_effect": "Telephoto framing/zoom behavior",
+      "asset_class": "camera",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 588 downloads, 60 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/3015922",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "drone_shot": {
+      "aliases": [
+        "Drone Shot"
+      ],
+      "category": "camera",
+      "classes": [
+        "camera"
+      ],
+      "trigger_words": [
+        "dr0nesh0t"
+      ],
+      "recommended_strength": 0.8,
+      "strength_range": [
+        0.5,
+        1.0
+      ],
+      "expected_effect": "Faster/more aggressive aerial camera motion and stronger landscape color/contrast",
+      "asset_class": "camera",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 2387 downloads, 163 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/2857065",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "crossview_warp": {
+      "aliases": [
+        "CrossView-Warp",
+        "CrossView Warp"
+      ],
+      "category": "camera",
+      "classes": [
+        "camera",
+        "utility"
+      ],
+      "trigger_words": [
+        "crossview"
+      ],
+      "recommended_strength": 0.9,
+      "strength_range": [
+        0.8,
+        1.0
+      ],
+      "expected_effect": "Generates a new camera viewpoint from source video plus a depth-warp video; requires CrossViewWarp node and two video inputs",
+      "asset_class": "camera",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 694 downloads, 91 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/2952518",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "pov_doggy": {
+      "aliases": [
+        "POV Doggy"
+      ],
+      "category": "camera",
+      "classes": [
+        "camera",
+        "nsfw"
+      ],
+      "trigger_words": [
+        "POV",
+        "doggy style"
+      ],
+      "recommended_strength": 0.8,
+      "strength_range": [
+        0.5,
+        1.0
+      ],
+      "expected_effect": "First-person explicit viewpoint",
+      "asset_class": "camera",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "H3: 5627 downloads, 246 likes; author explicitly notes that parts can be mushy",
+      "sources": [
+        "https://civitai.com/models/1893639",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "male_pov": {
+      "aliases": [
+        "Male Pov",
+        "Male POV"
+      ],
+      "category": "camera",
+      "classes": [
+        "camera",
+        "nsfw"
+      ],
+      "trigger_words": [
+        "mpov",
+        "first-person perspective pov video",
+        "high angle",
+        "eye level",
+        "low angle"
+      ],
+      "recommended_strength": 0.8,
+      "strength_range": [
+        0.5,
+        1.0
+      ],
+      "expected_effect": "Male first-person viewpoint",
+      "asset_class": "camera",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 6438 downloads, 286 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/2966380",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "female_pov": {
+      "aliases": [
+        "Female POV"
+      ],
+      "category": "camera",
+      "classes": [
+        "camera",
+        "nsfw"
+      ],
+      "trigger_words": [
+        "fpov",
+        "first-person perspective pov video",
+        "high angle",
+        "eye level",
+        "low angle"
+      ],
+      "recommended_strength": 0.7,
+      "strength_range": [
+        0.7,
+        0.7
+      ],
+      "expected_effect": "Female/body-aware first-person viewpoint with explicit angle and visible body parts",
+      "asset_class": "camera",
+      "verification": "Civitai direct model plus mirrored author text",
+      "community_evidence": "3471 downloads, 195 likes; author: 28-image helper, not perfect, tune seed/strength/epoch",
+      "sources": [
+        "https://civitai.com/models/2967915",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "edge_time": {
+      "aliases": [
+        "Edge Time"
+      ],
+      "category": "nsfw",
+      "classes": [
+        "nsfw",
+        "motion"
+      ],
+      "trigger_words": [
+        "Edge0T"
+      ],
+      "recommended_strength": 1.0,
+      "strength_range": [
+        1.0,
+        1.0
+      ],
+      "expected_effect": "Slow teasing hand/oral edging motion, not a time-effect LoRA",
+      "asset_class": "nsfw",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 2453 downloads, 159 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/3016803",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "frozen_world": {
+      "aliases": [
+        "Frozen World Time-Freeze",
+        "Frozen World - Time-Freeze"
+      ],
+      "category": "motion",
+      "classes": [
+        "motion",
+        "utility"
+      ],
+      "trigger_words": [
+        "timefr33ze"
+      ],
+      "recommended_strength": 1.0,
+      "strength_range": [
+        1.0,
+        1.0
+      ],
+      "expected_effect": "Freezes background people/objects while one person walks; static camera",
+      "asset_class": "motion",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 1059 downloads, 63 likes, 0 thumbs-down; no controlled temporal benchmark; author documents limits: moving crowds/birds/fountains, moving camera, untested I2V/turbo/stacking",
+      "sources": [
+        "https://civitai.com/models/2986051",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "timefreezes": {
+      "aliases": [
+        "Timefreezes"
+      ],
+      "category": "motion",
+      "classes": [
+        "motion",
+        "utility"
+      ],
+      "trigger_words": [
+        "A fifteen-second photoreal time freeze video"
+      ],
+      "recommended_strength": 0.8,
+      "strength_range": [
+        0.5,
+        1.0
+      ],
+      "expected_effect": "Strengthens time-freeze concept from 151 fifteen-second clips; author states experimental shortcomings and weak sexual anatomy",
+      "asset_class": "motion",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 3961 downloads, 269 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/2437696",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "motion_speed_slider": {
+      "aliases": [
+        "Motion-Speed Slider v1.1",
+        "Motion-Speed Slider"
+      ],
+      "category": "motion",
+      "classes": [
+        "motion"
+      ],
+      "trigger_words": [],
+      "recommended_strength": 4.0,
+      "strength_range": [
+        -8.0,
+        8.0
+      ],
+      "expected_effect": "Spatial/camera motion-speed slider; V1.1 reduces composition interference, below 4 mostly preserves content, above 4 can significantly change it",
+      "asset_class": "motion",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 4887 downloads, 322 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/2985458",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "pornmaster_fast_motion": {
+      "aliases": [
+        "PornMaster Fast Motion Slider"
+      ],
+      "category": "motion",
+      "classes": [
+        "motion",
+        "nsfw"
+      ],
+      "trigger_words": [
+        "the person moves at fast speed, performing the action quickly and energetically. fast motion.",
+        "the person moves at slow speed, performing the action slowly and deliberately. slow motion."
+      ],
+      "recommended_strength": 2.0,
+      "strength_range": [
+        -5.0,
+        5.0
+      ],
+      "expected_effect": "Makes built-in fast/slow motion more extreme; V2 reduces background impact but audio remains affected",
+      "asset_class": "motion",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 5711 downloads, 397 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/2948513",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "finalcut": {
+      "aliases": [
+        "FinalCut MiniMaxH3",
+        "FinalCut_Beta"
+      ],
+      "category": "utility",
+      "classes": [
+        "utility",
+        "motion",
+        "nsfw"
+      ],
+      "trigger_words": [],
+      "recommended_strength": 0.4,
+      "strength_range": [
+        0.3,
+        0.8
+      ],
+      "expected_effect": "Broad fine-tune extraction increasing animation speed and shifting toward NSFW; not a single-concept LoRA",
+      "asset_class": "utility",
+      "verification": "Civitai publisher card plus mirror filename",
+      "community_evidence": "2072 downloads, 110 likes, 3 dislikes, 38 comments; author labels beta/unpredictable and warns about NSFW shift",
+      "sources": [
+        "https://civitai.com/models/2970219",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "vfx_edit": {
+      "aliases": [
+        "VFX-Edit R128",
+        "VFX-Edit"
+      ],
+      "category": "utility",
+      "classes": [
+        "utility"
+      ],
+      "trigger_words": [
+        "vfx_edit:"
+      ],
+      "recommended_strength": 1.0,
+      "strength_range": [
+        0.7,
+        1.0
+      ],
+      "expected_effect": "Frame-aligned guided video edit preserving take/timing; FFP variant propagates edited first frame",
+      "asset_class": "utility",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 1072 downloads, 133 likes, 0 thumbs-down; no controlled temporal benchmark; author explicitly experimental; documents drift of identity/text/fingers/hair and lower-GPU softness/flicker",
+      "sources": [
+        "https://civitai.com/models/2954203",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "intricate_composition": {
+      "aliases": [
+        "ADD Intricate Composition"
+      ],
+      "category": "detail",
+      "classes": [
+        "detail",
+        "utility"
+      ],
+      "trigger_words": [
+        "intricatedetails"
+      ],
+      "recommended_strength": 0.6,
+      "strength_range": [
+        0.3,
+        1.0
+      ],
+      "expected_effect": "Adds detail/complexity to objects, clothing, patterns and scenes",
+      "asset_class": "detail",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 359 downloads, 35 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/739343",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "pk_parasyte_turbo": {
+      "aliases": [
+        "PK Parasyte Turbo"
+      ],
+      "category": "utility",
+      "classes": [
+        "utility",
+        "detail"
+      ],
+      "trigger_words": [],
+      "recommended_strength": 1.5,
+      "strength_range": [
+        1.5,
+        5.0
+      ],
+      "expected_effect": "Experimental Dareties mutation to remove turbo behavior and clean visuals/audio; requires author AdaLN fix and SLA nodes",
+      "asset_class": "utility",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 2081 downloads, 136 likes, 0 thumbs-down; no controlled temporal benchmark; unknown",
+      "sources": [
+        "https://civitai.com/models/2901588",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "breast_drop_physics": {
+      "aliases": [
+        "Breast Drop Physics"
+      ],
+      "category": "motion",
+      "classes": [
+        "motion",
+        "nsfw"
+      ],
+      "trigger_words": [
+        "breasts are lifted up"
+      ],
+      "recommended_strength": 1.0,
+      "strength_range": [
+        1.0,
+        1.0
+      ],
+      "expected_effect": "Drop after lift; author warns not to prompt bouncing",
+      "asset_class": "motion",
+      "verification": "mirrored author text",
+      "community_evidence": "author reports artifact-free showcases at 1.0; independent evidence absent",
+      "sources": [
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "heavy_breasts_physics": {
+      "aliases": [
+        "Heavy Breasts Physics"
+      ],
+      "category": "motion",
+      "classes": [
+        "motion",
+        "nsfw"
+      ],
+      "trigger_words": [
+        "bbwbounce",
+        "she shakes her breasts"
+      ],
+      "recommended_strength": 0.6,
+      "strength_range": [
+        0.6,
+        1.1
+      ],
+      "expected_effect": "Weight-responsive breast motion",
+      "asset_class": "motion",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 7525 downloads, 460 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/2949712",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "bouncing_boobs_fl2va": {
+      "aliases": [
+        "Bouncing Boobs FL2VA"
+      ],
+      "category": "motion",
+      "classes": [
+        "motion",
+        "nsfw"
+      ],
+      "trigger_words": [
+        "her breast is bouncing up and down",
+        "her breast is bouncing from left to right"
+      ],
+      "recommended_strength": 0.8,
+      "strength_range": [
+        0.5,
+        1.0
+      ],
+      "expected_effect": "FL2VA breast bounce motion",
+      "asset_class": "motion",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 17737 downloads, 1020 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/1343431",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "bouncing_boobs_ref2v": {
+      "aliases": [
+        "Bouncing Boobs REF2V",
+        "Bouncing Boobs Ref2Vid"
+      ],
+      "category": "motion",
+      "classes": [
+        "motion",
+        "nsfw"
+      ],
+      "trigger_words": [
+        "her breast is bouncing up and down",
+        "her breast is bouncing from left to right"
+      ],
+      "recommended_strength": 0.7,
+      "strength_range": [
+        0.5,
+        1.0
+      ],
+      "expected_effect": "REF2V breast bounce motion; v0.7 mirrored",
+      "asset_class": "motion",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 17737 downloads, 1020 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/1343431",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "ahegao_face": {
+      "aliases": [
+        "Ahegao Face v3.0",
+        "Ahegao Face"
+      ],
+      "category": "face",
+      "classes": [
+        "face",
+        "nsfw"
+      ],
+      "trigger_words": [
+        "he crosses her eyes",
+        "opens her mouth",
+        "sticks out her tongue",
+        "making the ahegao face"
+      ],
+      "recommended_strength": 0.8,
+      "strength_range": [
+        0.5,
+        1.0
+      ],
+      "expected_effect": "Stylized crossed-eye/open-mouth/tongue expression; intentionally destabilizes neutral identity",
+      "asset_class": "face",
+      "verification": "mirror filename with v1/v2/v3",
+      "community_evidence": "three versions exist; changelog and artifact evidence unknown",
+      "sources": [
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "ahegao_precision": {
+      "aliases": [
+        "Ahegao Precision REF2VA"
+      ],
+      "category": "face",
+      "classes": [
+        "face",
+        "nsfw"
+      ],
+      "trigger_words": [
+        "ahg_expr"
+      ],
+      "recommended_strength": 0.8,
+      "strength_range": [
+        0.5,
+        1.0
+      ],
+      "expected_effect": "REF2VA independent control of eye direction, mouth/lips, tongue and saliva",
+      "asset_class": "face",
+      "verification": "Civitai publisher card / H3 version",
+      "community_evidence": "Civitai H3 versions: 1954 downloads, 125 likes, 0 thumbs-down; no controlled temporal benchmark",
+      "sources": [
+        "https://civitai.com/models/2993800",
+        "https://huggingface.co/EllaPriest45/MinimaxH3_Actions"
+      ]
+    },
+    "realism_people": {
+      "aliases": [
+        "Realism People",
+        "h3-realism-people-t2v-i2v-r2v",
+        "fal_h3"
+      ],
+      "category": "realism",
+      "classes": [
+        "realism",
+        "detail",
+        "face"
+      ],
+      "trigger_words": [
+        "r34l1sm"
+      ],
+      "recommended_strength": 0.65,
+      "strength_range": [
+        0.6,
+        1.0
+      ],
+      "expected_effect": "Natural skin texture, coherent eyes/micro-expressions, film lighting and subtle documentary motion",
+      "asset_class": "realism",
+      "verification": "fal publisher model card plus local measured result",
+      "community_evidence": "publisher shows 19 same-seed pairs; locally measured +32.6% texture at 0.65 with crunchy hair edges/dark dots",
+      "sources": [
+        "https://huggingface.co/fal/MiniMax-H3-Realism-People-LoRA"
+      ]
+    }
+  }
+}

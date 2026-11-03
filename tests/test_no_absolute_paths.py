@@ -42,6 +42,13 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     # Existing command-line documentation example.
     ('scripts/h3_preflight.py', 'E' + ':/AI/models/comfyui/loras'): "existing CLI example",
 
+    # Existing H3 downloader roots; retained without changing its workstation behavior.
+    ('scripts/h3_lora_fetch.py', 'G' + ':\\AI\\Models\\comfyui\\loras'): "existing download destination",
+    ('scripts/h3_lora_fetch.py', 'C' + ':\\Users\\user\\AppData\\Local\\hermes\\cache\\scratch\\h3_lora_missing.json'): "existing manifest default",
+    ('scripts/h3_lora_fetch.py', 'C' + ':\\AI\\Models\\comfyui\\loras'): "existing model-root default",
+    ('scripts/h3_lora_fetch.py', 'E' + ':\\ComfyUI_windows_portable_nvidia_cu126\\ComfyUI_windows_portable\\ComfyUI\\models\\loras'): "existing model-root default",
+    ('scripts/h3_lora_fetch.py', 'C' + ':\\Users\\user\\AppData\\Local\\hermes\\cache\\models\\H3-LoRA'): "existing model-cache default",
+
     # Existing fixed drive roots probed by the workstation health dashboard.
     ('scripts/health_dashboard.py', 'C' + ':\\\\'): "existing drive root",
     ('scripts/health_dashboard.py', 'E' + ':\\\\'): "existing drive root",
