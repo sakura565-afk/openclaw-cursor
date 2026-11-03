@@ -570,6 +570,17 @@ def main() -> int:
         print("plan-only: output written by ComfyUI, no video produced", flush=True)
         return 0
     out = Path(args.out) if args.out else local_paths.SCRATCH / (args.prefix + ".mp4")
+    # Windows paths are case-insensitive, so "TESSERA_SEG64.mp4" and
+    # "tessera_seg64.mp4" are THE SAME FILE. Writing the output over the
+    # input destroys the baseline, and the comparison then measures the
+    # render against itself - which reads as a perfect 0.0% change.
+    try:
+        if out.resolve() == video.resolve():
+            print(f"ВНИМАНИЕ: выход совпадает со входом ({out.name}) - "
+                  f"база будет затёрта, сравнение бессмысленно", flush=True)
+            return 4
+    except OSError:
+        pass
     download(args.server, sub, fn, out)
     # Guard: the graph contains a LoadVideo node, so a mis-picked history
     # entry hands back the input unchanged. That is not a render.
