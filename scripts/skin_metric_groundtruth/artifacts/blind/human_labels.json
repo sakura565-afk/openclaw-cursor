@@ -1,0 +1,26 @@
+{
+  "labels": {
+    "1": "plastic",
+    "12": "plastic",
+    "13": "plastic",
+    "19": "plastic",
+    "5": "digital_sand",
+    "7": "digital_sand",
+    "9": "digital_sand",
+    "3": "pores",
+    "6": "pores",
+    "10": "pores",
+    "11": "pores",
+    "14": "pores",
+    "17": "pores",
+    "18": "pores",
+    "20": "pores",
+    "2": "digital_sand",
+    "4": "digital_sand",
+    "8": "digital_sand",
+    "15": "digital_sand",
+    "16": "digital_sand"
+  },
+  "is_human": true,
+  "_note": "human blind pass, full 20/20"
+}
