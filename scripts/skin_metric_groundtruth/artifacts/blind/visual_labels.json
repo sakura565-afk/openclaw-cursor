@@ -1,0 +1,26 @@
+{
+  "judge": "Hermes vision_analyze blind pre-check",
+  "is_human": false,
+  "labels": {
+    "1": {"class": "plastic", "confidence": "high", "reason": "Uniform, featureless light-gray surface with a smooth appearance."},
+    "2": {"class": "pores", "confidence": "high", "reason": "Dense cluster of soft-edged dark pits on an otherwise smooth gray background."},
+    "3": {"class": "pores", "confidence": "high", "reason": "Distinct irregular dark pits with smooth gray space between them."},
+    "4": {"class": "pores", "confidence": "medium", "reason": "Dense dark pit-like marks dominate; full-field granular noise is not clearly visible."},
+    "5": {"class": "digital_sand", "confidence": "high", "reason": "Fine granular noise covers the entire crop evenly."},
+    "6": {"class": "pores", "confidence": "high", "reason": "Clearly separated dark pits and blotches on a smooth background."},
+    "7": {"class": "digital_sand", "confidence": "high", "reason": "Consistent full-field grain without a smooth surface appearance."},
+    "8": {"class": "digital_sand", "confidence": "high", "reason": "Pronounced granular noise is visible across the background and over the pitted central region."},
+    "9": {"class": "digital_sand", "confidence": "high", "reason": "Dense, even grain covers the whole crop."},
+    "10": {"class": "pores", "confidence": "medium", "reason": "Sparse, faint discrete pits on an otherwise smooth gray surface; low contrast reduces certainty."},
+    "11": {"class": "pores", "confidence": "medium", "reason": "Small isolated pit-like marks are scattered across a mostly smooth background."},
+    "12": {"class": "plastic", "confidence": "high", "reason": "Smooth, uniform mid-gray surface without visible pits or grain."},
+    "13": {"class": "plastic", "confidence": "high", "reason": "Featureless light-gray surface with no discernible texture."},
+    "14": {"class": "pores", "confidence": "high", "reason": "Numerous discrete dark pits clustered on a smooth gray ground."},
+    "15": {"class": "digital_sand", "confidence": "high", "reason": "Uniform fine-grained noise extends across the entire crop."},
+    "16": {"class": "digital_sand", "confidence": "high", "reason": "Strong full-field grain remains visible around and across the dense dark pits."},
+    "17": {"class": "pores", "confidence": "high", "reason": "Distinct dark pits form a central cluster on a comparatively smooth background."},
+    "18": {"class": "pores", "confidence": "medium", "reason": "Very faint sparse pits are visible on an otherwise smooth gray surface."},
+    "19": {"class": "plastic", "confidence": "high", "reason": "Uniform dark-gray surface with a smooth, featureless appearance."},
+    "20": {"class": "pores", "confidence": "medium", "reason": "Scattered small discrete pits on a mostly smooth background, with modest contrast."}
+  }
+}
