@@ -41,7 +41,7 @@ def build_workflow(a):
     nodes = {
         "1": {"class_type": "LoadImage", "inputs": {"image": a.image}},
         "2": {"class_type": "UNETLoader", "inputs": {"unet_name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors", "weight_dtype": "default"}},
-        "3": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors", "type": "minimax"}},
+        "3": {"class_type": "CLIPLoader", "inputs": {"clip_name": a.clip_name, "type": "minimax"}},
         "4": {"class_type": "VAELoader", "inputs": {"vae_name": "minimax_h3_video_vae_fp16.safetensors"}},
     }
     prev_m, prev_c = "2", "3"
@@ -230,6 +230,8 @@ def main():
     p.add_argument("--prompt-file", required=True)
     p.add_argument("--prompt-prefix", default="")
     p.add_argument("--loras-json", default="[]")
+    p.add_argument("--clip-name", default="qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+                   help="text encoder for H3; the Heretic build is the uncensored one")
     p.add_argument("--negative", default="")
     p.add_argument("--width", type=int, default=1056)
     p.add_argument("--height", type=int, default=704)
