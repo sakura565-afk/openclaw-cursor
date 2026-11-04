@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Sequence
 
-from .gate import analyze_video
+try:
+    from .gate import analyze_video
+except ImportError:  # direct script execution: python scripts/scene_integrity_gate/cli.py
+    _PKG_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+    if _PKG_ROOT not in sys.path:
+        sys.path.insert(0, _PKG_ROOT)
+    from scripts.scene_integrity_gate.gate import analyze_video
 
 
 def _parser() -> argparse.ArgumentParser:
