@@ -62,14 +62,21 @@ def build_workflow(a):
         # NOTE: the 2026-10 core has no negative_prompt input on the H3 node - ComfyUI
         # silently ignores unknown inputs, so a negative prompt there was dead weight.
         "width": a.width, "height": a.height, "length": a.length}
-    ref_images = getattr(a, "ref_images", None) or []
+    # argparse turns "--ref-image" into a.ref_image (singular), but the graph
+    # builder read a.ref_images - so the flag was silently ignored and the
+    # REF2VA branch never activated. Accept both spellings.
+    ref_images = (getattr(a, "ref_image", None) or getattr(a, "ref_images", None) or [])
+    if isinstance(ref_images, str):
+        ref_images = [ref_images]
     guide_video = getattr(a, "guide_video", "") or ""
     if ref_images or guide_video:
         # REF2VA mode: a reference image carries the subject, the prompt drives the action.
         nodes["2"]["inputs"]["unet_name"] = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
         # The official R2V template decodes video with the int8 convrot VAE (2.6 GB
         # instead of 4.9 GB for fp16) - same pixels, much less VRAM.
+        # --vae-name overrides it, so the VAE can be A/B tested on the same seed.
         nodes["4"]["inputs"]["vae_name"] = getattr(
+            a, "vae_name", None) or getattr(
             a, "ref_vae", "minimax_h3_video_vae_int8_convrot.safetensors")
         # The audio VAE gets its own id: node "5" may already hold a LoRA node
         # created by the loop above, and overwriting it silently swapped the
@@ -205,6 +212,9 @@ def main():
                    help="image in ComfyUI/input pinned as the LAST frame of the clip")
     p.add_argument("--guide-image", default="",
                    help="image in ComfyUI/input added as a guide reference (MiniMaxH3AddGuide)")
+    p.add_argument("--vae-name", default="",
+                   help="override the video VAE, e.g. minimax_h3_video_vae_fp16.safetensors "
+                        "(ref2va default is int8_convrot; fl2va already uses fp16)")
     p.add_argument("--guide-video", default="",
                    help="clip in ComfyUI/input used as the ALIGNED guide: the whole clip is "
                         "fed back so its guide latents sit at the same temporal and spatial "

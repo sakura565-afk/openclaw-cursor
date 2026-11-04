@@ -55,6 +55,10 @@ def _h3_args(**overrides):
         guide_image="",
         guide_frame=0,
         ref_images=[],
+        # argparse turns "--ref-image" into ref_image (singular). The fixture
+        # used the plural spelling, which is exactly what the graph builder
+        # used to read - so the broken flag was green in CI.
+        ref_image=[],
         ref_image_size="match",
         turbo=False,
         clip_name="qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
@@ -195,6 +199,18 @@ class TestH3ReferenceMode:
     def test_reference_mode_uses_the_ref2va_model(self) -> None:
         graph = h3.build_workflow(_h3_args(ref_images=["ref.jpg"]))
         assert graph["2"]["inputs"]["unet_name"] == "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+
+    def test_ref_image_flag_spelling_activates_reference_mode(self) -> None:
+        """argparse stores --ref-image as ref_image; the plural spelling silently
+        disabled the whole REF2VA branch and CI stayed green on the broken code."""
+        graph = h3.build_workflow(_h3_args(ref_image=["ref.jpg"]))
+        node = next(v for v in graph.values() if v["class_type"] == "MiniMaxH3ReferenceToVideo")
+        assert node["inputs"]["ref_images"]
+
+    def test_vae_name_overrides_the_ref2va_video_vae(self) -> None:
+        graph = h3.build_workflow(
+            _h3_args(ref_images=["ref.jpg"], vae_name="minimax_h3_video_vae_fp16.safetensors"))
+        assert graph["4"]["inputs"]["vae_name"] == "minimax_h3_video_vae_fp16.safetensors"
 
     def test_reference_mode_uses_the_reference_node(self) -> None:
         graph = h3.build_workflow(_h3_args(ref_images=["ref.jpg"]))

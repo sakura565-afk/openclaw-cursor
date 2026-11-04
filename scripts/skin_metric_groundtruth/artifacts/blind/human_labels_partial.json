@@ -1,0 +1,40 @@
+{
+  "labels": {
+    "1": {
+      "human": "plastic",
+      "truth": "plastic",
+      "metric": "pores"
+    },
+    "5": {
+      "human": "digital_sand",
+      "truth": "digital_sand",
+      "metric": null
+    },
+    "7": {
+      "human": "digital_sand",
+      "truth": "digital_sand",
+      "metric": null
+    },
+    "9": {
+      "human": "digital_sand",
+      "truth": "digital_sand",
+      "metric": null
+    },
+    "12": {
+      "human": "plastic",
+      "truth": "plastic",
+      "metric": null
+    },
+    "13": {
+      "human": "plastic",
+      "truth": "plastic",
+      "metric": null
+    },
+    "19": {
+      "human": "plastic",
+      "truth": "plastic",
+      "metric": null
+    }
+  },
+  "_note": "human blind pass, partial 7/20"
+}
