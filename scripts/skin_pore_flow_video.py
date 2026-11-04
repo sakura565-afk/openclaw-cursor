@@ -53,7 +53,8 @@ def farneback_flow(frames, winsize=21, levels=3, iterations=3, poly_n=5, poly_si
     The injector indexes flow[i] for frame i, so frame 0 gets a zero flow
     (there is no previous frame to move from).
     """
-    grays = [cv2.cvtColor(f, cv2.COLOR_RGB2GRAY) for f in frames]
+    grays = [cv2.cvtColor((np.clip(f, 0.0, 1.0) * 255.0).astype(np.uint8),
+                          cv2.COLOR_RGB2GRAY) for f in frames]
     zero = np.zeros(frames[0].shape[:2], dtype=np.float32)
     flows = [(zero, zero)]
     for i in range(1, len(grays)):
