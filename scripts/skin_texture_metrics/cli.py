@@ -25,7 +25,10 @@ from .metrics import (
 
 
 def format_table(rows: Sequence[dict]) -> str:
-    headers = ("label", "class", "structure", "pore_rms", "survival", "pore", "pore_blur", "lap")
+    headers = (
+        "label", "class", "structure", "pore_rms", "survival",
+        "shape_n/10k", "shape_width", "pore", "pore_blur", "lap",
+    )
     table_rows = []
     for row in rows:
         table_rows.append([
@@ -34,6 +37,8 @@ def format_table(rows: Sequence[dict]) -> str:
             f"{float(row['structure_score']):.3f}",
             f"{float(row['pore_rms']):.3f}",
             f"{float(row['survival']):.3f}",
+            f"{float(row.get('shape_component_density_per_10k', 0.0)):.1f}",
+            f"{float(row.get('shape_median_component_width_px', 0.0)):.2f}",
             f"{float(row['pore']):.3e}",
             f"{float(row['pore_blur']):.3e}",
             f"{float(row['lap']):.2f}",

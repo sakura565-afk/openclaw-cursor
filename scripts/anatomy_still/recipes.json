@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "measurement_note": "All generation settings are proposed dry-run values until a real render passes scripts.anatomy_still.metrics.",
+  "known_failure": {
+    "scene": "chef",
+    "edit_denoise": 0.55,
+    "anatomy_lora": "qwen_image_jp_anatomy_nsfw_safetensors.safetensors",
+    "anatomy_lora_strength": 1.0,
+    "result": "apron stayed down; anatomy covered"
+  },
+  "scenes": {
+    "chef": {
+      "source": "chef_src.jpg",
+      "size": [736, 1120],
+      "status": "dry_run_unverified",
+      "edit": {
+        "denoise": 0.38,
+        "steps": 28,
+        "seed": 42031,
+        "loras": [
+          {"name": "qwen_image_edit_plus_nsfw_lora_safetensors.safetensors", "strength": 0.55},
+          {"name": "qwen_image_jp_anatomy_nsfw_safetensors.safetensors", "strength": 0.85}
+        ],
+        "prompt": "Keep the same adult woman, face, chef hat, kitchen, camera and body proportions. Lift the apron above the waist and move the underwear away from the pelvis. Expose the natural anatomy already located between the upper thighs. Preserve realistic skin texture and the original scene."
+      },
+      "mask": {"center_shift": 0.16, "width_scale": 1.20, "height_scale": 0.34, "grow": 6, "min_visibility": 0.5},
+      "refine": {
+        "backend": "qwen_masked_fix",
+        "passes": [
+          {"backend": "qwen21_masked_refine", "denoise": 0.24, "steps": 28, "seed_offset": 101, "lora_strength": 0.70},
+          {"denoise": 0.34, "steps": 32, "seed_offset": 202, "lora_strength": 0.90}
+        ],
+        "prompt": "Edit only the masked pelvis. Remove apron and underwear coverage there. Show natural adult anatomy with realistic asymmetric folds, fine skin texture and subdued colour. Keep the surrounding legs, body, clothing, face and kitchen unchanged."
+      },
+      "h3": {"prompt_suffix": "Preserve the exact visible anatomy and uncovered state of the reference still; keep natural skin detail and do not restore any clothing coverage."}
+    },
+    "katya": {
+      "source": "katya_clean.jpg",
+      "size": [800, 992],
+      "status": "dry_run_unverified",
+      "edit": {
+        "denoise": 0.34,
+        "steps": 28,
+        "seed": 42032,
+        "loras": [
+          {"name": "qwen_image_edit_plus_nsfw_lora_safetensors.safetensors", "strength": 0.50},
+          {"name": "qwen_image_jp_anatomy_nsfw_safetensors.safetensors", "strength": 0.80}
+        ],
+        "prompt": "Keep the same adult woman, face, seated pose, bedroom, lighting and camera. Move the underwear away from the pelvis while preserving the rest of the lingerie. Expose natural anatomy between the upper thighs with realistic skin detail."
+      },
+      "mask": {"center_shift": 0.13, "width_scale": 1.12, "height_scale": 0.30, "grow": 5, "min_visibility": 0.5},
+      "refine": {
+        "backend": "qwen_masked_fix",
+        "passes": [
+          {"backend": "qwen21_masked_refine", "denoise": 0.22, "steps": 28, "seed_offset": 111, "lora_strength": 0.65},
+          {"denoise": 0.32, "steps": 32, "seed_offset": 222, "lora_strength": 0.85}
+        ],
+        "prompt": "Edit only the masked pelvis. Remove fabric coverage and render natural adult anatomy with fine skin texture, soft asymmetric folds and realistic colour. Preserve the seated pose, thighs, lingerie outside the mask, face and bedroom."
+      },
+      "h3": {"prompt_suffix": "Keep the reference still's exact visible anatomy and uncovered state; retain realistic texture and the original seated pose without adding coverage."}
+    },
+    "lesbos": {
+      "source": "lesbos_src.jpg",
+      "size": [1024, 1024],
+      "status": "dry_run_unverified",
+      "edit": {
+        "denoise": 0.30,
+        "steps": 30,
+        "seed": 42033,
+        "loras": [
+          {"name": "qwen_image_edit_plus_nsfw_lora_safetensors.safetensors", "strength": 0.45},
+          {"name": "qwen_image_jp_anatomy_nsfw_safetensors.safetensors", "strength": 0.75}
+        ],
+        "prompt": "Preserve both adult women, their identities, poses, the room, lighting and camera. Remove only the fabric covering the foreground subject's pelvis and expose natural anatomy with realistic texture. Do not change the interaction or the framing."
+      },
+      "mask": {"center_shift": 0.12, "width_scale": 1.05, "height_scale": 0.28, "grow": 4, "min_visibility": 0.5},
+      "refine": {
+        "backend": "qwen_masked_fix",
+        "passes": [
+          {"backend": "qwen21_masked_refine", "denoise": 0.20, "steps": 30, "seed_offset": 121, "lora_strength": 0.60},
+          {"denoise": 0.30, "steps": 34, "seed_offset": 242, "lora_strength": 0.80}
+        ],
+        "prompt": "Edit only the masked pelvis of the detected foreground subject. Remove fabric coverage and show natural adult anatomy with fine realistic texture. Keep both people, their pose, hands, faces and the background unchanged."
+      },
+      "h3": {"prompt_suffix": "Preserve the reference still's exact visible anatomy and uncovered state, both subjects' poses and natural skin detail; do not add clothing coverage."}
+    }
+  }
+}

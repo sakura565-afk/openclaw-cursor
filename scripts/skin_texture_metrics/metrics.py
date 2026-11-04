@@ -13,6 +13,13 @@ from PIL import Image
 from scripts import compare_video_texture
 from scripts.eval_judge.metrics import gaussian_blur, laplacian
 from scripts.probe_pore_spectrum import band_energy, roi_slice
+from scripts.skin_metric_shape import (
+    SHAPE_MAX_COMPONENT_DENSITY,
+    SHAPE_MIN_COMPONENT_DENSITY,
+    SHAPE_MIN_PORE_RMS,
+    measure_shape,
+    measure_shape_sequence,
+)
 
 PORE_BAND = (3.0, 12.0)
 SPEC_BAND = (25.0, 1e9)
@@ -62,13 +69,31 @@ def _unit_interval(value: float, low: float, high: float) -> float:
     return float(np.clip((value - low) / (high - low), 0.0, 1.0))
 
 
-def classify(metrics: Mapping[str, float]) -> str:
-    """Classify activity and blur survival into the three requested regimes."""
+def legacy_classify(metrics: Mapping[str, float]) -> str:
+    """The pre-shape classifier, retained for audits and backwards callers."""
     if float(metrics["pore_rms"]) < PLASTIC_MAX_PORE_RMS:
         return "plastic"
     if float(metrics["survival"]) < SAND_MAX_SURVIVAL:
         return "digital_sand"
     return "pores"
+
+
+def classify(metrics: Mapping[str, float]) -> str:
+    """Classify energy, blur survival, and discrete-component sparsity.
+
+    Mappings without shape fields follow the legacy decision exactly.  When
+    shape is present, a measured minimum activity and component density prevent
+    flat plates or a few shading blobs from being promoted to pores.
+    """
+    density = metrics.get("shape_component_density_per_10k")
+    if density is not None:
+        pore_rms = float(metrics["pore_rms"])
+        if (
+            pore_rms >= SHAPE_MIN_PORE_RMS
+            and SHAPE_MIN_COMPONENT_DENSITY <= float(density) <= SHAPE_MAX_COMPONENT_DENSITY
+        ):
+            return "pores"
+    return legacy_classify(metrics)
 
 
 def measure_patch(gray: np.ndarray) -> dict[str, float | str]:
@@ -99,6 +124,8 @@ def measure_patch(gray: np.ndarray) -> dict[str, float | str]:
         "structure_score": activity * coherent,
         "lap": float(np.abs(laplacian(array)).mean()),
     }
+    for name, value in measure_shape(array).items():
+        result[f"shape_{name}"] = value
     result["classification"] = classify(result)
     return result
 
@@ -115,8 +142,9 @@ def _aggregate(rows: Sequence[Mapping[str, float | str]]) -> dict[str, float | s
     if not rows:
         raise ValueError("no image regions to measure")
     keys = ("pore", "pore_blur", "spec", "pore_ratio", "pore_rms", "structure_score", "lap")
+    shape_keys = tuple(key for key in rows[0] if key.startswith("shape_"))
     result: dict[str, float | str] = {
-        key: float(np.mean([float(row[key]) for row in rows])) for key in keys
+        key: float(np.mean([float(row[key]) for row in rows])) for key in keys + shape_keys
     }
     # Aggregate energy before dividing; averaging per-ROI ratios would weight a
     # tiny, nearly empty crop as heavily as a large skin region.
@@ -163,6 +191,7 @@ def measure_frames(
         raise ValueError("no frames to measure")
     selected = DEFAULT_ROIS if rois is None else rois
     per_roi: dict[str, list[Mapping[str, float | str]]] = {name: [] for name in selected}
+    crops_by_roi: dict[str, list[np.ndarray]] = {name: [] for name in selected}
     for path in paths:
         gray = _gray(path)
         for name, roi in selected.items():
@@ -172,10 +201,27 @@ def measure_frames(
                 raise ValueError(f"empty ROI {name!r} in {path}")
             if canonical and name in canonical:
                 crop = _resize_gray(crop, canonical[name])
+            crops_by_roi[name].append(crop)
             per_roi[name].append(measure_patch(crop))
     regions = {name: _aggregate(rows) for name, rows in per_roi.items()}
+    temporal = {name: measure_shape_sequence(crops) for name, crops in crops_by_roi.items()}
+    for name, region in regions.items():
+        region["temporal_shape"] = temporal[name]
     all_rows = [row for rows in per_roi.values() for row in rows]
     result = _aggregate(all_rows)
+    correlations = [
+        value
+        for row in temporal.values()
+        for value in row["neighbor_highpass_correlations"]
+    ]
+    result["temporal_shape"] = {
+        "neighbor_comparisons": len(correlations),
+        "neighbor_highpass_correlations": correlations,
+        "mean_highpass_correlation": float(np.mean(correlations)) if correlations else 1.0,
+        "temporal_component_stability": float(np.mean([
+            row["temporal_component_stability"] for row in temporal.values()
+        ])),
+    }
     result["per_roi"] = regions
     result["frames"] = len(paths)
     return result
