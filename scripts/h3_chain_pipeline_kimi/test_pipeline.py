@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import subprocess
+import wave
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from scripts.h3_chain_pipeline_kimi.pipeline import (
     ChainConfig,
     ChainPipeline,
+    SCHEMA_VERSION,
     build_audio_filter,
     build_chunk_plan,
     build_renderer_argv,
@@ -20,6 +24,7 @@ from scripts.h3_chain_pipeline_kimi.pipeline import (
     evaluate_gate,
     extract_frame,
     extract_sample_frames,
+    extract_tail_frames,
     load_state,
     main,
     probe_video,
@@ -52,6 +57,8 @@ def _config(tmp_path: Path, *, total: int = 111, retries: int = 1) -> ChainConfi
         max_texture_drop=0.25,
         state=tmp_path / "state.json",
         server="",
+        identity_lora="none",
+        tail_frames=5,
     )
 
 
@@ -117,8 +124,14 @@ def test_plan_cli_is_offline_and_writes_no_state(
     assert not state.exists()
 
 
-def test_gate_checks_both_face_drift_and_texture() -> None:
-    metrics = {"face_drift": 4.0, "pore": 100.0, "frames": 12}
+def test_gate_checks_mean_and_tail_face_drift_and_texture() -> None:
+    metrics = {
+        "face_drift": 4.0,
+        "face_drift_tail": 5.0,
+        "tail_frames": 5,
+        "pore": 100.0,
+        "frames": 12,
+    }
     good = evaluate_gate(metrics, max_face_drift=8.0, texture_floor=80.0)
     assert good.accepted and good.reasons == []
 
@@ -127,10 +140,37 @@ def test_gate_checks_both_face_drift_and_texture() -> None:
     )
     assert not drifting.accepted and "face_drift" in drifting.reasons[0]
 
+    # This is the failure mode a whole-clip mean hides: the head is stable at
+    # first, then walks away in the final frames of the chunk.
+    drifting_tail = evaluate_gate(
+        {**metrics, "face_drift_tail": 12.0},
+        max_face_drift=8.0,
+        texture_floor=80.0,
+    )
+    assert not drifting_tail.accepted
+    assert any("tail" in reason for reason in drifting_tail.reasons)
+
     smooth = evaluate_gate(
         {**metrics, "pore": 70.0}, max_face_drift=8.0, texture_floor=80.0
     )
     assert not smooth.accepted and "texture" in smooth.reasons[0]
+
+
+@pytest.mark.parametrize("pore", [0.0, -1.0, float("nan"), None])
+def test_gate_fails_closed_for_zero_or_unmeasurable_texture(pore: object) -> None:
+    result = evaluate_gate(
+        {
+            "face_drift": 1.0,
+            "face_drift_tail": 1.0,
+            "tail_frames": 5,
+            "pore": pore,
+            "frames": 12,
+        },
+        max_face_drift=8.0,
+        texture_floor=0.0,
+    )
+    assert not result.accepted
+    assert any("texture" in reason for reason in result.reasons)
 
 
 def test_gate_rejects_missing_or_nonfinite_metrics() -> None:
@@ -141,19 +181,20 @@ def test_gate_rejects_missing_or_nonfinite_metrics() -> None:
     )
     assert not result.accepted
     assert "face_drift" in result.reasons[0]
+    assert any("tail" in reason for reason in result.reasons)
 
 
 def test_best_failed_attempt_uses_normalized_gate_penalty() -> None:
     attempts = [
-        {"attempt": 0, "metrics": {"face_drift": 16.0, "pore": 100.0}},
-        {"attempt": 1, "metrics": {"face_drift": 12.0, "pore": 100.0}},
-        {"attempt": 2, "metrics": {"face_drift": 11.0, "pore": 10.0}},
+        {"attempt": 0, "metrics": {"face_drift": 16.0, "face_drift_tail": 16.0, "tail_frames": 5, "pore": 100.0}},
+        {"attempt": 1, "metrics": {"face_drift": 12.0, "face_drift_tail": 12.0, "tail_frames": 5, "pore": 100.0}},
+        {"attempt": 2, "metrics": {"face_drift": 11.0, "face_drift_tail": 11.0, "tail_frames": 5, "pore": 10.0}},
     ]
     best = choose_best_attempt(attempts, max_face_drift=8.0, texture_floor=80.0)
     assert best["attempt"] == 1
 
 
-def test_renderer_argv_uses_input_basename_audio_offset_and_seed(tmp_path: Path) -> None:
+def test_renderer_argv_matches_real_help_and_has_no_audio_offset_or_server(tmp_path: Path) -> None:
     argv = build_renderer_argv(
         image_name="anchor.png",
         output=tmp_path / "chunk.mp4",
@@ -165,27 +206,61 @@ def test_renderer_argv_uses_input_basename_audio_offset_and_seed(tmp_path: Path)
         render_frames=56,
         steps=20,
         seed=123,
-        audio_offset_frames=56,
-        server="http://127.0.0.1:8188",
     )
     assert argv[argv.index("--image") + 1] == "anchor.png"
     assert argv[argv.index("--audio") + 1].endswith("audio.m4a")
-    assert argv[argv.index("--audio-offset") + 1] == "56"
     assert argv[argv.index("--seed") + 1] == "123"
+    assert "--audio-offset" not in argv
+    assert "--server" not in argv
     assert "--guide-image" not in argv
 
+    helped = subprocess.run(
+        [argv[0], argv[2], "--help"], capture_output=True, text=True, timeout=60
+    )
+    assert helped.returncode == 0, helped.stderr
+    unknown = [item for item in argv if item.startswith("--") and item not in helped.stdout]
+    assert unknown == []
 
-def test_audio_filter_crossfades_only_the_kept_durations() -> None:
+
+def test_renderer_argv_can_pin_character_swap_reference_and_lora(tmp_path: Path) -> None:
+    argv = build_renderer_argv(
+        image_name="anchor.png",
+        identity_image_name="identity.png",
+        identity_lora="character_swap",
+        output=tmp_path / "chunk.mp4",
+        prompt_file=tmp_path / "prompt.txt",
+        audio=tmp_path / "audio.m4a",
+        prefix="job-c0-a0",
+        width=736,
+        height=1120,
+        render_frames=56,
+        steps=20,
+        seed=123,
+    )
+    assert argv[argv.index("--ref-image") + 1] == "identity.png"
+    loras = json.loads(argv[argv.index("--loras-json") + 1])
+    assert loras == [
+        {
+            "n": "minimax_h3_character_swap_v1.1_ref2va_fro.safetensors",
+            "sm": 1.0,
+            "sc": 1.0,
+        }
+    ]
+
+
+def test_audio_filter_seeks_one_source_and_overlaps_equal_power_crossfades() -> None:
     graph = build_audio_filter([56, 55, 9], fps=24.0)
+    assert graph.count("[0:a]atrim=start=") == 3
+    assert "[1:a]" not in graph and "[2:a]" not in graph
+    assert "atrim=start=0.000000:end=2.333333" in graph
+    assert "atrim=start=2.293333:end=4.625000" in graph
+    assert "atrim=start=4.585000:end=5.000000" in graph
     assert graph.count("acrossfade=d=0.04:c1=qsin:c2=qsin") == 2
-    assert "atrim=end=2.333333" in graph
-    assert "atrim=end=2.291667" in graph
-    assert "atrim=end=0.375" in graph
 
 
 def test_state_round_trip_is_atomic_and_validated(tmp_path: Path) -> None:
     path = tmp_path / "state.json"
-    state = {"schema_version": 1, "fingerprint": "abc", "chunks": []}
+    state = {"schema_version": SCHEMA_VERSION, "fingerprint": "abc", "chunks": []}
     save_state(path, state)
     assert load_state(path, expected_fingerprint="abc") == state
     assert not path.with_name(path.name + ".tmp").exists()
@@ -219,7 +294,10 @@ class FakePipeline(ChainPipeline):
     def _measure_chunk(self, video: Path, attempt_dir: Path) -> dict[str, float]:
         index = int(video.name.split("_")[1])
         attempt = int(video.name.split("_")[2].split(".")[0])
-        return self.measurements[index][attempt]
+        measured = dict(self.measurements[index][attempt])
+        measured.setdefault("face_drift_tail", measured["face_drift"])
+        measured.setdefault("tail_frames", 5)
+        return measured
 
     def _extract_last_frame(self, video: Path, output: Path) -> Path:
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -281,6 +359,56 @@ def test_resume_skips_accepted_chunks(tmp_path: Path) -> None:
     assert resumed.assemble_calls == 1
 
 
+def test_seed_base_change_invalidates_accepted_state(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    measurements = {
+        0: [{"face_drift": 1.0, "pore": 100.0, "frames": 56}],
+        1: [{"face_drift": 2.0, "pore": 110.0, "frames": 56}],
+    }
+    FakePipeline(config, measurements).run()
+
+    changed = replace(config, seed_base=config.seed_base + 1)
+    resumed = FakePipeline(changed, measurements)
+    resumed.run()
+
+    assert [call["seed"] for call in resumed.render_calls] == [43, 1_000_043]
+    state = json.loads(changed.state.read_text(encoding="utf-8"))
+    assert state["config"]["seed_base"] == 43
+    assert [chunk["initial_seed"] for chunk in state["chunks"]] == [43, 1_000_043]
+
+
+def test_measure_chunk_adds_contiguous_tail_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sample_paths = [tmp_path / f"sample_{index}.png" for index in range(4)]
+    tail_paths = [tmp_path / f"tail_{index}.png" for index in range(2)]
+    monkeypatch.setattr(
+        "scripts.h3_chain_pipeline_kimi.pipeline.extract_sample_frames",
+        lambda *args, **kwargs: sample_paths,
+    )
+    monkeypatch.setattr(
+        "scripts.h3_chain_pipeline_kimi.pipeline.extract_tail_frames",
+        lambda *args, **kwargs: tail_paths,
+    )
+    calls: list[list[str]] = []
+
+    def fake_measure(paths: list[Path]) -> dict[str, float | int]:
+        names = [path.name for path in paths]
+        calls.append(names)
+        if any(name.startswith("tail_") for name in names):
+            return {"face_drift": 9.0, "face_drift_max": 12.0, "pore": 100.0, "frames": 3}
+        return {"face_drift": 1.0, "face_drift_max": 2.0, "pore": 100.0, "frames": 4}
+
+    monkeypatch.setattr("scripts.h3_chain_pipeline_kimi.pipeline._texture_measure", fake_measure)
+    metrics = ChainPipeline(_config(tmp_path))._measure_chunk(tmp_path / "chunk.mp4", tmp_path)
+
+    assert calls[1] == [sample_paths[0].name, *(path.name for path in tail_paths)]
+    assert metrics["face_drift"] == 1.0
+    assert metrics["face_drift_tail"] == 9.0
+    assert metrics["face_drift_last"] == 12.0
+    assert metrics["tail_frames"] == 2
+
+
 def test_resume_repairs_missing_anchor_without_rerender(tmp_path: Path) -> None:
     config = _config(tmp_path)
     measurements = {
@@ -324,6 +452,7 @@ def test_real_ffmpeg_assembly_dedups_and_preserves_exact_frame_count(tmp_path: P
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         pytest.skip("ffmpeg and ffprobe are required")
     config = replace(_config(tmp_path, total=9, retries=0), chunk_frames=5)
+    _write_click_track(config.audio, [0.1, 0.25], config.total_frames / 24.0)
     videos = []
     for index in range(2):
         video = tmp_path / f"input_{index}.mp4"
@@ -350,3 +479,87 @@ def test_real_ffmpeg_assembly_dedups_and_preserves_exact_frame_count(tmp_path: P
     actual_last = pipeline._extract_last_frame(videos[0], tmp_path / "actual_last.png")
     expected_last = extract_frame(videos[0], tmp_path / "expected_last.png", 4)
     assert actual_last.read_bytes() == expected_last.read_bytes()
+    tail = extract_tail_frames(videos[0], tmp_path / "tail", frames=2)
+    assert [path.read_bytes() for path in tail] == [
+        extract_frame(videos[0], tmp_path / "tail_3.png", 3).read_bytes(),
+        expected_last.read_bytes(),
+    ]
+
+
+def _write_click_track(path: Path, times: list[float], duration: float) -> None:
+    rate = 48_000
+    samples = np.zeros(round(duration * rate), dtype=np.float64)
+    for time in times:
+        start = round(time * rate)
+        count = round(0.012 * rate)
+        envelope = np.exp(-np.linspace(0.0, 5.0, count))
+        tone = np.sin(2.0 * math.pi * 1800.0 * np.arange(count) / rate)
+        samples[start : start + count] += 0.9 * envelope * tone
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(rate)
+        output.writeframes((np.clip(samples, -1.0, 1.0) * 32767).astype("<i2").tobytes())
+
+
+def _click_times(path: Path) -> list[float]:
+    with wave.open(str(path), "rb") as source:
+        rate = source.getframerate()
+        samples = np.frombuffer(source.readframes(source.getnframes()), dtype="<i2")
+    loud = np.flatnonzero(np.abs(samples) > 500)
+    groups = np.split(loud, np.flatnonzero(np.diff(loud) > round(0.03 * rate)) + 1)
+    return [float(group[0] / rate) for group in groups if len(group)]
+
+
+class FakeMediaPipeline(FakePipeline):
+    """Fake H3 with real MP4s whose audio wrongly restarts at zero per chunk."""
+
+    def _render_attempt(self, **kwargs: object) -> Path:
+        self.render_calls.append(kwargs)
+        output = kwargs["output"]
+        assert isinstance(output, Path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-v", "error",
+                "-f", "lavfi", "-i", "testsrc=size=64x64:rate=24",
+                "-i", str(self.config.audio),
+                "-frames:v", str(kwargs["render_frames"]),
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-shortest", str(output),
+            ],
+            check=True,
+            timeout=120,
+        )
+        return output
+
+    def _extract_last_frame(self, video: Path, output: Path) -> Path:
+        return ChainPipeline._extract_last_frame(self, video, output)
+
+    def _assemble(self, plan: object) -> None:
+        ChainPipeline._assemble(self, plan)
+
+
+def test_fake_renderer_assembly_seeks_audio_and_keeps_click_track_timing(tmp_path: Path) -> None:
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        pytest.skip("ffmpeg and ffprobe are required")
+    config = replace(_config(tmp_path, total=64, retries=0), chunk_frames=22)
+    click_times = [0.2, 0.6, 1.1, 1.5, 2.1, 2.5]
+    _write_click_track(config.audio, click_times, config.total_frames / 24.0)
+    measurements = {
+        0: [{"face_drift": 1.0, "pore": 100.0, "frames": 22}],
+        1: [{"face_drift": 1.0, "pore": 100.0, "frames": 22}],
+        2: [{"face_drift": 1.0, "pore": 100.0, "frames": 22}],
+    }
+
+    report = FakeMediaPipeline(config, measurements).run()
+
+    assert report["summary"]["quality_gate_passed"] is True
+    assert probe_video(config.output)["frames"] == 64
+    assembled_audio = config.work_dir / "audio.wav"
+    actual = _click_times(assembled_audio)
+    assert actual == pytest.approx(click_times, abs=0.003)
+    # In particular, there is no second zero-based click track after the seam.
+    assert len(actual) == len(click_times)
+    for seam in (22 / 24.0, 43 / 24.0):
+        assert not any(abs(value - seam) < 0.04 for value in actual)

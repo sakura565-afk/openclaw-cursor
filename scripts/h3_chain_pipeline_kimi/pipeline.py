@@ -23,8 +23,9 @@ from typing import Any, Sequence
 
 FPS = 24.0
 CROSSFADE_SECONDS = 0.04
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SAMPLE_FRAMES = 24
+TAIL_FRAMES = 5
 SEED_CHUNK_STRIDE = 1_000_000
 RUNNER = Path(__file__).resolve().parents[1] / "h3_i2v_run.py"
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -61,6 +62,8 @@ class ChainConfig:
     max_texture_drop: float
     state: Path
     server: str
+    identity_lora: str
+    tail_frames: int
 
     @property
     def work_dir(self) -> Path:
@@ -166,25 +169,30 @@ def _finite(value: Any) -> bool:
 
 
 def evaluate_gate(metrics: dict[str, Any], *, max_face_drift: float, texture_floor: float) -> GateResult:
-    """Return all gate failures and a normalized penalty for best-effort choice."""
+    """Fail closed unless mean/tail drift and real texture are all measurable."""
     reasons: list[str] = []
     penalty = 0.0
-    drift = metrics.get("face_drift")
-    pore = metrics.get("pore")
-    frames = metrics.get("frames")
-
-    if not _finite(drift):
-        reasons.append("face_drift is missing or non-finite")
-        penalty += 1_000_000.0
-        drift_value = float("inf")
-    else:
-        drift_value = float(drift)
+    for key, label in (("face_drift", "mean face_drift"), ("face_drift_tail", "tail face_drift")):
+        value = metrics.get(key)
+        if not _finite(value):
+            reasons.append(f"{label} is missing or non-finite")
+            penalty += 1_000_000.0
+            continue
+        drift_value = float(value)
         if drift_value > max_face_drift:
-            reasons.append(f"face_drift {drift_value:.6g} exceeds {max_face_drift:.6g}")
+            reasons.append(
+                f"{label} {drift_value:.6g} exceeds {max_face_drift:.6g}"
+            )
             penalty += drift_value / max(max_face_drift, 1e-12) - 1.0
 
-    if not _finite(pore):
-        reasons.append("texture pore energy is missing or non-finite")
+    tail_frames = metrics.get("tail_frames")
+    if not isinstance(tail_frames, int) or isinstance(tail_frames, bool) or tail_frames < 1:
+        reasons.append("tail drift has no measured tail frames")
+        penalty += 1_000_000.0
+
+    pore = metrics.get("pore")
+    if not _finite(pore) or float(pore) <= 0.0:
+        reasons.append("texture pore energy is zero, missing, or non-finite")
         penalty += 1_000_000.0
         pore_value = 0.0
     else:
@@ -193,7 +201,8 @@ def evaluate_gate(metrics: dict[str, Any], *, max_face_drift: float, texture_flo
             reasons.append(f"texture pore energy {pore_value:.6g} is below floor {texture_floor:.6g}")
             penalty += texture_floor / max(pore_value, 1e-12) - 1.0
 
-    if not isinstance(frames, int) or frames < 2:
+    frames = metrics.get("frames")
+    if not isinstance(frames, int) or isinstance(frames, bool) or frames < 2:
         reasons.append("fewer than two sampled frames")
         penalty += 1_000_000.0
     return GateResult(accepted=not reasons, reasons=reasons, penalty=penalty)
@@ -207,15 +216,17 @@ def choose_best_attempt(
     if not candidates:
         raise ValueError("no measured attempt is available")
 
-    def key(attempt: dict[str, Any]) -> tuple[float, float, float, int]:
+    def key(attempt: dict[str, Any]) -> tuple[float, float, float, float, int]:
         metrics = attempt["metrics"]
         result = evaluate_gate(
             metrics, max_face_drift=max_face_drift, texture_floor=texture_floor
         )
         drift = metrics.get("face_drift")
+        tail = metrics.get("face_drift_tail")
         pore = metrics.get("pore")
         return (
             result.penalty,
+            float(tail) if _finite(tail) else float("inf"),
             float(drift) if _finite(drift) else float("inf"),
             -float(pore) if _finite(pore) else 0.0,
             int(attempt["attempt"]),
@@ -236,12 +247,14 @@ def build_renderer_argv(
     render_frames: int,
     steps: int,
     seed: int,
-    audio_offset_frames: int,
-    server: str,
+    identity_lora: str = "none",
+    identity_image_name: str = "",
 ) -> list[str]:
-    """Build a renderer command; LoadImage receives a basename, never a path."""
+    """Build only flags exposed by the real ``h3_i2v_run.py`` parser."""
     if Path(image_name).name != image_name:
         raise ValueError("renderer image must be a filename inside ComfyUI input")
+    if identity_lora not in ("none", "character_swap"):
+        raise ValueError(f"unsupported identity LoRA mode: {identity_lora}")
     argv = [
         sys.executable,
         "-u",
@@ -264,27 +277,52 @@ def build_renderer_argv(
         prefix,
         "--audio",
         str(audio),
-        "--audio-offset",
-        str(audio_offset_frames),
         "--output",
         str(output),
         "--wait",
         "5400",
     ]
-    if server:
-        argv += ["--server", server]
+    if identity_lora == "character_swap":
+        if Path(identity_image_name).name != identity_image_name or not identity_image_name:
+            raise ValueError("identity reference must be a filename inside ComfyUI input")
+        loras = [
+            {
+                "n": "minimax_h3_character_swap_v1.1_ref2va_fro.safetensors",
+                "sm": 1.0,
+                "sc": 1.0,
+            }
+        ]
+        argv += [
+            "--ref-image",
+            identity_image_name,
+            "--loras-json",
+            json.dumps(loras, separators=(",", ":")),
+        ]
     return argv
 
 
 def build_audio_filter(kept_frames: Sequence[int], fps: float = FPS) -> str:
-    """Create 40 ms qsin (equal-power) joins for the exact retained segments."""
+    """Seek one source track and join retained slices with equal-power fades.
+
+    Each fade overlaps the SAME 40 ms of source on both sides of a seam.
+    Therefore the second slice starts 40 ms before its nominal boundary;
+    source and output timestamps remain aligned instead of drifting per join.
+    """
     if not kept_frames or any(frames < 1 for frames in kept_frames):
         raise ValueError("audio filter needs positive retained frame counts")
+    durations = [frames / fps for frames in kept_frames]
+    cuts: list[float] = []
+    elapsed = 0.0
+    for index, duration in enumerate(durations):
+        elapsed += duration
+        cuts.append(elapsed)
+
     filters: list[str] = []
-    for index, frames in enumerate(kept_frames):
-        duration = frames / fps
+    for index in range(len(durations)):
+        start = 0.0 if index == 0 else cuts[index - 1] - CROSSFADE_SECONDS
         filters.append(
-            f"[{index}:a]atrim=end={duration:.6f},asetpts=PTS-STARTPTS[s{index}]"
+            f"[0:a]atrim=start={start:.6f}:end={cuts[index]:.6f},"
+            f"asetpts=PTS-STARTPTS[s{index}]"
         )
     current = "[s0]"
     for index in range(1, len(kept_frames)):
@@ -293,7 +331,7 @@ def build_audio_filter(kept_frames: Sequence[int], fps: float = FPS) -> str:
             f"{current}[s{index}]acrossfade=d={CROSSFADE_SECONDS:.2f}:c1=qsin:c2=qsin{output}"
         )
         current = output
-    total_duration = sum(kept_frames) / fps
+    total_duration = sum(durations)
     filters.append(
         f"{current}apad=whole_dur={total_duration:.6f},"
         f"atrim=end={total_duration:.6f}[aout]"
@@ -445,6 +483,40 @@ def extract_sample_frames(video: Path, output_dir: Path, samples: int = SAMPLE_F
     return paths
 
 
+def extract_tail_frames(video: Path, output_dir: Path, frames: int = TAIL_FRAMES) -> list[Path]:
+    """Extract the last N contiguous frames, including the actual last frame."""
+    if frames < 1:
+        raise ValueError("tail frame count must be positive")
+    count = probe_video(video)["frames"]
+    if count < 2:
+        raise RuntimeError(f"chunk has fewer than two frames: {video}")
+    indices = list(range(max(0, count - frames), count))
+    expression = "+".join(f"eq(n\\,{index})" for index in indices)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for old in output_dir.glob("frame_*.png"):
+        old.unlink()
+    _run_command(
+        [
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(video),
+            "-vf",
+            f"select={expression}",
+            "-fps_mode",
+            "passthrough",
+            str(output_dir / "frame_%05d.png"),
+        ],
+        timeout=900,
+    )
+    paths = sorted(output_dir.glob("frame_*.png"))
+    if len(paths) != len(indices):
+        raise RuntimeError(f"expected {len(indices)} tail frames, got {len(paths)}")
+    return paths
+
+
 def _texture_measure(frame_paths: Sequence[Path]) -> dict[str, Any]:
     """Use the repository's canonical pore/drift implementation lazily."""
     scripts_dir = str(RUNNER.parent)
@@ -462,6 +534,7 @@ class ChainPipeline:
         self.job_id = ""
         self._initial_source: Path | None = None
         self._input_dir: Path | None = None
+        self._identity_image_name = ""
         self.state: dict[str, Any] = {}
 
     def _comfy_input_dir(self) -> Path:
@@ -557,9 +630,18 @@ class ChainPipeline:
 
     def _load_or_create_state(self, fingerprint: str) -> None:
         if self.config.state.exists():
-            self.state = load_state(self.config.state, expected_fingerprint=fingerprint)
-            if len(self.state["chunks"]) != len(self.plan):
-                raise ValueError("state chunk count does not match this plan")
+            try:
+                self.state = load_state(self.config.state, expected_fingerprint=fingerprint)
+            except ValueError as exc:
+                if "fingerprint" not in str(exc):
+                    raise
+                # A changed seed/config/input belongs to a different take.  Never
+                # reuse accepted chunks across that boundary; start a fresh state.
+                self.state = self._new_state(fingerprint)
+                save_state(self.config.state, self.state)
+            else:
+                if len(self.state["chunks"]) != len(self.plan):
+                    raise ValueError("state chunk count does not match this plan")
         else:
             self.state = self._new_state(fingerprint)
             save_state(self.config.state, self.state)
@@ -609,6 +691,7 @@ class ChainPipeline:
             if chunk.get("status") == "selected"
             and isinstance(chunk.get("metrics"), dict)
             and _finite(chunk["metrics"].get("pore"))
+            and float(chunk["metrics"]["pore"]) > 0.0
         ]
         relative = 0.0
         if previous:
@@ -622,6 +705,8 @@ class ChainPipeline:
         argv = build_renderer_argv(**renderer_options)  # type: ignore[arg-type]
         environment = dict(os.environ)
         environment["PYTHONPATH"] = str(REPO_ROOT)
+        if self.config.server:
+            environment["COMFYUI_PROD_URL"] = self.config.server
         process = subprocess.run(
             argv,
             cwd=str(REPO_ROOT),
@@ -640,8 +725,18 @@ class ChainPipeline:
         return output
 
     def _measure_chunk(self, video: Path, attempt_dir: Path) -> dict[str, Any]:
-        frames = extract_sample_frames(video, attempt_dir / "samples")
-        return _texture_measure(frames)
+        samples = extract_sample_frames(video, attempt_dir / "samples")
+        metrics = dict(_texture_measure(samples))
+        tail = extract_tail_frames(video, attempt_dir / "tail", self.config.tail_frames)
+        # compare_video_texture measures every later frame against the first,
+        # so prepend the chunk anchor to the contiguous tail sequence.
+        tail_metrics = _texture_measure([samples[0], *tail])
+        metrics.update(
+            face_drift_tail=tail_metrics["face_drift"],
+            face_drift_last=tail_metrics["face_drift_max"],
+            tail_frames=len(tail),
+        )
+        return metrics
 
     def _extract_last_frame(self, video: Path, output: Path) -> Path:
         info = probe_video(video)
@@ -691,8 +786,8 @@ class ChainPipeline:
                     height=self.config.height,
                     render_frames=plan.render_frames,
                     steps=self.config.steps,
-                    audio_offset_frames=plan.output_start,
-                    server=self.config.server,
+                    identity_lora=self.config.identity_lora,
+                    identity_image_name=self._identity_image_name,
                 )
                 metrics = self._measure_chunk(output, attempt_dir)
                 gate = evaluate_gate(
@@ -799,10 +894,15 @@ class ChainPipeline:
         )
 
         audio = self.config.work_dir / "audio.wav"
-        audio_argv = ["ffmpeg", "-y", "-v", "error"]
-        for video in videos:
-            audio_argv += ["-i", str(video)]
-        audio_argv += [
+        # The renderer always muxes audio from zero.  Ignore those per-chunk
+        # tracks and seek the original source once at the retained boundaries.
+        audio_argv = [
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(self.config.audio),
             "-filter_complex",
             build_audio_filter([chunk.kept_frames for chunk in plan]),
             "-map",
@@ -880,6 +980,7 @@ class ChainPipeline:
     def _report(self, seams: list[dict[str, Any]]) -> dict[str, Any]:
         selected = self.state["chunks"]
         drifts = [float(chunk["metrics"]["face_drift"]) for chunk in selected]
+        tail_drifts = [float(chunk["metrics"]["face_drift_tail"]) for chunk in selected]
         pores = [float(chunk["metrics"]["pore"]) for chunk in selected]
         return {
             "schema_version": SCHEMA_VERSION,
@@ -898,6 +999,9 @@ class ChainPipeline:
                 "face_drift_mean": statistics.mean(drifts),
                 "face_drift_max": max(drifts),
                 "worst_face_drift_chunk": max(range(len(drifts)), key=drifts.__getitem__),
+                "face_drift_tail_mean": statistics.mean(tail_drifts),
+                "face_drift_tail_max": max(tail_drifts),
+                "worst_tail_drift_chunk": max(range(len(tail_drifts)), key=tail_drifts.__getitem__),
                 "texture_pore_mean": statistics.mean(pores),
                 "texture_pore_min": min(pores),
                 "texture_ratchet_seams": sum(bool(seam["texture_ratchet"]) for seam in seams),
@@ -907,6 +1011,7 @@ class ChainPipeline:
     def run(self) -> dict[str, Any]:
         self.config.work_dir.mkdir(parents=True, exist_ok=True)
         image_name = self._prepare_initial_image()
+        self._identity_image_name = image_name
         fingerprint = self._fingerprint()
         self._load_or_create_state(fingerprint)
 
@@ -952,7 +1057,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="relative pore floor versus median of previous selected chunks",
     )
     parser.add_argument("--state", type=Path, default=None)
-    parser.add_argument("--server", default="")
+    parser.add_argument("--server", default="", help="sets COMFYUI_PROD_URL for the renderer")
+    parser.add_argument(
+        "--identity-lora",
+        choices=("none", "character_swap"),
+        default="none",
+        help="optional fixed-reference character_swap LoRA for every chunk",
+    )
+    parser.add_argument("--tail-frames", type=int, default=TAIL_FRAMES)
     parser.add_argument("--plan", action="store_true", help="print the chunk table without any I/O or rendering")
     return parser
 
@@ -977,6 +1089,8 @@ def _config_from_args(args: argparse.Namespace) -> ChainConfig:
         max_texture_drop=args.max_texture_drop,
         state=state,
         server=args.server,
+        identity_lora=args.identity_lora,
+        tail_frames=args.tail_frames,
     )
     if config.max_retries < 0:
         raise ValueError("max retries must be non-negative")
@@ -986,6 +1100,8 @@ def _config_from_args(args: argparse.Namespace) -> ChainConfig:
         raise ValueError("max texture drop must be in [0, 1)")
     if config.min_texture < 0 or config.steps < 1 or config.width < 1 or config.height < 1:
         raise ValueError("texture, steps, and dimensions must be positive")
+    if config.tail_frames < 1:
+        raise ValueError("tail frames must be positive")
     return config
 
 
