@@ -26,8 +26,10 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model-dir", default=DEFAULT_MODEL_DIR)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--prompt", required=True)
+    ap.add_argument("--prompt", default="")
+    ap.add_argument("--prompt-file", default="")
     ap.add_argument("--lyrics", default="")
+    ap.add_argument("--lyrics-file", default="")
     ap.add_argument("--seconds", type=float, default=20.0)
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--steps", type=int, default=0,
@@ -41,6 +43,19 @@ def main() -> int:
         return 2
     if not os.path.isdir(a.model_dir):
         print(f"нет каталога модели: {a.model_dir}", file=sys.stderr)
+        return 2
+
+    def _read(path: str, direct: str) -> str:
+        if direct:
+            return direct
+        if path and os.path.exists(path):
+            return open(path, encoding="utf-8").read().strip()
+        return ""
+
+    prompt = _read(a.prompt_file, a.prompt)
+    lyrics = _read(a.lyrics_file, a.lyrics)
+    if not prompt:
+        print("нужен --prompt или --prompt-file", file=sys.stderr)
         return 2
 
     try:
