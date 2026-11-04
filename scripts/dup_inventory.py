@@ -24,11 +24,17 @@ import random
 import sys
 import time
 
-G_ROOT = os.environ.get("DUP_G_ROOT", "G:/")
-K_ROOT = os.environ.get("DUP_K_ROOT", "K:/")
+# Roots come from the environment: no machine-specific paths in the repo.
+G_ROOT = os.environ.get("DUP_G_ROOT", "")
+K_ROOT = os.environ.get("DUP_K_ROOT", "")
 MANIFEST = os.environ.get("DUP_MANIFEST", "dup_manifest.json")
 SAMPLE = int(os.environ.get("DUP_SAMPLE", "40"))
 SKIP_DIRS = {"$RECYCLE.BIN", "System Volume Information", ".git", "node_modules"}
+
+if not G_ROOT or not K_ROOT:
+    raise SystemExit(
+        "Set DUP_G_ROOT and DUP_K_ROOT to the two roots to compare, "
+        "for example DUP_G_ROOT=<drive>:<path> DUP_K_ROOT=<drive>:<path>")
 
 
 def walk_files(root: str, years: list[str]) -> list[tuple[str, int, str]]:

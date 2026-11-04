@@ -36,6 +36,28 @@ def _scaled_image(nodes: dict, nid: int, image_name: str, source: list) -> tuple
     return str(nid), nid + 1
 
 
+def apply_anatomy_options(a):
+    """Resolve a ready still and optionally append its recipe's H3-safe cue.
+
+    The still carries the anatomy. The recipe suffix only asks H3 to preserve the
+    reference state and never needs a textual description of genital anatomy.
+    """
+    still = getattr(a, "still_reference", "") or ""
+    if still:
+        a.image = still
+    if not getattr(a, "image", None):
+        raise ValueError("provide --image or --still-reference")
+    recipe_name = getattr(a, "recipe_prompt", "") or ""
+    if recipe_name:
+        from scripts.anatomy_still.recipes import get_recipe
+
+        recipe = get_recipe(recipe_name, getattr(a, "recipes_file", "") or None)
+        suffix = recipe["h3"]["prompt_suffix"].strip()
+        if suffix and suffix not in a.prompt:
+            a.prompt = a.prompt.rstrip() + "\n" + suffix
+    return a
+
+
 def build_workflow(a):
     loras = json.loads(a.loras_json)
     nodes = {
@@ -98,13 +120,25 @@ def build_workflow(a):
         for name in ref_images:
             scale_id, nid = _scaled_image(nodes, nid, name, ["1", 0])
             links.append([scale_id, 0])
-        nodes[str(nid)] = {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": {
+        # AUDIO REFERENCE: H3 can move in time with an external track through
+        # ref_audios. Without it the model invents its own music and the
+        # "sway to the song" prompt is only honoured loosely.
+        audio_links = []
+        for name in (getattr(a, "ref_audio", None) or []):
+            nodes[str(nid)] = {"class_type": "LoadAudio", "inputs": {"audio": name}}
+            la = str(nid)
+            nid += 1
+            audio_links.append([la, 0])
+        ref2v_inputs = {
             "clip": [prev_c, 1] if prev_c != "3" else [prev_c, 0],
             "prompt": a.prompt,
             "width": a.width, "height": a.height, "length": a.length,
             "ref_image_size": getattr(a, "ref_image_size", "match"),
             "ref_images": links,
-            "audio_vae": [audio_vae_id, 0]}}
+            "audio_vae": [audio_vae_id, 0]}
+        if audio_links:
+            ref2v_inputs["ref_audios"] = audio_links
+        nodes[str(nid)] = {"class_type": "MiniMaxH3ReferenceToVideo", "inputs": ref2v_inputs}
         vid = str(nid)
         nid += 1
         # ALIGNED GUIDE: the whole source clip is fed back as the guide, so the
@@ -207,7 +241,15 @@ def _validate_against_live_comfyui(workflow: dict) -> list[str]:
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--image", required=True)
+    p.add_argument("--image", default=None)
+    p.add_argument("--still-reference", default="",
+                   help="ready anatomy still (local path or ComfyUI/input name) used as first_frame "
+                        "instead of the original source image")
+    p.add_argument("--recipe-prompt", default="",
+                   help="anatomy_still scene whose H3-safe prompt_suffix is appended; "
+                        "the still supplies anatomy, so no genital description is required")
+    p.add_argument("--recipes-file", default="",
+                   help="optional anatomy_still recipes.json override")
     p.add_argument("--last-frame", default="",
                    help="image in ComfyUI/input pinned as the LAST frame of the clip")
     p.add_argument("--guide-image", default="",
@@ -222,6 +264,10 @@ def main():
                         "LoRA was trained on and the same one Tessera uses.")
     p.add_argument("--ref-image", action="append", default=[],
                    help="reference image(s) in ComfyUI/input for the REF2VA mode")
+    p.add_argument("--ref-audio", action="append", default=[],
+                   help="audio file(s) in ComfyUI/input used as REF2VA audio reference "
+                        "(ref_audios): H3 then moves in time with THIS audio instead of "
+                        "inventing its own track. Requires --ref-image (ref2va branch).")
     p.add_argument("--turbo", action="store_true",
                    help="EXPERIMENTAL, BROKEN in this wiring: the official 4-step ref2v turbo "
                         "LoRA needs the template's SamplerCustomAdvanced graph; with the plain "
@@ -263,6 +309,10 @@ def main():
                 f"--{name} {dim} is not a multiple of 32; H3 needs both frame "
                 f"dimensions divisible by 32 (e.g. 704x864 instead of 640x784)")
     a.prompt = a.prompt_prefix + "\n" + open(a.prompt_file, encoding="utf-8").read()
+    try:
+        apply_anatomy_options(a)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
     # LoadVideo wants a file NAME inside ComfyUI's input dir. Accept a path
     # here and place it there, so the caller does not have to know the layout.

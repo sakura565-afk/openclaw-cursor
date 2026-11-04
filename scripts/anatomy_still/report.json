@@ -1,0 +1,47 @@
+{
+  "date": "2026-11-04",
+  "gpu_renders_started": 0,
+  "acceptance": {
+    "scene": "chef",
+    "still": "examples/chef3_final.png",
+    "mask": "examples/chef3_final_mask.png",
+    "passed": true,
+    "visibility": 0.499409,
+    "texture_score": 0.888525,
+    "cloth_score": 0.437934,
+    "origin": "pre-existing final frame of CHEF3_PANTIES H3 render; not a new Qwen render"
+  },
+  "measurements": [
+    {"scene": "chef", "artifact": "chef_src.jpg", "size": [853, 1280], "mask_pixels": 10446, "hip_visibility": 0.999746, "texture_score": 1.0, "cloth_score": 0.571841, "visibility": 0.428159, "passed": false},
+    {"scene": "chef", "artifact": "qe_chef_vulva.png", "size": [736, 1120], "mask_pixels": 7599, "hip_visibility": 0.999708, "texture_score": 1.0, "cloth_score": 0.567410, "visibility": 0.432590, "passed": false, "edit_denoise": 0.55, "anatomy_lora_strength": 1.0},
+    {"scene": "chef", "artifact": "examples/chef3_final.png", "size": [736, 1120], "mask_pixels": 34446, "hip_visibility": 0.995321, "texture_score": 0.888525, "cloth_score": 0.437934, "visibility": 0.499409, "passed": true},
+    {"scene": "katya", "artifact": "katya_clean.jpg", "size": [810, 991], "mask_pixels": 7067, "hip_visibility": 0.999868, "texture_score": 1.0, "cloth_score": 0.606353, "visibility": 0.393647, "passed": false},
+    {"scene": "katya", "artifact": "katya_pussy.jpg", "size": [810, 1080], "mask_pixels": 6884, "hip_visibility": 0.999960, "texture_score": 1.0, "cloth_score": 0.579696, "visibility": 0.420304, "passed": false},
+    {"scene": "lesbos", "artifact": "lesbos_src.jpg", "size": [1280, 1280], "mask_pixels": 7539, "hip_visibility": 0.997772, "texture_score": 1.0, "cloth_score": 0.550000, "visibility": 0.450000, "passed": false}
+  ],
+  "ready_still_generation": {
+    "runner": "MiniMax H3",
+    "seed": 969696,
+    "steps": 20,
+    "frames": 175,
+    "size": [736, 1120],
+    "denoise": null,
+    "loras": [
+      {"name_contains": "Panties Off!", "strength": 0.8},
+      {"name_contains": "Pantyhose - No Panties", "strength": 0.7},
+      {"name_contains": "NSFW - NUDE FEMALE ANATOMY", "strength": 0.7}
+    ]
+  },
+  "qwen_recipe_status": "dry_run_unverified; no successful Qwen denoise/LoRA combination was measured",
+  "focused_tests": 47,
+  "full_suite": {
+    "passed": 1364,
+    "skipped": 8,
+    "failed": 2,
+    "errors": 1,
+    "unrelated_failures": [
+      "scripts/dup_inventory.py has pre-existing G:/ and K:/ literals",
+      "test_cross_bot_sync file-lock PermissionError on Windows"
+    ]
+  }
+}
