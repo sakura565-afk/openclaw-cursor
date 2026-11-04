@@ -1,0 +1,166 @@
+{
+  "seed": 90210,
+  "withhold_from_judge": true,
+  "crops": [
+    {
+      "number": 1,
+      "case_id": "plastic_level_192",
+      "expected_class": "plastic",
+      "family": "plastic",
+      "crop": "crops/crop_01.png",
+      "source_image": "images/plastic_level_192.png"
+    },
+    {
+      "number": 2,
+      "case_id": "mixed_core",
+      "expected_class": "digital_sand",
+      "family": "mixed",
+      "crop": "crops/crop_02.png",
+      "source_image": "images/mixed_core.png"
+    },
+    {
+      "number": 3,
+      "case_id": "pores_coarse_1",
+      "expected_class": "pores",
+      "family": "pores",
+      "crop": "crops/crop_03.png",
+      "source_image": "images/pores_coarse_1.png"
+    },
+    {
+      "number": 4,
+      "case_id": "mixed_2",
+      "expected_class": "digital_sand",
+      "family": "mixed",
+      "crop": "crops/crop_04.png",
+      "source_image": "images/mixed_2.png"
+    },
+    {
+      "number": 5,
+      "case_id": "noise_core",
+      "expected_class": "digital_sand",
+      "family": "noise",
+      "crop": "crops/crop_05.png",
+      "source_image": "images/noise_core.png"
+    },
+    {
+      "number": 6,
+      "case_id": "pores_coarse_3",
+      "expected_class": "pores",
+      "family": "pores",
+      "crop": "crops/crop_06.png",
+      "source_image": "images/pores_coarse_3.png"
+    },
+    {
+      "number": 7,
+      "case_id": "noise_sigma_16",
+      "expected_class": "digital_sand",
+      "family": "noise",
+      "crop": "crops/crop_07.png",
+      "source_image": "images/noise_sigma_16.png"
+    },
+    {
+      "number": 8,
+      "case_id": "mixed_1",
+      "expected_class": "digital_sand",
+      "family": "mixed",
+      "crop": "crops/crop_08.png",
+      "source_image": "images/mixed_1.png"
+    },
+    {
+      "number": 9,
+      "case_id": "noise_sigma_24",
+      "expected_class": "digital_sand",
+      "family": "noise",
+      "crop": "crops/crop_09.png",
+      "source_image": "images/noise_sigma_24.png"
+    },
+    {
+      "number": 10,
+      "case_id": "fine_pores_diagnostic_0",
+      "expected_class": "pores",
+      "family": "fine_pores",
+      "crop": "crops/crop_10.png",
+      "source_image": "images/fine_pores_diagnostic_0.png"
+    },
+    {
+      "number": 11,
+      "case_id": "fine_pores_diagnostic_3",
+      "expected_class": "pores",
+      "family": "fine_pores",
+      "crop": "crops/crop_11.png",
+      "source_image": "images/fine_pores_diagnostic_3.png"
+    },
+    {
+      "number": 12,
+      "case_id": "plastic_core",
+      "expected_class": "plastic",
+      "family": "plastic",
+      "crop": "crops/crop_12.png",
+      "source_image": "images/plastic_core.png"
+    },
+    {
+      "number": 13,
+      "case_id": "plastic_level_160",
+      "expected_class": "plastic",
+      "family": "plastic",
+      "crop": "crops/crop_13.png",
+      "source_image": "images/plastic_level_160.png"
+    },
+    {
+      "number": 14,
+      "case_id": "pores_core",
+      "expected_class": "pores",
+      "family": "pores",
+      "crop": "crops/crop_14.png",
+      "source_image": "images/pores_core.png"
+    },
+    {
+      "number": 15,
+      "case_id": "noise_sigma_20",
+      "expected_class": "digital_sand",
+      "family": "noise",
+      "crop": "crops/crop_15.png",
+      "source_image": "images/noise_sigma_20.png"
+    },
+    {
+      "number": 16,
+      "case_id": "mixed_3",
+      "expected_class": "digital_sand",
+      "family": "mixed",
+      "crop": "crops/crop_16.png",
+      "source_image": "images/mixed_3.png"
+    },
+    {
+      "number": 17,
+      "case_id": "pores_coarse_2",
+      "expected_class": "pores",
+      "family": "pores",
+      "crop": "crops/crop_17.png",
+      "source_image": "images/pores_coarse_2.png"
+    },
+    {
+      "number": 18,
+      "case_id": "fine_pores_diagnostic_1",
+      "expected_class": "pores",
+      "family": "fine_pores",
+      "crop": "crops/crop_18.png",
+      "source_image": "images/fine_pores_diagnostic_1.png"
+    },
+    {
+      "number": 19,
+      "case_id": "plastic_level_96",
+      "expected_class": "plastic",
+      "family": "plastic",
+      "crop": "crops/crop_19.png",
+      "source_image": "images/plastic_level_96.png"
+    },
+    {
+      "number": 20,
+      "case_id": "fine_pores_diagnostic_2",
+      "expected_class": "pores",
+      "family": "fine_pores",
+      "crop": "crops/crop_20.png",
+      "source_image": "images/fine_pores_diagnostic_2.png"
+    }
+  ]
+}
