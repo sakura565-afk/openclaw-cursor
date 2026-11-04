@@ -57,6 +57,7 @@ def _h3_args(**overrides):
         ref_images=[],
         ref_image_size="match",
         turbo=False,
+        clip_name="qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
     )
     for key, value in overrides.items():
         setattr(args, key, value)
