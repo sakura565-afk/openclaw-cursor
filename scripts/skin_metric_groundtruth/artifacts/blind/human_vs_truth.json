@@ -1,0 +1,149 @@
+{
+  "rows": [
+    {
+      "number": 1,
+      "human": "plastic",
+      "truth": "plastic",
+      "metric": "plastic",
+      "ai": "plastic"
+    },
+    {
+      "number": 2,
+      "human": "digital_sand",
+      "truth": "digital_sand",
+      "metric": "digital_sand",
+      "ai": "pores"
+    },
+    {
+      "number": 3,
+      "human": "pores",
+      "truth": "pores",
+      "metric": "pores",
+      "ai": "pores"
+    },
+    {
+      "number": 4,
+      "human": "digital_sand",
+      "truth": "digital_sand",
+      "metric": "digital_sand",
+      "ai": "pores"
+    },
+    {
+      "number": 5,
+      "human": "digital_sand",
+      "truth": "digital_sand",
+      "metric": "digital_sand",
+      "ai": "digital_sand"
+    },
+    {
+      "number": 6,
+      "human": "pores",
+      "truth": "pores",
+      "metric": "pores",
+      "ai": "pores"
+    },
+    {
+      "number": 7,
+      "human": "digital_sand",
+      "truth": "digital_sand",
+      "metric": "digital_sand",
+      "ai": "digital_sand"
+    },
+    {
+      "number": 8,
+      "human": "digital_sand",
+      "truth": "digital_sand",
+      "metric": "digital_sand",
+      "ai": "digital_sand"
+    },
+    {
+      "number": 9,
+      "human": "digital_sand",
+      "truth": "digital_sand",
+      "metric": "digital_sand",
+      "ai": "digital_sand"
+    },
+    {
+      "number": 10,
+      "human": "pores",
+      "truth": "pores",
+      "metric": "digital_sand",
+      "ai": "pores"
+    },
+    {
+      "number": 11,
+      "human": "pores",
+      "truth": "pores",
+      "metric": "digital_sand",
+      "ai": "pores"
+    },
+    {
+      "number": 12,
+      "human": "plastic",
+      "truth": "plastic",
+      "metric": "plastic",
+      "ai": "plastic"
+    },
+    {
+      "number": 13,
+      "human": "plastic",
+      "truth": "plastic",
+      "metric": "plastic",
+      "ai": "plastic"
+    },
+    {
+      "number": 14,
+      "human": "pores",
+      "truth": "pores",
+      "metric": "pores",
+      "ai": "pores"
+    },
+    {
+      "number": 15,
+      "human": "digital_sand",
+      "truth": "digital_sand",
+      "metric": "digital_sand",
+      "ai": "digital_sand"
+    },
+    {
+      "number": 16,
+      "human": "digital_sand",
+      "truth": "digital_sand",
+      "metric": "digital_sand",
+      "ai": "digital_sand"
+    },
+    {
+      "number": 17,
+      "human": "pores",
+      "truth": "pores",
+      "metric": "pores",
+      "ai": "pores"
+    },
+    {
+      "number": 18,
+      "human": "pores",
+      "truth": "pores",
+      "metric": "plastic",
+      "ai": "pores"
+    },
+    {
+      "number": 19,
+      "human": "plastic",
+      "truth": "plastic",
+      "metric": "plastic",
+      "ai": "plastic"
+    },
+    {
+      "number": 20,
+      "human": "pores",
+      "truth": "pores",
+      "metric": "digital_sand",
+      "ai": "pores"
+    }
+  ],
+  "summary": {
+    "human_vs_truth": 20,
+    "metric_vs_truth": 16,
+    "metric_vs_human": 16
+  }
+}
