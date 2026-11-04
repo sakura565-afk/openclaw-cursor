@@ -1,0 +1,928 @@
+{
+  "schema_version": 1,
+  "parameters": {
+    "target_width": 1072,
+    "alignment": 32,
+    "aspect_tolerance_pct": 1.0,
+    "review_size": 256,
+    "seedvr2_render_requested": false
+  },
+  "metric_definitions": {
+    "pore_band": "FFT energy with spatial periods 3-12 px on the fixed target-scale review ROI",
+    "pore_survival": "pore energy after sigma=1.2 Gaussian blur / before blur",
+    "hf_survival": "mean absolute Laplacian after sigma=1.2 Gaussian blur / before blur",
+    "surviving_pore_delta": "after-blur pore energy versus Lanczos at identical target geometry",
+    "canonical_mae_255": "mean absolute RGB error after resizing candidate back to source geometry",
+    "comparison_rule": "all numeric rows in one style use the same normalized skin ROI and target size"
+  },
+  "ceiling_assessment": {
+    "resizers": "cannot create detail",
+    "pore_injectors": "add deterministic synthetic texture; survival gain is not recovered truth",
+    "codeformer": "face restoration only; not a body-pore ceiling lifter",
+    "proof_of_true_detail_recovery": false,
+    "human_eye_required": true
+  },
+  "styles": [
+    {
+      "style": "qe_graded_w0.9",
+      "source": "C:\\Users\\user\\AppData\\Local\\hermes\\cache\\scratch\\qe_graded_w0.9.png",
+      "source_size": [
+        1088,
+        1620
+      ],
+      "scaling": {
+        "source_width": 1088,
+        "source_height": 1620,
+        "requested_width": 1072,
+        "target_width": 1088,
+        "target_height": 1632,
+        "width_adjustment_px": 16,
+        "width_alignment_adjusted": true,
+        "raw_target_height": 1620.0,
+        "alignment": 32,
+        "aspect_error_pct": 0.7407407407407307,
+        "signed_height_error_pct": 0.7407407407407307,
+        "aspect_tolerance_pct": 1.0,
+        "violations": []
+      },
+      "review_roi_source_xyxy": [
+        432,
+        320,
+        688,
+        576
+      ],
+      "review_roi_mode": "manual",
+      "candidates": [
+        {
+          "candidate": "bicubic",
+          "status": "ok",
+          "mode": "cpu",
+          "output_size": [
+            1088,
+            1632
+          ],
+          "metrics": {
+            "pore_energy": 333131861214.6615,
+            "pore_energy_after_blur": 204335880571.86743,
+            "pore_survival": 0.6133783776394739,
+            "surviving_pore_energy": 204335880571.86746,
+            "pore_rms": 8.738731874456361,
+            "structure_score": 0.46679536468421107,
+            "task1_classification": "pores",
+            "laplacian": 5.706667877906977,
+            "laplacian_after_blur": 1.5365664958953857,
+            "hf_survival": 0.26925809049517513,
+            "pore_band_px_lo": 3.0,
+            "pore_band_px_hi": 12.0,
+            "blur_sigma_px": 1.2,
+            "canonical_mae_255": 0.1971486359834671
+          },
+          "pore_delta_pct_vs_lanczos": 0.873295990724432,
+          "surviving_pore_delta_pct_vs_lanczos": 0.5251726225143027,
+          "pore_survival_delta_pp_vs_lanczos": -0.2124157971983509,
+          "hf_survival_delta_pp_vs_lanczos": 0.5460861576099763,
+          "laplacian_delta_pct_vs_lanczos": -1.4557547806171134,
+          "pore_gate": {
+            "accepted": false,
+            "reason": "pore energy growth 0.008 <= 0.020"
+          },
+          "classification": "resampling_only_cannot_raise_detail_ceiling",
+          "oversharpening_suspected": false,
+          "energy_without_survival": false
+        },
+        {
+          "candidate": "lanczos",
+          "status": "ok",
+          "mode": "cpu",
+          "output_size": [
+            1088,
+            1632
+          ],
+          "metrics": {
+            "pore_energy": 330247820241.0416,
+            "pore_energy_after_blur": 203268370738.5179,
+            "pore_survival": 0.6155025356114574,
+            "surviving_pore_energy": 203268370738.5179,
+            "pore_rms": 8.70082249282714,
+            "structure_score": 0.47286438746130677,
+            "task1_classification": "pores",
+            "laplacian": 5.790970203488372,
+            "laplacian_after_blur": 1.5276418924331665,
+            "hf_survival": 0.26379722891907537,
+            "pore_band_px_lo": 3.0,
+            "pore_band_px_hi": 12.0,
+            "blur_sigma_px": 1.2,
+            "canonical_mae_255": 0.1572469025850296
+          },
+          "pore_delta_pct_vs_lanczos": 0.0,
+          "surviving_pore_delta_pct_vs_lanczos": 0.0,
+          "pore_survival_delta_pp_vs_lanczos": 0.0,
+          "hf_survival_delta_pp_vs_lanczos": 0.0,
+          "laplacian_delta_pct_vs_lanczos": 0.0,
+          "pore_gate": {
+            "accepted": false,
+            "reason": "pore energy growth 0.000 <= 0.020"
+          },
+          "classification": "resampling_only_cannot_raise_detail_ceiling",
+          "oversharpening_suspected": false,
+          "energy_without_survival": false
+        },
+        {
+          "candidate": "real_esrgan",
+          "status": "unavailable",
+          "reason": "unavailable offline: Python package 'realesrgan' is not installed",
+          "classification": "learned_detail_unmeasured"
+        },
+        {
+          "candidate": "codeformer",
+          "status": "unavailable",
+          "reason": "unavailable offline: Python package 'codeformer' is not installed",
+          "classification": "face_restoration_does_not_restore_body_pores"
+        },
+        {
+          "candidate": "seedvr2",
+          "status": "ok",
+          "mode": "cached",
+          "path": "C:\\Users\\user\\AppData\\Local\\hermes\\cache\\scratch\\seedvr2_hi.png",
+          "cached_size": [
+            1620,
+            2412
+          ],
+          "output_size": [
+            1088,
+            1632
+          ],
+          "metrics": {
+            "pore_energy": 371587285822.9846,
+            "pore_energy_after_blur": 212394942613.78516,
+            "pore_survival": 0.5715882935643958,
+            "surviving_pore_energy": 212394942613.7852,
+            "pore_rms": 9.229342260333462,
+            "structure_score": 0.34739512446970217,
+            "task1_classification": "digital_sand",
+            "laplacian": 6.394622093023256,
+            "laplacian_after_blur": 1.5273995399475098,
+            "hf_survival": 0.23885688907464184,
+            "pore_band_px_lo": 3.0,
+            "pore_band_px_hi": 12.0,
+            "blur_sigma_px": 1.2,
+            "canonical_mae_255": 10.56090259552002
+          },
+          "pore_delta_pct_vs_lanczos": 12.517710352113776,
+          "surviving_pore_delta_pct_vs_lanczos": 4.489912445359034,
+          "pore_survival_delta_pp_vs_lanczos": -4.391424204706162,
+          "hf_survival_delta_pp_vs_lanczos": -2.494033984443353,
+          "laplacian_delta_pct_vs_lanczos": 10.424019953880181,
+          "pore_gate": {
+            "accepted": false,
+            "reason": "added-band survival 0.157 < 0.450; the added component is noise-like"
+          },
+          "classification": "learned_detail_candidate; sharpening_halo_suspected",
+          "oversharpening_suspected": true,
+          "energy_without_survival": false
+        },
+        {
+          "candidate": "pore_minimax",
+          "status": "ok",
+          "mode": "cpu_still_equivalent",
+          "base": "lanczos",
+          "seed": 1234,
+          "output_size": [
+            1088,
+            1632
+          ],
+          "metrics": {
+            "pore_energy": 341171790099.76337,
+            "pore_energy_after_blur": 206556385307.53198,
+            "pore_survival": 0.6054321936967064,
+            "surviving_pore_energy": 206556385307.532,
+            "pore_rms": 8.843555095484883,
+            "structure_score": 0.4440919819905897,
+            "task1_classification": "pores",
+            "laplacian": 6.085210755813954,
+            "laplacian_after_blur": 1.561102032661438,
+            "hf_survival": 0.2565403394072957,
+            "pore_band_px_lo": 3.0,
+            "pore_band_px_hi": 12.0,
+            "blur_sigma_px": 1.2,
+            "canonical_mae_255": 0.5933837890625
+          },
+          "pore_delta_pct_vs_lanczos": 3.307809829221142,
+          "surviving_pore_delta_pct_vs_lanczos": 1.617573140901385,
+          "pore_survival_delta_pp_vs_lanczos": -1.007034191475098,
+          "hf_survival_delta_pp_vs_lanczos": -0.7256889511779663,
+          "laplacian_delta_pct_vs_lanczos": 5.081023420709996,
+          "pore_gate": {
+            "accepted": false,
+            "reason": "added-band survival 0.258 < 0.450; the added component is noise-like"
+          },
+          "classification": "synthetic_survival_gain_but_task1_gate_rejects",
+          "oversharpening_suspected": false,
+          "energy_without_survival": false
+        },
+        {
+          "candidate": "pore_kimi",
+          "status": "ok",
+          "mode": "cpu_still_equivalent",
+          "base": "lanczos",
+          "seed": 0,
+          "output_size": [
+            1088,
+            1632
+          ],
+          "metrics": {
+            "pore_energy": 330268591423.71643,
+            "pore_energy_after_blur": 203333313748.34692,
+            "pore_survival": 0.6156604625096834,
+            "surviving_pore_energy": 203333313748.34692,
+            "pore_rms": 8.701096110881071,
+            "structure_score": 0.473315607170524,
+            "task1_classification": "pores",
+            "laplacian": 5.800690406976744,
+            "laplacian_after_blur": 1.5271049737930298,
+            "hf_survival": 0.2632626233519227,
+            "pore_band_px_lo": 3.0,
+            "pore_band_px_hi": 12.0,
+            "blur_sigma_px": 1.2,
+            "canonical_mae_255": 0.2185160368680954
+          },
+          "pore_delta_pct_vs_lanczos": 0.006289574495799144,
+          "surviving_pore_delta_pct_vs_lanczos": 0.03194939261481622,
+          "pore_survival_delta_pp_vs_lanczos": 0.0157926898226024,
+          "hf_survival_delta_pp_vs_lanczos": -0.05346055671526795,
+          "laplacian_delta_pct_vs_lanczos": 0.16785103612719787,
+          "pore_gate": {
+            "accepted": false,
+            "reason": "pore energy growth -0.000 <= 0.020"
+          },
+          "classification": "synthetic_survival_gain_but_task1_gate_rejects",
+          "oversharpening_suspected": false,
+          "energy_without_survival": false
+        }
+      ],
+      "recommendation": {
+        "candidate": "lanczos",
+        "scope": "resampling_baseline_no_injector_passed_task1_pore_gate",
+        "human_eye_required": true,
+        "review_crop_source_xyxy": [
+          432,
+          320,
+          688,
+          576
+        ],
+        "review_roi_mode": "manual",
+        "review_sheet": "E:\\tmp\\openclaw-cursor-test\\scripts\\still_detail_ceiling\\results\\qe_graded_w0.9\\review_sheet.png",
+        "compare_at": "native target resolution, same crop, without fitting to window"
+      }
+    },
+    {
+      "style": "final_stand_graded_crop",
+      "source": "C:\\Users\\user\\AppData\\Local\\hermes\\cache\\scratch\\final_stand_graded_crop.png",
+      "source_size": [
+        853,
+        1275
+      ],
+      "scaling": {
+        "source_width": 853,
+        "source_height": 1275,
+        "requested_width": 1072,
+        "target_width": 1088,
+        "target_height": 1632,
+        "width_adjustment_px": 16,
+        "width_alignment_adjusted": true,
+        "raw_target_height": 1626.2602579132474,
+        "alignment": 32,
+        "aspect_error_pct": 0.3529411764705781,
+        "signed_height_error_pct": 0.3529411764705781,
+        "aspect_tolerance_pct": 1.0,
+        "violations": []
+      },
+      "review_roi_source_xyxy": [
+        384,
+        384,
+        640,
+        640
+      ],
+      "review_roi_mode": "automatic_upper_skin_prior",
+      "candidates": [
+        {
+          "candidate": "bicubic",
+          "status": "ok",
+          "mode": "cpu",
+          "output_size": [
+            1088,
+            1632
+          ],
+          "metrics": {
+            "pore_energy": 364893403829.43054,
+            "pore_energy_after_blur": 247916315751.64392,
+            "pore_survival": 0.6794212039731264,
+            "surviving_pore_energy": 247916315751.64392,
+            "pore_rms": 5.666536018267133,
+            "structure_score": 0.38650465098815845,
+            "task1_classification": "pores",
+            "laplacian": 3.1787771336372677,
+            "laplacian_after_blur": 0.8158985376358032,
+            "hf_survival": 0.2566705696357592,
+            "pore_band_px_lo": 3.0,
+            "pore_band_px_hi": 12.0,
+            "blur_sigma_px": 1.2,
+            "canonical_mae_255": 0.3692830502986908
+          },
+          "pore_delta_pct_vs_lanczos": 1.4194718413243823,
+          "surviving_pore_delta_pct_vs_lanczos": 1.1060791638537237,
+          "pore_survival_delta_pp_vs_lanczos": -0.210596268794494,
+          "hf_survival_delta_pp_vs_lanczos": 1.554110622424354,
+          "laplacian_delta_pct_vs_lanczos": -4.800647278284709,
+          "pore_gate": {
+            "accepted": false,
+            "reason": "pore energy growth 0.014 <= 0.020"
+          },
+          "classification": "resampling_only_cannot_raise_detail_ceiling",
+          "oversharpening_suspected": false,
+          "energy_without_survival": false
+        },
+        {
+          "candidate": "lanczos",
+          "status": "ok",
+          "mode": "cpu",
+          "output_size": [
+            1088,
+            1632
+          ],
+          "metrics": {
+            "pore_energy": 359786338071.5724,
+            "pore_energy_after_blur": 245204163589.28107,
+            "pore_survival": 0.6815271666610714,
+            "surviving_pore_energy": 245204163589.2811,
+            "pore_rms": 5.6267417306100125,
+            "structure_score": 0.369803195126373,
+            "task1_classification": "pores",
+            "laplacian": 3.339074313802743,
+            "laplacian_after_blur": 0.8051491975784302,
+            "hf_survival": 0.24112946341151564,
+            "pore_band_px_lo": 3.0,
+            "pore_band_px_hi": 12.0,
+            "blur_sigma_px": 1.2,
+            "canonical_mae_255": 0.3651072084903717
+          },
+          "pore_delta_pct_vs_lanczos": 0.0,
+          "surviving_pore_delta_pct_vs_lanczos": 0.0,
+          "pore_survival_delta_pp_vs_lanczos": 0.0,
+          "hf_survival_delta_pp_vs_lanczos": 0.0,
+          "laplacian_delta_pct_vs_lanczos": 0.0,
+          "pore_gate": {
+            "accepted": false,
+            "reason": "pore energy growth 0.000 <= 0.020"
+          },
+          "classification": "resampling_only_cannot_raise_detail_ceiling",
+          "oversharpening_suspected": false,
+          "energy_without_survival": false
+        },
+        {
+          "candidate": "real_esrgan",
+          "status": "unavailable",
+          "reason": "unavailable offline: Python package 'realesrgan' is not installed",
+          "classification": "learned_detail_unmeasured"
+        },
+        {
+          "candidate": "codeformer",
+          "status": "unavailable",
+          "reason": "unavailable offline: Python package 'codeformer' is not installed",
+          "classification": "face_restoration_does_not_restore_body_pores"
+        },
+        {
+          "candidate": "seedvr2",
+          "status": "unavailable",
+          "reason": "unavailable in this CPU/offline run: no cached output; GPU/ComfyUI render not requested",
+          "classification": "learned_detail_unmeasured"
+        },
+        {
+          "candidate": "pore_minimax",
+          "status": "ok",
+          "mode": "cpu_still_equivalent",
+          "base": "lanczos",
+          "seed": 1234,
+          "output_size": [
+            1088,
+            1632
+          ],
+          "metrics": {
+            "pore_energy": 388214526573.0437,
+            "pore_energy_after_blur": 250734197747.3548,
+            "pore_survival": 0.6458650580664926,
+            "surviving_pore_energy": 250734197747.35483,
+            "pore_rms": 5.844811890287251,
+            "structure_score": 0.4067156829736813,
+            "task1_classification": "pores",
+            "laplacian": 3.8921596217706984,
+            "laplacian_after_blur": 0.8912906050682068,
+            "hf_survival": 0.2289964163038933,
+            "pore_band_px_lo": 3.0,
+            "pore_band_px_hi": 12.0,
+            "blur_sigma_px": 1.2,
+            "canonical_mae_255": 0.831390380859375
+          },
+          "pore_delta_pct_vs_lanczos": 7.9014085564905745,
+          "surviving_pore_delta_pct_vs_lanczos": 2.2552774296836997,
+          "pore_survival_delta_pp_vs_lanczos": -3.5662108594578745,
+          "hf_survival_delta_pp_vs_lanczos": -1.2133047107622335,
+          "laplacian_delta_pct_vs_lanczos": 16.564031105317568,
+          "pore_gate": {
+            "accepted": false,
+            "reason": "added-band survival 0.270 < 0.450; the added component is noise-like"
+          },
+          "classification": "synthetic_survival_gain_but_task1_gate_rejects",
+          "oversharpening_suspected": false,
+          "energy_without_survival": false
+        },
+        {
+          "candidate": "pore_kimi",
+          "status": "ok",
+          "mode": "cpu_still_equivalent",
+          "base": "lanczos",
+          "seed": 0,
+          "output_size": [
+            1088,
+            1632
+          ],
+          "metrics": {
+            "pore_energy": 359030987894.9242,
+            "pore_energy_after_blur": 244737797242.63525,
+            "pore_survival": 0.681662044486983,
+            "surviving_pore_energy": 244737797242.63525,
+            "pore_rms": 5.62083212121811,
+            "structure_score": 0.3670097646885188,
+            "task1_classification": "pores",
+            "laplacian": 3.345940976717135,
+            "laplacian_after_blur": 0.8048692345619202,
+            "hf_survival": 0.24055093624264,
+            "pore_band_px_lo": 3.0,
+            "pore_band_px_hi": 12.0,
+            "blur_sigma_px": 1.2,
+            "canonical_mae_255": 0.3822530210018158
+          },
+          "pore_delta_pct_vs_lanczos": -0.20994409645924694,
+          "surviving_pore_delta_pct_vs_lanczos": -0.19019511733373573,
+          "pore_survival_delta_pp_vs_lanczos": 0.013487782591159458,
+          "hf_survival_delta_pp_vs_lanczos": -0.057852716887563105,
+          "laplacian_delta_pct_vs_lanczos": 0.20564570503889268,
+          "pore_gate": {
+            "accepted": false,
+            "reason": "pore energy growth -0.003 <= 0.020"
+          },
+          "classification": "synthetic_energy_without_survival_gain",
+          "oversharpening_suspected": false,
+          "energy_without_survival": false
+        }
+      ],
+      "recommendation": {
+        "candidate": "lanczos",
+        "scope": "resampling_baseline_no_injector_passed_task1_pore_gate",
+        "human_eye_required": true,
+        "review_crop_source_xyxy": [
+          384,
+          384,
+          640,
+          640
+        ],
+        "review_roi_mode": "automatic_upper_skin_prior",
+        "review_sheet": "E:\\tmp\\openclaw-cursor-test\\scripts\\still_detail_ceiling\\results\\final_stand_graded_crop\\review_sheet.png",
+        "compare_at": "native target resolution, same crop, without fitting to window"
+      }
+    },
+    {
+      "style": "qe_bathe_undress",
+      "source": "C:\\Users\\user\\AppData\\Local\\hermes\\cache\\scratch\\qe_bathe_undress.png",
+      "source_size": [
+        704,
+        1072
+      ],
+      "scaling": {
+        "source_width": 704,
+        "source_height": 1072,
+        "requested_width": 1072,
+        "target_width": 1088,
+        "target_height": 1664,
+        "width_adjustment_px": 16,
+        "width_alignment_adjusted": true,
+        "raw_target_height": 1656.7272727272727,
+        "alignment": 32,
+        "aspect_error_pct": 0.4389815627743543,
+        "signed_height_error_pct": 0.4389815627743543,
+        "aspect_tolerance_pct": 1.0,
+        "violations": []
+      },
+      "review_roi_source_xyxy": [
+        256,
+        256,
+        512,
+        512
+      ],
+      "review_roi_mode": "automatic_upper_skin_prior",
+      "candidates": [
+        {
+          "candidate": "bicubic",
+          "status": "ok",
+          "mode": "cpu",
+          "output_size": [
+            1088,
+            1664
+          ],
+          "metrics": {
+            "pore_energy": 1870804446144.2214,
+            "pore_energy_after_blur": 1096571488297.025,
+            "pore_survival": 0.5861497125245178,
+            "surviving_pore_energy": 1096571488297.025,
+            "pore_rms": 8.700296012546488,
+            "structure_score": 0.3889991786414792,
+            "task1_classification": "digital_sand",
+            "laplacian": 3.975268748807328,
+            "laplacian_after_blur": 1.5333147048950195,
+            "hf_survival": 0.3857134704050007,
+            "pore_band_px_lo": 3.0,
+            "pore_band_px_hi": 12.0,
+            "blur_sigma_px": 1.2,
+            "canonical_mae_255": 0.5016987919807434
+          },
+          "pore_delta_pct_vs_lanczos": 1.8283335278114654,
+          "surviving_pore_delta_pct_vs_lanczos": 2.326132551024185,
+          "pore_survival_delta_pp_vs_lanczos": 0.2851517467501563,
+          "hf_survival_delta_pp_vs_lanczos": 1.3575658121578404,
+          "laplacian_delta_pct_vs_lanczos": -3.0682420967406587,
+          "pore_gate": {
+            "accepted": false,
+            "reason": "pore energy growth 0.019 <= 0.020"
+          },
+          "classification": "resampling_only_cannot_raise_detail_ceiling",
+          "oversharpening_suspected": false,
+          "energy_without_survival": false
+        },
+        {
+          "candidate": "lanczos",
+          "status": "ok",
+          "mode": "cpu",
+          "output_size": [
+            1088,
+            1664
+          ],
+          "metrics": {
+            "pore_energy": 1837214045767.7876,
+            "pore_energy_after_blur": 1071643636829.7488,
+            "pore_survival": 0.5832981950570162,
+            "surviving_pore_energy": 1071643636829.7488,
+            "pore_rms": 8.62183506940505,
+            "structure_score": 0.38085198587718905,
+            "task1_classification": "digital_sand",
+            "laplacian": 4.101100438903377,
+            "laplacian_after_blur": 1.526174545288086,
+            "hf_survival": 0.3721378122834223,
+            "pore_band_px_lo": 3.0,
+            "pore_band_px_hi": 12.0,
+            "blur_sigma_px": 1.2,
+            "canonical_mae_255": 0.5201924443244934
+          },
+          "pore_delta_pct_vs_lanczos": 0.0,
+          "surviving_pore_delta_pct_vs_lanczos": 0.0,
+          "pore_survival_delta_pp_vs_lanczos": 0.0,
+          "hf_survival_delta_pp_vs_lanczos": 0.0,
+          "laplacian_delta_pct_vs_lanczos": 0.0,
+          "pore_gate": {
+            "accepted": false,
+            "reason": "pore energy growth 0.000 <= 0.020"
+          },
+          "classification": "resampling_only_cannot_raise_detail_ceiling",
+          "oversharpening_suspected": false,
+          "energy_without_survival": false
+        },
+        {
+          "candidate": "real_esrgan",
+          "status": "unavailable",
+          "reason": "unavailable offline: Python package 'realesrgan' is not installed",
+          "classification": "learned_detail_unmeasured"
+        },
+        {
+          "candidate": "codeformer",
+          "status": "unavailable",
+          "reason": "unavailable offline: Python package 'codeformer' is not installed",
+          "classification": "face_restoration_does_not_restore_body_pores"
+        },
+        {
+          "candidate": "seedvr2",
+          "status": "unavailable",
+          "reason": "unavailable in this CPU/offline run: no cached output; GPU/ComfyUI render not requested",
+          "classification": "learned_detail_unmeasured"
+        },
+        {
+          "candidate": "pore_minimax",
+          "status": "ok",
+          "mode": "cpu_still_equivalent",
+          "base": "lanczos",
+          "seed": 1234,
+          "output_size": [
+            1088,
+            1664
+          ],
+          "metrics": {
+            "pore_energy": 1904619042792.671,
+            "pore_energy_after_blur": 1084553665647.8724,
+            "pore_survival": 0.5694333834117464,
+            "surviving_pore_energy": 1084553665647.8724,
+            "pore_rms": 8.778572362119013,
+            "structure_score": 0.34123823831927547,
+            "task1_classification": "digital_sand",
+            "laplacian": 4.753819731569239,
+            "laplacian_after_blur": 1.6142263412475586,
+            "hf_survival": 0.33956406266896905,
+            "pore_band_px_lo": 3.0,
+            "pore_band_px_hi": 12.0,
+            "blur_sigma_px": 1.2,
+            "canonical_mae_255": 0.9870961308479309
+          },
+          "pore_delta_pct_vs_lanczos": 3.668870112339806,
+          "surviving_pore_delta_pct_vs_lanczos": 1.2046942075180311,
+          "pore_survival_delta_pp_vs_lanczos": -1.386481164526976,
+          "hf_survival_delta_pp_vs_lanczos": -3.257374961445325,
+          "laplacian_delta_pct_vs_lanczos": 15.915710975379005,
+          "pore_gate": {
+            "accepted": false,
+            "reason": "added-band survival 0.261 < 0.450; the added component is noise-like"
+          },
+          "classification": "synthetic_survival_gain_but_task1_gate_rejects",
+          "oversharpening_suspected": false,
+          "energy_without_survival": false
+        },
+        {
+          "candidate": "pore_kimi",
+          "status": "ok",
+          "mode": "cpu_still_equivalent",
+          "base": "lanczos",
+          "seed": 0,
+          "output_size": [
+            1088,
+            1664
+          ],
+          "metrics": {
+            "pore_energy": 1843898090159.5579,
+            "pore_energy_after_blur": 1073571442446.7261,
+            "pore_survival": 0.5822292718757721,
+            "surviving_pore_energy": 1073571442446.7262,
+            "pore_rms": 8.637504557737438,
+            "structure_score": 0.3777979196450631,
+            "task1_classification": "digital_sand",
+            "laplacian": 4.118071369505756,
+            "laplacian_after_blur": 1.5283265113830566,
+            "hf_survival": 0.37112676645195775,
+            "pore_band_px_lo": 3.0,
+            "pore_band_px_hi": 12.0,
+            "blur_sigma_px": 1.2,
+            "canonical_mae_255": 0.5471751093864441
+          },
+          "pore_delta_pct_vs_lanczos": 0.3638141351666402,
+          "surviving_pore_delta_pct_vs_lanczos": 0.17989241485913965,
+          "pore_survival_delta_pp_vs_lanczos": -0.10689231812440747,
+          "hf_survival_delta_pp_vs_lanczos": -0.10110458314645521,
+          "laplacian_delta_pct_vs_lanczos": 0.4138140690579384,
+          "pore_gate": {
+            "accepted": false,
+            "reason": "pore energy growth 0.004 <= 0.020"
+          },
+          "classification": "synthetic_survival_gain_but_task1_gate_rejects",
+          "oversharpening_suspected": false,
+          "energy_without_survival": false
+        }
+      ],
+      "recommendation": {
+        "candidate": "lanczos",
+        "scope": "resampling_baseline_no_injector_passed_task1_pore_gate",
+        "human_eye_required": true,
+        "review_crop_source_xyxy": [
+          256,
+          256,
+          512,
+          512
+        ],
+        "review_roi_mode": "automatic_upper_skin_prior",
+        "review_sheet": "E:\\tmp\\openclaw-cursor-test\\scripts\\still_detail_ceiling\\results\\qe_bathe_undress\\review_sheet.png",
+        "compare_at": "native target resolution, same crop, without fitting to window"
+      }
+    },
+    {
+      "style": "KATYA_UNDDRESSED",
+      "source": "C:\\Users\\user\\AppData\\Local\\hermes\\cache\\scratch\\KATYA_UNDDRESSED.png",
+      "source_size": [
+        576,
+        1024
+      ],
+      "scaling": {
+        "source_width": 576,
+        "source_height": 1024,
+        "requested_width": 1072,
+        "target_width": 1088,
+        "target_height": 1920,
+        "width_adjustment_px": 16,
+        "width_alignment_adjusted": true,
+        "raw_target_height": 1934.2222222222222,
+        "alignment": 32,
+        "aspect_error_pct": 0.7352941176470562,
+        "signed_height_error_pct": -0.7352941176470562,
+        "aspect_tolerance_pct": 1.0,
+        "violations": []
+      },
+      "review_roi_source_xyxy": [
+        272,
+        152,
+        320,
+        200
+      ],
+      "review_roi_mode": "manual",
+      "candidates": [
+        {
+          "candidate": "bicubic",
+          "status": "ok",
+          "mode": "cpu",
+          "output_size": [
+            1088,
+            1920
+          ],
+          "metrics": {
+            "pore_energy": 9452187715.892094,
+            "pore_energy_after_blur": 8899314449.455963,
+            "pore_survival": 0.9415084334913729,
+            "surviving_pore_energy": 8899314449.455963,
+            "pore_rms": 12.002760768063272,
+            "structure_score": 1.0,
+            "task1_classification": "pores",
+            "laplacian": 1.7896296296296297,
+            "laplacian_after_blur": 0.884392499923706,
+            "hf_survival": 0.4941762727222695,
+            "pore_band_px_lo": 3.0,
+            "pore_band_px_hi": 12.0,
+            "blur_sigma_px": 1.2,
+            "canonical_mae_255": 0.09186921268701553
+          },
+          "pore_delta_pct_vs_lanczos": 0.4093361305258947,
+          "surviving_pore_delta_pct_vs_lanczos": 0.41443393943834117,
+          "pore_survival_delta_pp_vs_lanczos": 0.004779820883404895,
+          "hf_survival_delta_pp_vs_lanczos": -3.1675339975627215,
+          "laplacian_delta_pct_vs_lanczos": 7.505191337881945,
+          "pore_gate": {
+            "accepted": false,
+            "reason": "pore energy growth 0.005 <= 0.020"
+          },
+          "classification": "resampling_only_cannot_raise_detail_ceiling",
+          "oversharpening_suspected": false,
+          "energy_without_survival": false
+        },
+        {
+          "candidate": "lanczos",
+          "status": "ok",
+          "mode": "cpu",
+          "output_size": [
+            1088,
+            1920
+          ],
+          "metrics": {
+            "pore_energy": 9413654227.93438,
+            "pore_energy_after_blur": 8862584889.76126,
+            "pore_survival": 0.9414606352825389,
+            "surviving_pore_energy": 8862584889.76126,
+            "pore_rms": 11.978270111057054,
+            "structure_score": 1.0,
+            "task1_classification": "pores",
+            "laplacian": 1.6646913580246914,
+            "laplacian_after_blur": 0.8753806352615356,
+            "hf_survival": 0.5258516126978967,
+            "pore_band_px_lo": 3.0,
+            "pore_band_px_hi": 12.0,
+            "blur_sigma_px": 1.2,
+            "canonical_mae_255": 0.1419270783662796
+          },
+          "pore_delta_pct_vs_lanczos": 0.0,
+          "surviving_pore_delta_pct_vs_lanczos": 0.0,
+          "pore_survival_delta_pp_vs_lanczos": 0.0,
+          "hf_survival_delta_pp_vs_lanczos": 0.0,
+          "laplacian_delta_pct_vs_lanczos": 0.0,
+          "pore_gate": {
+            "accepted": false,
+            "reason": "pore energy growth 0.000 <= 0.020"
+          },
+          "classification": "resampling_only_cannot_raise_detail_ceiling",
+          "oversharpening_suspected": false,
+          "energy_without_survival": false
+        },
+        {
+          "candidate": "real_esrgan",
+          "status": "unavailable",
+          "reason": "unavailable offline: Python package 'realesrgan' is not installed",
+          "classification": "learned_detail_unmeasured"
+        },
+        {
+          "candidate": "codeformer",
+          "status": "unavailable",
+          "reason": "unavailable offline: Python package 'codeformer' is not installed",
+          "classification": "face_restoration_does_not_restore_body_pores"
+        },
+        {
+          "candidate": "seedvr2",
+          "status": "unavailable",
+          "reason": "unavailable in this CPU/offline run: no cached output; GPU/ComfyUI render not requested",
+          "classification": "learned_detail_unmeasured"
+        },
+        {
+          "candidate": "pore_minimax",
+          "status": "ok",
+          "mode": "cpu_still_equivalent",
+          "base": "lanczos",
+          "seed": 1234,
+          "output_size": [
+            1088,
+            1920
+          ],
+          "metrics": {
+            "pore_energy": 9413654227.93438,
+            "pore_energy_after_blur": 8862584889.76126,
+            "pore_survival": 0.9414606352825389,
+            "surviving_pore_energy": 8862584889.76126,
+            "pore_rms": 11.978270111057054,
+            "structure_score": 1.0,
+            "task1_classification": "pores",
+            "laplacian": 1.6646913580246914,
+            "laplacian_after_blur": 0.8753806352615356,
+            "hf_survival": 0.5258516126978967,
+            "pore_band_px_lo": 3.0,
+            "pore_band_px_hi": 12.0,
+            "blur_sigma_px": 1.2,
+            "canonical_mae_255": 0.1419270783662796
+          },
+          "pore_delta_pct_vs_lanczos": 0.0,
+          "surviving_pore_delta_pct_vs_lanczos": 0.0,
+          "pore_survival_delta_pp_vs_lanczos": 0.0,
+          "hf_survival_delta_pp_vs_lanczos": 0.0,
+          "laplacian_delta_pct_vs_lanczos": 0.0,
+          "pore_gate": {
+            "accepted": false,
+            "reason": "pore energy growth 0.000 <= 0.020"
+          },
+          "classification": "synthetic_energy_without_survival_gain",
+          "oversharpening_suspected": false,
+          "energy_without_survival": false
+        },
+        {
+          "candidate": "pore_kimi",
+          "status": "ok",
+          "mode": "cpu_still_equivalent",
+          "base": "lanczos",
+          "seed": 0,
+          "output_size": [
+            1088,
+            1920
+          ],
+          "metrics": {
+            "pore_energy": 9407490151.139315,
+            "pore_energy_after_blur": 8855179349.20002,
+            "pore_survival": 0.9412903130307921,
+            "surviving_pore_energy": 8855179349.20002,
+            "pore_rms": 11.974347773045455,
+            "structure_score": 1.0,
+            "task1_classification": "pores",
+            "laplacian": 1.6846913580246914,
+            "laplacian_after_blur": 0.8764311075210571,
+            "hf_survival": 0.5202324469383381,
+            "pore_band_px_lo": 3.0,
+            "pore_band_px_hi": 12.0,
+            "blur_sigma_px": 1.2,
+            "canonical_mae_255": 0.15002892911434174
+          },
+          "pore_delta_pct_vs_lanczos": -0.06548017003613626,
+          "surviving_pore_delta_pct_vs_lanczos": -0.08355960087665926,
+          "pore_survival_delta_pp_vs_lanczos": -0.01703222517467351,
+          "hf_survival_delta_pp_vs_lanczos": -0.5619165759558564,
+          "laplacian_delta_pct_vs_lanczos": 1.201423909819055,
+          "pore_gate": {
+            "accepted": false,
+            "reason": "pore energy growth -0.001 <= 0.020"
+          },
+          "classification": "synthetic_energy_without_survival_gain",
+          "oversharpening_suspected": false,
+          "energy_without_survival": false
+        }
+      ],
+      "recommendation": {
+        "candidate": "lanczos",
+        "scope": "resampling_baseline_no_injector_passed_task1_pore_gate",
+        "human_eye_required": true,
+        "review_crop_source_xyxy": [
+          272,
+          152,
+          320,
+          200
+        ],
+        "review_roi_mode": "manual",
+        "review_sheet": "E:\\tmp\\openclaw-cursor-test\\scripts\\still_detail_ceiling\\results\\KATYA_UNDDRESSED\\review_sheet.png",
+        "compare_at": "native target resolution, same crop, without fitting to window",
+        "review_crop_warning": "ROI is smaller than 96 px: use for artifact review only, not proof of real pores"
+      }
+    }
+  ]
+}
