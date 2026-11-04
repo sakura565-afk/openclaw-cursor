@@ -511,60 +511,6 @@
       "reference_description": "The last frame of GOWN_P1: the gown has come off the shoulders, chest and torso and is gathered at the hips; back, shoulders and buttocks are bare, with one breast in profile. Pass 2 target has no sequins on the body.",
       "analysis": "Pass 2 keeps Excellent Full Nude at 0.6, adds the posing/touching LoRA at 0.7 and restores weak Mystic support at 0.2. The negative removes every gown and sequin term, matching the naked posing target rather than preserving the initial garment.",
       "unrecorded": []
-    },
-    {
-      "id": "PEARL_KISS",
-      "clip": "MASTURB_HAND.mp4",
-      "approval": "Успех",
-      "source_section": "Approved: the gray-boudoir masturbation base render",
-      "checkpoint": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
-      "text_encoder": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
-      "width": 736,
-      "height": 736,
-      "fps": 24,
-      "length": 175,
-      "duration_seconds": 7.3,
-      "steps": 20,
-      "cfg": 1.0,
-      "seed": 949494,
-      "sampler": "euler",
-      "scheduler": "simple",
-      "image_env": "H3_GRAY_BOUDOIR_IMAGE",
-      "first_frame": "Gray-boudoir photo scaled to 736x1120; source AR 0.667 versus render AR 0.657.",
-      "loras": [
-        {
-          "n": "General NSFW FL2VA - MinimaxH3 - 0.55-0.65str with other loras,0.8str alone,penis,vagina.safetensors",
-          "sm": 0.6,
-          "sc": 0.6
-        },
-        {
-          "n": "NSFW - Posing + Touching + Round Breasts - MinimaxH3.safetensors",
-          "sm": 0.6,
-          "sc": 0.6
-        },
-        {
-          "n": "MysticXXX_MMH3-V4.safetensors",
-          "sm": 0.2,
-          "sc": 0.2
-        }
-      ],
-      "prompt": "She has her hand in her panties, she slides her hand in her panties, she rubs her vagina. A woman on dark gray satin bedding, wearing a white semi-sheer bralette with floral appliques, white high-cut briefs and a thin red bracelet, in a gray room with a tall mirror, a white candelabrum and a dress form. Her fingers slide under the fabric of her white briefs. White briefs still on, panties visible.",
-      "prompt_status": "assembled only from the documented trigger, scene description, action and final lock phrase",
-      "negative": "different face, extra person, third person, man, child, blurry, distorted hands, extra fingers, six fingers, malformed hands, fused fingers, morphed body, plastic skin, waxy skin, smooth skin, anime, cartoon, text, watermark, face distortion, identity drift, anal focus, anus",
-      "negative_status": "the two documented conflict terms; the full original negative was not recorded",
-      "reference_description": "A woman on dark gray satin bedding, wearing a white semi-sheer bralette with floral appliques, white high-cut briefs and a thin red bracelet; gray room with a tall mirror, a white candelabrum and a dress form.",
-      "analysis": "The action LoRA carries the hand-in-panties premise and Mystic supplies weak anatomy support at 0.3. The approved render held the reference but the action stopped at the briefs edge. The source identifies 'panties off' and 'lingerie removed' in the negative as opposing 'fingers slide under the fabric'; the linter intentionally reports this historical conflict.",
-      "unrecorded": [
-        "full prompt wording beyond documented fragments",
-        "full negative beyond documented terms"
-      ],
-      "name": "Pearl necklace pull and kiss (two women)",
-      "status": "approved_by_user",
-      "approval_note": "user: Видео генерация успех",
-      "duration_s": 7.3,
-      "clip_name": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
-      "prompt_file": "scripts/recipes/prompts/PEARL_KISS.txt",
-      "why": "Square 1280x1280 reference -> square 736x736 render (0% AR distortion; portrait 736x1120 would be 34%). Mixed clothing state: negative must NOT contain topless/nude (left woman is topless), third person added (exactly two women). No kiss LoRA in catalog -> the prompt carries the action. Verified: kiss happens, necklace taut in frame 20, composition+candles kept; skin still waxy 3-4/10 (H3), FreeVideo light is the measured better skin path."
     }
   ]
 }
