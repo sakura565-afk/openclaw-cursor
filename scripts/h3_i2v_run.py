@@ -253,6 +253,15 @@ def main():
     p.add_argument("--output", required=True)
     p.add_argument("--wait", type=int, default=7200)
     a = p.parse_args()
+    # H3 patches the latent in 2x2 spatial tiles, so both frame dimensions must
+    # be divisible by 32. 640x784 looks harmless but 784/16 = 49 is odd and the
+    # KSampler dies with a shape error AFTER the model is loaded - 20 minutes
+    # of GPU wasted. Fail fast, before anything is submitted.
+    for dim, name in ((a.width, "width"), (a.height, "height")):
+        if dim % 32:
+            raise SystemExit(
+                f"--{name} {dim} is not a multiple of 32; H3 needs both frame "
+                f"dimensions divisible by 32 (e.g. 704x864 instead of 640x784)")
     a.prompt = a.prompt_prefix + "\n" + open(a.prompt_file, encoding="utf-8").read()
 
     # LoadVideo wants a file NAME inside ComfyUI's input dir. Accept a path
