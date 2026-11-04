@@ -1,0 +1,36 @@
+You are an external BLIND vision judge of synthetic surface plates.
+The source names and constructive labels are deliberately withheld.
+Judge only visible texture in blind_sheet.png; ignore the small crop numbers.
+For EVERY numbered crop choose exactly one class:
+  plastic: smooth, no visible pores and no visible granular noise;
+  pores: spatially discrete pore/pit-like marks, not a uniform noise carpet;
+  digital_sand: visible isotropic grain/noise, including noise over pits;
+  uncertain: the crop cannot be classified confidently at the supplied scale.
+Do not infer labels from order, brightness, file names, or this prompt's example.
+Synthetic pits are allowed to look artificial; classify structure, not naturalness.
+Give confidence high/medium/low and a short visual reason for every crop.
+Answer with JSON only, in this shape (replace the example classes):
+{
+  "1": {"class": "plastic", "confidence": "high", "reason": "replace after looking"},
+  "2": {"class": "plastic", "confidence": "high", "reason": "replace after looking"},
+  "3": {"class": "plastic", "confidence": "high", "reason": "replace after looking"},
+  "4": {"class": "plastic", "confidence": "high", "reason": "replace after looking"},
+  "5": {"class": "plastic", "confidence": "high", "reason": "replace after looking"},
+  "6": {"class": "plastic", "confidence": "high", "reason": "replace after looking"},
+  "7": {"class": "plastic", "confidence": "high", "reason": "replace after looking"},
+  "8": {"class": "plastic", "confidence": "high", "reason": "replace after looking"},
+  "9": {"class": "plastic", "confidence": "high", "reason": "replace after looking"},
+  "10": {"class": "plastic", "confidence": "high", "reason": "replace after looking"},
+  "11": {"class": "plastic", "confidence": "high", "reason": "replace after looking"},
+  "12": {"class": "plastic", "confidence": "high", "reason": "replace after looking"},
+  "13": {"class": "plastic", "confidence": "high", "reason": "replace after looking"},
+  "14": {"class": "plastic", "confidence": "high", "reason": "replace after looking"},
+  "15": {"class": "plastic", "confidence": "high", "reason": "replace after looking"},
+  "16": {"class": "plastic", "confidence": "high", "reason": "replace after looking"},
+  "17": {"class": "plastic", "confidence": "high", "reason": "replace after looking"},
+  "18": {"class": "plastic", "confidence": "high", "reason": "replace after looking"},
+  "19": {"class": "plastic", "confidence": "high", "reason": "replace after looking"},
+  "20": {"class": "plastic", "confidence": "high", "reason": "replace after looking"}
+}
+Do not add variant names. A human must review these labels before any
+threshold is treated as validated; an AI visual pass is only a blind pre-check.

@@ -1,0 +1,14 @@
+{
+  "tool": "scripts/skin_metric_groundtruth/blind.py",
+  "seed": 90210,
+  "columns": 5,
+  "sheet": "blind_sheet.png",
+  "prompt": "judge_prompt.txt",
+  "key": "blind_key.json",
+  "crop_count": 20,
+  "visual_status": "labels_loaded",
+  "privacy": "The prompt and numbered crops contain no constructive case identifiers.",
+  "visual_labels": "visual_labels.json",
+  "visual_judge": "Hermes vision_analyze blind pre-check",
+  "visual_is_human": false
+}
