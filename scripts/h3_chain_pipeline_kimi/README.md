@@ -13,75 +13,80 @@ The implementation intentionally does not pass `--guide-image` and does not over
 ## Offline plan
 
 ```bash
-python -m scripts.h3_chain_pipeline_kimi \
-  --image portrait.png \
-  --prompt-file prompt.txt \
-  --audio track.m4a \
-  --output long.mp4 \
-  --chunk-frames 56 \
-  --total-frames 120 \
-  --seed-base 42 \
-  --plan
+.venv/Scripts/python.exe -m scripts.h3_chain_pipeline_kimi \
+  --image portrait.png --prompt-file prompt.txt --audio track.m4a \
+  --output long.mp4 --chunk-frames 56 --total-frames 166 \
+  --seed-base 42 --plan
 ```
 
-`--plan` needs no input files, `COMFYUI_PROD_DIR`, ffmpeg, server, or GPU. It starts no subprocess and writes neither state nor report.
+Для 56/166 это три чанка: `56 + 55 + 55 = 166`. Первый кадр каждого следующего MP4 — переснятая копия предыдущего хвоста. В финал входят 56 кадров первого чанка и по 55 из каждого следующего. Для `N > 1` полных чанков можно задать `--total-frames $((56 + (N - 1) * 55))`; последний чанк дополнительно обрезается при необходимости.
 
-H3 accepts lengths `5 + 17*k`. The planner removes one duplicated first frame from every chunk after the first. If an exact requested output length cannot be represented by those constraints, it trims only the tail of the final chunk. `kept_frames` therefore sums exactly to `--total-frames`; the table also shows the final tail trim.
+Seed первой попытки чанка `i`: `seed_base + i * 1_000_000`; попытка `a` добавляет `a`. `--plan` не читает медиа, не создаёт state, не вызывает ffmpeg и не обращается к ComfyUI.
 
 ## Render and resume
 
+Готовая команда для трёх чанков (166 кадров). Она **не выполнялась** при разработке и требует работающий H3/ComfyUI:
+
 ```bash
-COMFYUI_PROD_DIR=/path/to/portable-root \
-python -m scripts.h3_chain_pipeline_kimi \
-  --image portrait.png --prompt-file prompt.txt --audio track.m4a \
-  --output long.mp4 --chunk-frames 56 --total-frames 120 \
-  --width 736 --height 1120 --steps 20 --seed-base 42 \
-  --max-retries 2 --max-face-drift 8
+export COMFYUI_PROD_DIR=/path/to/ComfyUI_windows_portable
+export COMFYUI_PROD_URL=http://127.0.0.1:8188
+
+.venv/Scripts/python.exe -m scripts.h3_chain_pipeline_kimi \
+  --image "$INPUT_DIR/portrait.png" \
+  --prompt-file "$INPUT_DIR/prompt.txt" \
+  --audio "$INPUT_DIR/track.m4a" \
+  --output "$OUTPUT_DIR/long.mp4" \
+  --chunk-frames 56 --total-frames 166 \
+  --seed-base 42 --max-retries 2 \
+  --tail-frames 5 --max-face-drift 8.0 \
+  --min-texture 0 --max-texture-drop 0.25
 ```
 
-`COMFYUI_PROD_DIR` points to the portable root containing `ComfyUI/input`. If it is unset, the real run resolves the directory through `scripts/local_paths.py`. Audio and prompt paths go directly to the existing renderer; each chunk receives `--audio-offset` equal to its retained output start frame.
+`COMFYUI_PROD_DIR` указывает на portable root с `ComfyUI/input`; иначе каталог разрешается через `scripts/local_paths.py`. URL берётся из `COMFYUI_PROD_URL`; конвейерный `--server URL` лишь задаёт эту переменную дочернему процессу. Несуществующие у рендерера флаги `--server` и `--audio-offset` ему **не передаются**. В `LoadImage` уходит только basename после копирования в input.
 
-Defaults:
+Обычный `run` автоматически делает рендер с гейтом, перерендер только непрошедшего чанка и сборку MP4/звука/отчёта. После аварии повторяется та же команда: `selected` chunks с существующим video не рендерятся заново. Отсутствующий last-frame PNG восстанавливается без рендера; отсутствующее selected video инвалидирует этот и downstream chunks.
 
-- state: `OUTPUT.state.json` (for example, `long.mp4.state.json`);
-- report: `OUTPUT.report.json`;
-- work directory: hidden `.OUTPUT_STEM.h3-chain` beside the output;
-- `--max-texture-drop 0.25` and `--min-texture 0`.
+Seed/config и SHA-256 image/prompt/audio входят в fingerprint. Смена `--seed-base` (или другой части fingerprint) автоматически создаёт новый state вместо reuse принятых старых чанков. State schema version 1 несовместим с версией 2 — для старого файла нужен новый output/state path.
 
-The state fingerprint covers the effective configuration and SHA-256 hashes of the initial image, prompt, and audio. Changing any of them requires a new state file instead of silently mixing takes. State writes use a temporary file plus atomic replace after every attempt.
-
-A selected chunk is not rendered again on resume. A missing last-frame PNG is re-extracted from its selected video without rendering. If the selected video itself is missing, that chunk and all downstream chunks are invalidated because their anchors depend on it. Do not run two writers against the same state file; there is no inter-process lock.
+По умолчанию рядом с `--output` создаются скрытый `.OUTPUT_STEM.h3-chain/`, `OUTPUT.state.json` и `OUTPUT.report.json`. State атомарно обновляется после каждой попытки, но не блокируется от одновременных writers: у job должен быть один активный процесс.
 
 ## Quality gate and retry algorithm
 
-For every rendered attempt, ffmpeg uniformly samples at most 24 frames, including the first and last. The pipeline calls the repository's `compare_video_texture.measure` implementation, obtaining pore-band energy (3–12 px), face drift, RGB delta, and HF delta.
+Для каждой попытки извлекаются 24 равномерно распределённых кадра (включая первый и последний). Канонический `compare_video_texture.measure` считает `face_drift` относительно первого кадра и pore energy на одном масштабе. Отдельно извлекаются последние `--tail-frames` **подряд** (по умолчанию 5): `face_drift_tail` — средний дрейф хвоста относительно первого кадра, `face_drift_last` — максимум в хвосте.
 
-For chunk `i`, the texture floor is:
+Для chunk `i` текстурный floor:
 
 ```text
 max(--min-texture,
-    median(pore energy of previously selected chunks) * (1 - --max-texture-drop))
+    median(положительные pore ранее selected chunks) * (1 - --max-texture-drop))
 ```
 
-The first chunk has no relative texture baseline, so only `--min-texture` applies to its texture. An attempt is rejected if:
+Попытка отклоняется, если:
 
-1. face drift, pore energy, or frame count is invalid/non-finite;
-2. fewer than two frames were measured;
-3. mean face drift exceeds `--max-face-drift`; or
-4. pore energy is below the current texture floor.
+1. mean `face_drift` **или** `face_drift_tail` превышает `--max-face-drift`;
+2. drift/pore не измерены или не finite, измерено меньше двух кадров либо нет tail frames;
+3. pore energy `<= 0` — это отказ даже при `--min-texture 0`, а не пропуск гейта;
+4. положительная pore energy ниже текущего texture floor.
 
-A rejection rerenders **only that chunk**, from the same incoming anchor, with `seed = seed_base + chunk_index * 1,000,000 + attempt`. Accepted earlier chunks are untouched. Attempt zero is the initial render; `--max-retries N` permits at most `N` additional renders.
+При отказе перерендеривается **только этот чанк** от того же входного anchor с `seed = seed_base + chunk_index * 1_000_000 + attempt`. Принятые предыдущие чанки не трогаются. Всего доступно `1 + max_retries` попыток; успешная сразу становится selected.
 
-If every attempt fails the gate, the pipeline selects the measured attempt with the smallest normalized gate penalty (drift excess plus texture deficit), then lower drift, higher pore energy, and earlier attempt as tie-breakers. It still assembles the best-effort result, but marks that chunk and `summary.quality_gate_passed` as false; the CLI exits `3`. Input/usage/render/assembly failures exit `2`; a fully accepted run exits `0`.
+Если все попытки плохие, выбирается лучшая по сумме нормированных нарушений (mean drift + tail drift + texture deficit), затем по меньшему tail/mean drift, большей pore и меньшему attempt. Неизмеримые значения получают большой штраф. Итог всё равно собирается как best effort, но chunk и `summary.quality_gate_passed` остаются false, а CLI возвращает **3**. Полностью принятый run возвращает 0; input/render/assembly errors — 2.
 
 ## Assembly and report
 
-- Chunk zero keeps all frames. Each later chunk drops frame zero, the duplicate of the previous chunk's last frame.
-- Segments are normalized with ffmpeg and concatenated. The last segment is cut to the planner's `kept_frames` so the output has exactly the requested frame count.
-- Retained chunk audio is joined with `acrossfade=d=0.04:c1=qsin:c2=qsin`. `qsin` is ffmpeg's equal-power curve. The track is padded/trimmed to the exact video duration before AAC muxing.
-- Seams compare the previous chunk's last frame with the next chunk's first **retained** frame (its original frame one). The report includes RGB/face deltas, before/after pore energy, texture ratio/drop, and a `texture_ratchet` flag using `--max-texture-drop`.
+- Chunk zero keeps all frames. Each later chunk drops frame zero with exact ffmpeg `trim=start_frame`; the final segment is trimmed to the requested `total_frames`.
+- `h3_i2v_run.py` всегда мюксит дорожку с нулевой секунды (`-map 1:a:0`), поэтому chunk audio для финала игнорируется. Сборщик открывает **один исходный `--audio`** и делает `atrim=start=...:end=...` по накопленной длине retained frames.
+- На каждом стыке обе стороны содержат один и тот же исходный участок длиной 40 мс и соединяются `acrossfade=d=0.04:c1=qsin:c2=qsin` (equal-power). Overlap не сдвигает последующие аудиособытия. WAV мюксится в итог как AAC.
+- Fake-renderer тест специально создаёт MP4 со звуком «каждый с нуля». Численная проверка WAV click-track подтверждает исходные времена щелчков в пределах 3 мс и отсутствие новых щелчков после стыка. Другой тест проверяет exact frame count и байты последних N кадров.
+- Seams compare the previous chunk's last frame with the next chunk's first **retained** frame. The report includes RGB/face deltas, before/after pore energy, texture ratio/drop, and a diagnostic `texture_ratchet` flag; seam metrics do not form an additional gate.
 
-State chunk entries contain:
+## Optional identity LoRA
+
+`--identity-lora character_swap` добавляет каждому чанку один и тот же исходный reference через `--ref-image` и `minimax_h3_character_swap_v1.1_ref2va_fro.safetensors` со strength model/clip `1.0`. `--image` по-прежнему меняется на хвост предыдущего чанка, а identity reference остаётся исходным портретом. Seed закреплён за chunk/attempt; retry намеренно получает новый seed.
+
+Выбран `character_swap`, а не `head_swap`: документация `head_swap` требует aligned source video в guide-канале, которого у image-to-video чейнинга нет. Опция экспериментальная: `--ref-image` переключает renderer в REF2VA, поэтому преимущество FL2VA для текстуры может быть потеряно. LoRA должна быть реально скачана в ComfyUI. Качество identity и совместимость связки на GPU здесь **не проверялись**; гарантии нет. По умолчанию опция `none`.
+
+State schema version 2 contains top-level `schema_version`, `fingerprint`, full `config`, and `chunks`. A selected chunk entry looks like:
 
 ```json
 {
@@ -91,6 +96,7 @@ State chunk entries contain:
   "kept_frames": 55,
   "output_start": 56,
   "status": "selected",
+  "anchor_name": "h3chain_job_anchor_001.png",
   "attempts": [
     {
       "attempt": 0,
@@ -100,27 +106,29 @@ State chunk entries contain:
       "texture_floor": 75.0,
       "accepted": false,
       "status": "rejected",
-      "metrics": {"face_drift": 12.0, "pore": 100.0, "frames": 24},
-      "reasons": ["face_drift 12 exceeds 8"]
+      "metrics": {"face_drift": 12.0, "face_drift_tail": 18.0, "face_drift_last": 20.0, "tail_frames": 5, "pore": 100.0, "frames": 24},
+      "reasons": ["mean face_drift 12 exceeds 8", "tail face_drift 18 exceeds 8"]
     }
   ],
   "selected_attempt": 1,
   "selected_seed": 1000043,
   "gate_passed": true,
-  "metrics": {"face_drift": 2.0, "pore": 110.0, "frames": 24},
+  "metrics": {"face_drift": 2.0, "face_drift_tail": 3.0, "face_drift_last": 4.0, "tail_frames": 5, "pore": 110.0, "frames": 24},
   "video": "work/chunk_001/attempt_001/chunk_1_1.mp4",
   "last_frame": "work/anchors/chunk_001_last.png"
 }
 ```
 
-The report repeats these chunk records and adds `seams` plus summary means/extrema, render/retry counts, worst-drift chunk, and texture-ratchet seam count.
+The report repeats these chunk records and adds `seams` plus summary mean/max for both full-sample and tail drift, worst-drift chunks, pore statistics, render/retry counts, and texture-ratchet seam count.
 
 ## Tests and remaining validation boundary
 
 ```bash
-python -m pytest -q scripts/h3_chain_pipeline_kimi/test_pipeline.py
+.venv/Scripts/python.exe -m pytest -q scripts/h3_chain_pipeline_kimi/test_pipeline.py
+.venv/Scripts/python.exe -m pytest -q tests/test_no_absolute_paths.py
+.venv/Scripts/python.exe -m pytest -q
 ```
 
-Tests cover planning, offline behavior, renderer argv, gate/retry/best-effort selection, state resume and anchor repair, and real local ffmpeg assembly/last-frame extraction on synthetic media. They never contact ComfyUI.
+Tests cover planning, real renderer `--help` compatibility, mean/tail gate, fail-closed texture, retry/best-effort, seed invalidation, resume/anchor repair, exact tail extraction, and real local ffmpeg assembly with a numerical click-track check. They never contact ComfyUI.
 
-Not verified here: actual H3 rendering, visual identity quality on real footage, metric thresholds on a real portrait, long-run audio sync, and concurrent writers. Pore energy is a rejection signal, not proof of natural pores; face-ROI drift can also respond to pose and lighting, not identity alone.
+Not verified without a real GPU: actual H3 rendering, queue/VRAM behavior, FL2VA/REF2VA quality, availability/effect of `character_swap`, visual identity and metric thresholds on real portraits, and long-run AV sync after AAC. Pore energy is a texture heuristic, not a pore classifier; fixed-ROI drift also responds to pose and lighting, not identity alone.
