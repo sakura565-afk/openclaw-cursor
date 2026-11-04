@@ -383,11 +383,27 @@ def main():
                         dur = float(_d["format"]["duration"])
                     except Exception:
                         dur = 0.0
-                    cmd = [FFMPEG, "-y", "-stream_loop", "-1", "-i", src, "-i", a.audio,
-                           "-t", f"{dur:.3f}" if dur > 0.1 else "7.3",
+                    # Resolve the audio track: a bare name means "a file in the
+                    # ComfyUI input dir" (that is how --audio is normally
+                    # passed), otherwise treat it as a local path. Without this
+                    # the ffmpeg mux silently failed and the render looked
+                    # successful while producing no output file.
+                    audio_path = a.audio
+                    if not os.path.isfile(audio_path):
+                        candidate = os.path.join(COMFYUI_INPUT_DIR, os.path.basename(a.audio))
+                        if os.path.isfile(candidate):
+                            audio_path = candidate
+                        else:
+                            print(f"ВНИМАНИЕ: аудио не найдено: {a.audio} "
+                                  f"(и не в {COMFYUI_INPUT_DIR}) - mux пропущен", flush=True)
+                            return 4
+                    cmd = [FFMPEG, "-y", "-i", src, "-i", audio_path,
                            "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
                            "-map", "0:v:0", "-map", "1:a:0", "-shortest", a.output]
-                    subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                    mux = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                    if mux.returncode != 0 or not os.path.exists(a.output):
+                        print("ВНИМАНИЕ: mux не удался:", (mux.stderr or "")[-400:], flush=True)
+                        return 4
                     # Guard: VHS's LoadVideo reports the input clip as an
                     # output too, so a mis-picked history entry produces a
                     # file identical to the source. That is not a render.
@@ -400,6 +416,15 @@ def main():
                     if same:
                         print("ВНИМАНИЕ: результат идентичен входу - рендер не дал нового файла", flush=True)
                         return 3
+                    # The frame count must survive the mux: -stream_loop on the
+                    # video used to drop the last frames, so 175 became 171.
+                    try:
+                        _v, _a, _d = _probe(Path(a.output))
+                        nframes = int((_d.get("streams") or [{}])[0].get("nb_frames", 0) or 0)
+                        if nframes and nframes != int(a.length):
+                            print(f"ВНИМАНИЕ: после mux {nframes} кадров вместо {a.length}", flush=True)
+                    except Exception:
+                        pass
                     print("готово:", a.output, round(os.path.getsize(a.output) / 1e6, 2), "МБ", flush=True)
                     return 0
             return 0
