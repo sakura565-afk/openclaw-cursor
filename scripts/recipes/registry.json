@@ -867,6 +867,91 @@
           "verdict": "best face lock, mouth closed, instrumental only"
         }
       ]
+    },
+    {
+      "id": "BOHO_LIPSYNC_FIXED",
+      "title": "Boho portrait singing to an ACE-Step track, face locked, lips synced",
+      "clip": "BOHO_LIPSYNC_FIXED.mp4",
+      "approval": "Pending user review (was rejected as \"face not reference, vocals not in time\")",
+      "source_section": "Fix for the rejected BOHO_ACESTEP_SONG: reference face + lip-sync",
+      "reference_description": "Original boho portrait photo (853x1280) of the woman in the dark green floral off-the-shoulder dress with a braided headband and gold chain.",
+      "checkpoint": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "text_encoder": "qwen3vl_32b_h3_ultra_uncensored_heretic_int8_convrot.safetensors",
+      "sampler": "res_multistep",
+      "scheduler": "beta",
+      "cfg": 1.0,
+      "steps": 20,
+      "fps": 24,
+      "seed": 424245,
+      "width": 736,
+      "height": 1120,
+      "length": 175,
+      "image_env": "H3_BOHO_SRC",
+      "prompt_file": "scripts/recipes/prompts/BOHO_FACE_LOCK.txt",
+      "prompt": "She sways gently from side to side in time with a slow acoustic guitar song, her shoulders and upper body moving softly and slowly, one hand resting lightly on her hip.\nA close-up fashion portrait of the same adult woman in a bohemian editorial style. She has long wavy dark brown hair with warm copper ends, a thin braided headband across her forehead, dramatic dark smoky eye makeup with black winged eyeliner and long lashes, and soft pink lips. She wears an off-the-shoulder dark green dress with a ruffled edge and a dense floral print of burnt orange, cream, light blue, teal, purple and magenta flowers, her right shoulder bare, and a thin gold chain necklace.\nThe camera stays at exactly the same close framing for the whole clip, from the top of her hair down to her upper torso, with the dark softly blurred background behind her in every frame. There is no cut, no scene change, no zoom and no camera move.\nHer face stays absolutely identical to the reference image in every single frame: the same nose, the same eyes with the same shape and the same eyeliner, the same eyebrows, the same closed relaxed lips, the same makeup, the same braided headband and the same hair parting. She holds her head perfectly still, her chin level, looking straight into the camera the whole time. Only her shoulders and upper torso sway slowly with the music. Her lips stay closed, she is listening to the guitar, not singing.\nWarm soft light from the front and slightly above, gentle shadows under the brow and chin, dark olive and blurred brick background, bohemian fashion editorial colour grade, realistic natural skin with visible pores and fine hair detail.\nHer face, body proportions, dress, headband and the background stay exactly the same as in the reference image from the first frame to the last.\n",
+      "negative": "blurry, deformed, watermark, text, head turn, big smile, teeth, extra fingers, distorted face",
+      "negative_status": "verbatim negative in the source",
+      "loras": [
+        {
+          "name": "BFS - Best Face Swap Character Swap v1.1 - MinimaxH3.safetensors",
+          "source_name": "BFS Character Swap v1.1",
+          "filename_status": "exact filename used in the render",
+          "strength_model": 0.85,
+          "strength_clip": 0.6
+        },
+        {
+          "name": "Polyhedron Perfect Eyes - Perfect Skin - Perfect Hands T2VA - MinimaxH3 - perfe8ct,perfect hands,perfect skin,perfect eyes.safetensors",
+          "source_name": "Polyhedron Perfect Eyes",
+          "filename_status": "exact filename used in the render",
+          "strength_model": 0.35,
+          "strength_clip": 0.35
+        }
+      ],
+      "analysis": "The rejected clip had two defects: the face was not the reference woman, and the lips did not follow the song. Both were measured and fixed separately. (1) FACE. ArcFace similarity to the reference photo (scripts/face_ref_similarity.py): the ref2va render scored 0.030 - not a drifting face but a DIFFERENT WOMAN. The fl2va render scores 0.944. ref2va is required only because fl2va cannot take an external audio reference. (2) LIPS. LatentSync 1.6 (local, open weights) drives the mouth from the actual track: lip-sync correlation between the audio envelope and mouth openness went from -0.213 (inverted, lips moving against the music) to +0.236, and mouth amplitude grew from 0.027 to 0.102 (four times). Vision on six frames: the mouth shows four distinct shapes (closed / parted / rounded open / wide open with teeth) and there are no lip-sync artefacts - no seam, no blurred patch, no doubled lip. Face similarity after lip-sync is 0.933, so the lipsync did not damage the identity. What is still weak is the skin: it is airbrushed and poreless (vision 5.5/10). That is the known H3 ceiling and is a separate problem from the two defects this clip was rejected for.",
+      "measured": {
+        "face_similarity_to_reference": 0.9327,
+        "face_similarity_before_lipsync": 0.944,
+        "face_similarity_of_rejected_ref2va_render": 0.0302,
+        "lipsync_corr_after": 0.236,
+        "lipsync_corr_before": -0.2134,
+        "mouth_amplitude_after": 0.154,
+        "mouth_amplitude_before": 0.066,
+        "audio_corr_muxed_vs_ace_window": 0.9997,
+        "vision_overall": 5.5,
+        "vision_identity": "same woman, mild micro-drift",
+        "vision_mouth": "four distinct shapes across six frames, no artefacts",
+        "vision_skin": "airbrushed, poreless",
+        "vision_continuity": "no cuts, no zoom jumps",
+        "frames": 182,
+        "duration_s": 7.3,
+        "resolution": "736x1120",
+        "fps": 25
+      },
+      "pipeline": {
+        "step_1_render": "scripts/h3_i2v_run.py --image boho_src.jpg --guide-image boho_guide.jpg --guide-frame 87 --tst-tau 0.2 --sampler res_multistep --scheduler beta --seed 424245 --steps 20 (fl2va: face locked, mouth closed)",
+        "step_2_lipsync": "scripts/lipsync_clip.py --video BOHO_INSTR2.mp4 --audio ace_win38.wav --fps 25 --out-fps 24 --steps 20 --lips-expression 1.5",
+        "step_3_mux": "ffmpeg -map 0:v:0 -map 1:a:0 with the same ACE-Step window",
+        "why_this_order": "fl2va keeps the reference face (0.944) but cannot take an external track; LatentSync adds the singing on top and leaves the identity intact (0.933).",
+        "comfyui_patch": "scripts/apply_latentsync_patches.py - the wrapper lives outside the repo and needs three fixes: torchvision.io.read_video/write_video are gone, and the per-chunk tensors must be freed or a 175-frame clip OOMs around chunk 10-12."
+      },
+      "music": {
+        "provider": "ACE-Step 1.5 (local, open weights, no key)",
+        "track": "ACE_STEP_BOHO_60s.flac",
+        "window": "38.0 s .. 45.3 s (7.3 s)",
+        "bpm": "~60",
+        "lyrics": "[Verse] Warm light falling on your shoulder / Evening breeze through the open window / Slow guitar, quiet room / Your shadow dancing close to mine / [Chorus] Stay a little longer now / Let the silence say it slow / Morning finds us here / With the golden glow",
+        "measured": {
+          "vocal_band_pct": 3.06,
+          "qa": "YES - female vocal, acoustic guitar, ~60 BPM"
+        }
+      },
+      "unrecorded": [
+        "skin remains airbrushed and poreless (vision 5.5/10)",
+        "mild facial micro-drift between frames (eye aperture, brow angle, nose tip)",
+        "individual flower shapes on the dress regenerate rather than track",
+        "necklace chain configuration shifts between frames",
+        "headband braid pattern is not pixel-identical between frames"
+      ]
     }
   ]
 }
