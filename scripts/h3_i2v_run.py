@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import shutil
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -23,7 +24,12 @@ from video_pipeline.assembler import validate_workflow_against_object_info
 BASE = os.environ.get("COMFYUI_PROD_URL", "http://127.0.0.1:8188")
 COMFYUI_INPUT_DIR = os.environ.get("COMFYUI_INPUT_DIR", r"E:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\input")
 COMFYUI_OUTPUT_DIR = os.environ.get("COMFYUI_OUTPUT_DIR", r"E:\ComfyUI_windows_portable_nvidia_cu126\ComfyUI_windows_portable\ComfyUI\output")
-FFMPEG = os.environ.get("FFMPEG_BIN", r"C:\Users\user\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0.1-full_build\bin\ffmpeg.exe")
+# The ffmpeg binary. FFMPEG_BIN overrides it; otherwise PATH decides. The
+# previous default was a pinned WinGet path that exists ONLY on this
+# workstation, so the mux tests died with FileNotFoundError on the CI
+# runners. PATH lookup keeps the local behaviour (ffmpeg is on PATH here)
+# and makes the script portable.
+FFMPEG = os.environ.get("FFMPEG_BIN") or shutil.which("ffmpeg") or "ffmpeg"
 
 
 def _scaled_image(nodes: dict, nid: int, image_name: str, source: list) -> tuple[str, int]:

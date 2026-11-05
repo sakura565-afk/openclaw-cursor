@@ -34,8 +34,9 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     ('scripts/freevideo_lora_run.py', 'E' + ':/ComfyUI_LAB_037/ComfyUI_windows_portable/ComfyUI'): "existing workstation default",
     ('scripts/freevideo_lora_run.py', 'G' + ':/FreeVideo_output'): "existing workstation default",
 
-    # Existing environment-overridable H3 input/output and ffmpeg defaults.
-    ('scripts/h3_i2v_run.py', 'C' + ':\\Users\\user\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\\ffmpeg-9.0.1-full_build\\bin\\ffmpeg.exe'): "existing workstation default",
+    # Existing environment-overridable H3 input/output defaults. The ffmpeg
+    # default was removed: it is resolved from PATH now (see h3_i2v_run.py),
+    # so the pinned workstation path is no longer in the source.
     ('scripts/h3_i2v_run.py', 'E' + ':\\ComfyUI_windows_portable_nvidia_cu126\\ComfyUI_windows_portable\\ComfyUI\\input'): "existing workstation default",
     ('scripts/h3_i2v_run.py', 'E' + ':\\ComfyUI_windows_portable_nvidia_cu126\\ComfyUI_windows_portable\\ComfyUI\\output'): "existing workstation default",
 
