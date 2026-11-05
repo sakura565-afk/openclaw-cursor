@@ -103,13 +103,13 @@ def main() -> int:
     print(f"модель загружена за {time.time() - t0:.0f} с", flush=True)
 
     kwargs = dict(
-        prompt=a.prompt,
+        prompt=prompt,
         audio_duration=a.seconds,
         generator=torch.Generator("cuda").manual_seed(a.seed),
         output="audios",
     )
-    if a.lyrics:
-        kwargs["lyrics"] = a.lyrics
+    if lyrics:
+        kwargs["lyrics"] = lyrics
     if a.steps:
         kwargs["num_inference_steps"] = a.steps
 
