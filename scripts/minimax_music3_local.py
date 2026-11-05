@@ -19,6 +19,8 @@ import os
 import sys
 import time
 
+import numpy as np
+
 DEFAULT_MODEL_DIR = os.environ.get("MINIMAX_MUSIC3_DIR", "")
 
 
@@ -116,7 +118,15 @@ def main() -> int:
     t1 = time.time()
     audio = pipe(**kwargs)[0]
     dt = time.time() - t1
-    data = audio.T.float().cpu().numpy()
+    # The pipeline already returns a numpy array, but it can be a torch tensor
+    # depending on the diffusers version.
+    if hasattr(audio, "detach"):
+        audio = audio.detach().float().cpu().numpy()
+    data = np.asarray(audio)
+    if data.ndim == 1:
+        data = data[None, :]
+    else:
+        data = data.T
     sf.write(a.out, data, pipe.sampling_rate)
     print(f"готово: {a.out} ({data.shape[-1] / pipe.sampling_rate:.1f} с аудио, "
           f"генерация {dt:.0f} с)", flush=True)
