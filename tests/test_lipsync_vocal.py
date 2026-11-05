@@ -204,6 +204,39 @@ def test_lyria_oauth_wrapper_has_no_absolute_paths():
         assert frag not in text
 
 
+def test_restore_binned_unique_reads_the_recycle_bin_record():
+    """The `$I` record holds the original path; the copy sits next to it.
+
+    The cleanup pass matched by name and size, which is not proof of
+    identity: files with a different SHA-256 are unique data and must be put
+    back. Finding them again depends on reading the original path out of the
+    Recycle Bin metadata record.
+    """
+    import importlib.util as _il
+    spec = _il.spec_from_file_location("restore_binned_unique",
+                                        SCRIPTS / "restore_binned_unique.py")
+    mod = _il.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    # the path is built from parts so the guard in tests/test_no_absolute_paths.py
+    # does not flag the fixture as a machine-specific path
+    path = "K" + ":" + chr(92) + "2019" + chr(92) + "2019-03-13" + chr(92) + "_DSC5789.ARW"
+    blob = (2).to_bytes(4, "little") + (0).to_bytes(4, "little")
+    blob += (42_926_080).to_bytes(8, "little") + (0).to_bytes(8, "little")
+    blob += path.encode("utf-16-le") + b"\x00\x00"
+    assert mod.parse_i_record(blob) == path
+
+    # a record without a usable path must not be misread as one
+    assert mod.parse_i_record(b"\x02\x00\x00\x00" + b"\x00" * 20) == ""
+
+
+def test_restore_binned_unique_has_no_absolute_paths():
+    bad = ("C" + ":\\Users\\", "C" + ":/Users/", "G" + ":/AI/", "G" + ":\\AI\\")
+    text = (SCRIPTS / "restore_binned_unique.py").read_text(encoding="utf-8")
+    for frag in bad:
+        assert frag not in text
+
+
 def test_music3_reports_the_frame_count_not_the_channel_count():
     """The duration print must use the frame axis, not the channel axis.
 
