@@ -102,7 +102,11 @@ def _write_skin_mp4(path: Path, fps: float) -> None:
         frame = np.full((96, 128, 3), (120, 150, 200), dtype=np.uint8)
         for x in range(12, 116, 16):
             cv2.circle(frame, (x, 30 + (index % 2)), 2, (90, 110, 160), -1)
-        assert writer.write(frame)
+        # OpenCV 4.x returns None from VideoWriter.write(); 5.x returns True.
+        # Asserting on the return value therefore fails on the CI runners
+        # (opencv-python-headless 4.x) while passing on this box (5.x).
+        # The file size check below is the portable assertion.
+        writer.write(frame)
     writer.release()
     assert path.stat().st_size > 0
 

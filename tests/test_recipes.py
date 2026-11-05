@@ -33,6 +33,9 @@ EXPECTED_SCENES = {
     "BOHO_MUSIC3",
     # New: boho portrait with the H3 face-refine pass.
     "BOHO_FACEREFINE",
+    # New: boho portrait singing to a locally generated ACE-Step 1.5 track
+    # (ref2va + ref_audios, so the lips move with the song).
+    "BOHO_ACESTEP_SONG",
 }
 
 
