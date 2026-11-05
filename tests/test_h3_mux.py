@@ -27,6 +27,15 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import h3_i2v_run as runner  # noqa: E402
 
+# The mux tests shell out to ffmpeg. On this box it is a pinned WinGet
+# build; on the CI runners it comes from PATH. Skip when neither exists
+# instead of failing with FileNotFoundError.
+_FFMPEG = runner.FFMPEG
+pytestmark = pytest.mark.skipif(
+    not (Path(_FFMPEG).exists() or shutil.which(_FFMPEG)),
+    reason="ffmpeg binary is not available",
+)
+
 
 def _make_clip(path: Path, frames: int = 175) -> None:
     """A tiny silent clip with the exact frame count we care about."""
