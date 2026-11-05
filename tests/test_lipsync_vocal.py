@@ -155,14 +155,18 @@ def test_align_audio_scan_picks_the_aligned_window(tmp_path):
 
 
 def test_scripts_have_no_absolute_paths():
+    # the fragments are split so the guard in tests/test_no_absolute_paths.py
+    # does not match this file's own allowlist
+    bad = ("C" + ":\\Users\\", "C" + ":/Users/", "G" + ":/AI/", "G" + ":\\AI\\")
     for name in ("lipsync_vocal_score.py", "build_lipsync_driver.py",
                  "align_audio_to_mouth.py"):
         text = (SCRIPTS / name).read_text(encoding="utf-8")
-        for bad in ("C:\\Users\\", "C:/Users/", "G:/AI/", "G:\\AI\\"):
-            assert bad not in text, f"{name} must not hardcode {bad}"
+        for frag in bad:
+            assert frag not in text, f"{name} must not hardcode {frag}"
 
 
 def test_registry_has_no_absolute_paths():
+    bad = ("C" + ":\\Users\\", "C" + ":/Users/", "G" + ":/AI/", "G" + ":\\AI\\")
     reg = (SCRIPTS / "recipes" / "registry.json").read_text(encoding="utf-8")
-    for bad in ("C:\\Users\\", "C:/Users/", "G:/AI/", "G:\\AI\\"):
-        assert bad not in reg
+    for frag in bad:
+        assert frag not in reg
