@@ -60,6 +60,7 @@ class AnatomyStillPipeline:
         passes: list[dict[str, Any]] = [
             {
                 "kind": "edit",
+                "backend": edit.get("backend", "qwen_edit"),
                 "denoise": float(edit["denoise"]),
                 "steps": int(edit["steps"]),
                 "seed": int(edit["seed"]),
@@ -81,6 +82,42 @@ class AnatomyStillPipeline:
             )
         return passes
 
+    def _run_h3_edit(
+        self,
+        *,
+        source: Path,
+        tag: str,
+        steps: int,
+        seed: int,
+    ) -> Path:
+        """Render the still with H3 instead of an image editor.
+
+        Qwen-Image-Edit censors the masked region: inside the pose mask the
+        texture contrast collapsed from 5.23 in the source to 1.15 after the
+        edit - a flat grey fill at the same brightness. H3 with a minimal LoRA
+        stack is the path that does not censor.
+        """
+        from scripts import local_paths
+        from scripts.anatomy_still import h3_still
+
+        h3 = self.recipe["h3"]
+        render = h3.get("render", {})
+        out = Path(local_paths.SCRATCH) / f"{tag}_h3.png"
+        return h3_still.render_still(
+            source=source,
+            prompt=h3["prompt"],
+            loras=h3["loras"],
+            out_png=out,
+            width=int(render.get("width", self.recipe["size"][0])),
+            height=int(render.get("height", self.recipe["size"][1])),
+            length=int(render.get("length", 33)),
+            steps=int(render.get("steps", steps)),
+            seed=int(render.get("seed", seed)),
+            sampler=str(render.get("sampler", "euler")),
+            scheduler=str(render.get("scheduler", "simple")),
+            negative=str(h3.get("negative", "")),
+        )
+
     def _run_edit(
         self,
         *,
@@ -89,8 +126,12 @@ class AnatomyStillPipeline:
         denoise: float,
         steps: int,
         seed: int,
+        backend: str = "qwen_edit",
         **_: Any,
     ) -> Path:
+        if backend == "h3_still":
+            return self._run_h3_edit(source=source, tag=tag, steps=steps, seed=seed)
+
         from scripts import local_paths
         from scripts import qwen_edit_run
 
