@@ -68,6 +68,12 @@ class AnatomyStillPipeline:
             }
         ]
         for index, refine in enumerate(self.recipe["refine"]["passes"], start=1):
+            if edit.get("backend") == "h3_still" and not self.recipe["refine"].get(
+                    "allow_refine_after_h3", False):
+                # A Qwen refine can only censor what H3 produced: inside the
+                # pose mask the editor's own filter flattens the region into a
+                # grey fill (contrast 5.23 -> 1.15). So the H3 path stops here.
+                break
             passes.append(
                 {
                     "kind": "masked_refine",
