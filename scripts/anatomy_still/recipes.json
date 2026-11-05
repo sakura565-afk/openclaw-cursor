@@ -86,17 +86,18 @@
         }
       },
       "measured": {
-        "source_clip": "G:/hermes_archives/renders/CHEF_PHOTO.mp4 (user approved \"Успех\")",
-        "best_frame": 108,
-        "visibility": 0.806,
+        "pipeline": "H3 fl2va, 175 frames, seed 505050, euler/simple, 20 steps, Panties Off! 0.55 + HMPussyV2 1.0, then the frame picker",
+        "best_frame": 88,
+        "visibility": 1.0,
         "skin_fraction": 1.0,
-        "cloth_score": 0.194,
         "texture_score": 1.0,
         "validator_passed": true,
-        "vision_anatomy_plausibility": "7/10",
-        "vision_notes": "vertical cleft, paired inner folds, hood-like prominence, mucosal tissue, pubic hair stubble, pores; no grey censor patch",
-        "frame_0_visibility": 0.123,
-        "note": "the action takes time - frame 0 still has the apron down; the anatomy only appears around frame 108"
+        "view": "front",
+        "vision_anatomy_plausibility": "6/10",
+        "vision_notes": "outer labial volume, vertical midline cleft, an asymmetric inner fold, clitoral hood not clearly resolved, no convincing pubic hair - stippling instead; no grey censor patch",
+        "caveat": "the validator scored 1.000 while vision scored 6/10 - visibility and skin coverage do not measure anatomical correctness",
+        "reference_frame": "frame 108 of the user-approved CHEF_PHOTO.mp4, visibility 0.806, front view",
+        "macro_transition": "inherent to the scene - the approved clip does it too, so the anatomy still is a macro frame"
       },
       "h3_anatomy_still": {
         "still": "scripts/anatomy_still/examples/chef3_final.png",

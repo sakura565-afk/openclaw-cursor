@@ -340,6 +340,18 @@ def test_anatomy_still_picks_the_frame_where_the_action_happened():
     assert "best" in picker
 
 
+def test_anatomy_still_stops_after_the_h3_edit():
+    """A Qwen refine after an H3 edit can only censor what H3 produced.
+
+    Inside the pose mask the editor's own filter flattens the region into a
+    grey fill (texture contrast 5.23 -> 1.15), so the H3 path must not fall
+    through to it.
+    """
+    src = (SCRIPTS / "anatomy_still" / "pipeline.py").read_text(encoding="utf-8")
+    assert 'allow_refine_after_h3' in src
+    assert 'edit.get("backend") == "h3_still"' in src
+
+
 def test_music3_reports_the_frame_count_not_the_channel_count():
     """The duration print must use the frame axis, not the channel axis.
 
