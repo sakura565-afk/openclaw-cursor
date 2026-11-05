@@ -739,6 +739,134 @@
           "duration_s": 7.29
         }
       }
+    },
+    {
+      "id": "BOHO_ACESTEP_SONG",
+      "clip": "BOHO_ACESTEP_GUIDE_AUD.mp4",
+      "approval": "Pending user review (ref2va + guide frame 87 + TST 0.2 + ACE-Step 1.5 vocal track)",
+      "source_section": "New: bohemian portrait singing to a locally generated ACE-Step 1.5 song",
+      "checkpoint": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "text_encoder": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+      "width": 736,
+      "height": 1120,
+      "fps": 24,
+      "length": 175,
+      "duration_seconds": 7.3,
+      "steps": 20,
+      "cfg": 1.0,
+      "seed": 424245,
+      "sampler": "euler",
+      "scheduler": "simple",
+      "image_env": "H3_BOHO_SRC_IMAGE",
+      "first_frame": "Boho portrait photo 853x1280 scaled to 736x1120; source AR 0.666 versus render AR 0.657 (1.4% error).",
+      "loras": [
+        {
+          "name": "BFS - Best Face Swap REF2VA - MinimaxH3.safetensors",
+          "source_name": "BFS REF2VA",
+          "filename_status": "exact filename used in the render",
+          "strength_model": 0.85,
+          "strength_clip": 0.6
+        },
+        {
+          "name": "Polyhedron Perfect Eyes - Perfect Skin - Perfect Hands T2VA - MinimaxH3 - perfe8ct,perfect hands,perfect skin,perfect eyes.safetensors",
+          "source_name": "Polyhedron Perfect Eyes",
+          "filename_status": "exact filename used in the render",
+          "strength_model": 0.35,
+          "strength_clip": 0.35
+        }
+      ],
+      "prompt_file": "scripts/recipes/prompts/BOHO_ACESTEP_SONG.txt",
+      "prompt_status": "verbatim prompt used for the render",
+      "negative": "blurry, deformed, watermark, text, head turn, big smile, teeth, extra fingers, distorted face",
+      "negative_status": "verbatim negative in the source",
+      "reference_description": "A close-up glamour portrait of an adult woman with long wavy brown hair and a thin braided headband, dramatic dark eye makeup, wearing an off-the-shoulder dark green ruffled dress with a dense floral print (orange, blue, purple, white), one bare shoulder, warm lighting against a dark softly blurred background; bohemian fashion-editorial look.",
+      "analysis": "Singing variant. fl2va keeps the face locked (drift 38.0) but cannot take an external audio reference, so the lips stay closed and the song has no owner. ref2va with ref_audios (--ref-audio) lets H3 move in time with the supplied track, and the mouth then articulates (vision: mouth articulation 8/10, four sampled frames show four distinct vowel shapes). Cost: face drift rises 38.0 -> 56.1 mean because ref2va re-draws the face. Audio: ACE-Step 1.5 local, 60 s track, window at 38 s = 7.3 s; vocal band 3.06% of spectrum, MiniMax audio-QA YES with lyrics recovered. Full track at G:/hermes_archives/renders/ACE_STEP_BOHO_60s.flac.",
+      "unrecorded": [
+        "necklace visibility is inconsistent across frames",
+        "headband braid colour order shifts",
+        "dress flower shapes regenerate rather than track",
+        "skin is airbrushed - no pores at 368x560 contact-sheet scale"
+      ],
+      "prompt": "She poses gently to a slow romantic acoustic guitar song, she sways her body softly from side to side in time with the music, one hand resting lightly on her hip.\nA close-up fashion portrait of the same adult woman in a bohemian editorial style. She has long wavy dark brown hair with warm copper ends, a thin braided headband across her forehead, dramatic dark smoky eye makeup with black winged eyeliner and long lashes, and soft pink lips slightly parted. She wears an off-the-shoulder dark green dress with a ruffled edge and a dense floral print of burnt orange, cream, light blue, teal, purple and magenta flowers, her right shoulder bare, and a thin gold chain necklace.\nThe camera stays at exactly the same close framing for the whole clip, from the top of her hair down to her upper torso, with the dark softly blurred background behind her in every frame. There is no cut, no scene change, no zoom and no camera move. Her body gently sways from side to side in time with the music, her head tilts slightly, her hair moves softly across her shoulder, her gaze stays on the camera and she gives a faint warm smile at the end.\nShe softly sings along to the song, her lips move gently with the lyrics while she keeps swaying to the guitar.\nWarm soft light from the front and slightly above, gentle shadows under the brow and chin, dark olive and blurred brick background, bohemian fashion editorial colour grade, realistic natural skin with visible pores and fine hair detail.\nHer face, body proportions, dress, headband and the background stay exactly the same as in the reference image from the first frame to the last.\n",
+      "music": {
+        "provider": "ACE-Step 1.5 (local, open weights, no key)",
+        "workflow": "ComfyUI native nodes (TextEncodeAceStepAudio1.5 / EmptyAceStep1.5LatentAudio / KSampler)",
+        "model": "Comfy-Org/ACE-Step-1.5 split_files (turbo + qwen_0.6b + qwen_4b + ace_1.5_vae)",
+        "encoders_required": "BOTH qwen_0.6b_ace15 AND qwen_4b_ace15 (DualCLIPLoader type=ace)",
+        "track": "ACE_STEP_BOHO_60s.flac",
+        "window": "38.0 s .. 45.3 s (7.3 s)",
+        "window_reason": "highest vocal-band share of all 7.3 s windows (3.06%); 20 s renders are instrumental only",
+        "bpm": "~60",
+        "lyrics": "[Verse] Warm light falling on your shoulder / Evening breeze through the open window / Slow guitar, quiet room / Your shadow dancing close to mine / [Chorus] Stay a little longer now / Let the silence say it slow / Morning finds us here / With the golden glow",
+        "measured": {
+          "vocal_band_pct": 3.06,
+          "rms": 0.1254,
+          "qa": "YES - female vocal, acoustic guitar, ~60 BPM"
+        },
+        "duration_s": 60.0,
+        "seed": 7,
+        "qwen_4b_required": true
+      },
+      "h3_wiring": {
+        "mode": "ref2va (MiniMaxH3ReferenceToVideo)",
+        "ref_image": "boho_ref.png",
+        "ref_audio": "boho_ace_step.wav",
+        "why": "fl2va cannot accept external audio; ref_audios is the only path that makes H3 move in time with a given track",
+        "sampler": "res_multistep / beta",
+        "steps": 20,
+        "cfg": 1.0,
+        "seed": 424245,
+        "guide_image": "boho_guide.jpg",
+        "guide_frame": 87,
+        "tst_tau": 0.2,
+        "note": "--guide-image is IGNORED when --ref-image is set: the runner builds the ref2va branch and only the fl2va branch wires the guide. To pin the face in ref2va, pass the same portrait as the ref image (boho_ref.png == boho_guide.jpg == boho_src.jpg)."
+      },
+      "measured": {
+        "face_drift_mean": 56.0853,
+        "face_drift_max": 65.3243,
+        "face_drift_last": 49.1525,
+        "baseline_instr2_face_drift_mean": 38.0219,
+        "vision_overall": 6.5,
+        "vision_mouth_articulation": 8,
+        "vision_face_consistency": 7,
+        "vision_skin": 5.5,
+        "mouth_dark_pixel_range": "0.42-0.98 (2.3x) - the mouth is alive, not frozen",
+        "lipsync_corr_audio_vs_mouth": -0.234,
+        "lipsync_verdict": "mouth articulates but is NOT frame-accurately synced to the audio envelope",
+        "audio_corr_muxed_vs_ace_window": 0.9997,
+        "frames": 175,
+        "duration_s": 7.29,
+        "resolution": "736x1120",
+        "fps": 24,
+        "video_has_audio": false,
+        "audio_note": "ComfyUI SaveVideo writes video only - the ACE-Step track is muxed afterwards with ffmpeg"
+      },
+      "variants": [
+        {
+          "clip": "BOHO_ACESTEP_GUIDE_AUD.mp4",
+          "stack": "ref2va + guide frame 87 + TST 0.2 + muxed ACE-Step audio",
+          "drift_mean": 56.1,
+          "verdict": "DELIVERABLE - singing, correct scene, has audio"
+        },
+        {
+          "clip": "BOHO_ACESTEP_SONG.mp4",
+          "stack": "ref2va + Character Swap v1.1",
+          "drift_mean": 56.1,
+          "verdict": "same scene, singing, no audio track muxed"
+        },
+        {
+          "clip": "BOHO_ACESTEP_REF2VA.mp4",
+          "stack": "ref2va + BFS REF2VA LoRA",
+          "drift_mean": 30.3,
+          "verdict": "REJECTED - renders a completely different scene (woman reading a newspaper at a wooden table). The 295 MB REF2VA LoRA is not a drop-in replacement for the 77 MB Character Swap v1.1 - do not swap it in."
+        },
+        {
+          "clip": "BOHO_INSTR2.mp4",
+          "stack": "fl2va, no external audio",
+          "drift_mean": 38.0,
+          "verdict": "best face lock, mouth closed, instrumental only"
+        }
+      ]
     }
   ]
 }
