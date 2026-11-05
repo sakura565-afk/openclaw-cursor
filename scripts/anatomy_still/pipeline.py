@@ -53,6 +53,8 @@ class AnatomyStillPipeline:
         self.edit_runner = edit_runner or self._run_edit
         self.refine_runner = refine_runner or self._run_refine
         self.mask_builder = mask_builder or self._build_mask
+        # set by the H3 path: the mask the frame picker used
+        self._mask_override: Path | None = None
         self.validator = validator or self._validate
 
     def _plan(self) -> list[dict[str, Any]]:
@@ -88,6 +90,30 @@ class AnatomyStillPipeline:
             )
         return passes
 
+    def _fit_mask(self, mask: Path, image: Path) -> Path:
+        """Scale a mask to the image it will be compared against.
+
+        The mask for the H3 path comes from the source photo, which has a
+        different size than the render. The validator rejects a mismatch, so
+        the mask is scaled instead of rebuilt - rebuilding it on a picked
+        macro frame would place it somewhere else entirely.
+        """
+        from scripts.anatomy_still.pick_still import load_mask, load_rgb
+
+        try:
+            m = load_mask(Path(mask))
+            img = load_rgb(Path(image))
+        except Exception:
+            return mask
+        if m.shape[:2] == img.shape[:2]:
+            return mask
+        import cv2
+        scaled = cv2.resize(m, (img.shape[1], img.shape[0]),
+                            interpolation=cv2.INTER_NEAREST)
+        out = Path(mask).with_name(f"{Path(mask).stem}_fit{Path(mask).suffix}")
+        cv2.imwrite(str(out), scaled)
+        return out
+
     def _run_h3_edit(
         self,
         *,
@@ -116,6 +142,11 @@ class AnatomyStillPipeline:
         mask_png = None
         if render.get("pick_best_frame"):
             mask_png = Path(self.mask_builder(Path(source), self.recipe))
+            # Keep that mask for the validation that follows. Rebuilding it on
+            # the picked frame would place it differently - the picked frame is
+            # a macro close-up, and the pose detector sees a different pose
+            # there - so the score would measure the wrong region.
+            self._mask_override = mask_png
 
         return h3_still.render_still(
             source=source,
@@ -342,7 +373,14 @@ class AnatomyStillPipeline:
                 history.append({"pass": pass_spec})
             produced = Path(produced)
             current = produced
-            mask = Path(self.mask_builder(current, self.recipe))
+            override = getattr(self, "_mask_override", None)
+            if override is not None and Path(override).exists():
+                # the H3 path picked the frame with this mask; reusing it keeps
+                # the score on the region the picker actually looked at
+                mask = Path(override)
+                mask = self._fit_mask(mask, current)
+            else:
+                mask = Path(self.mask_builder(current, self.recipe))
             last_metrics = self.validator(current, mask)
             history[-1]["still"] = str(current)
             history[-1]["mask"] = str(mask)
