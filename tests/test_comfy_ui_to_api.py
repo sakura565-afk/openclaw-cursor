@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -94,9 +95,12 @@ def test_apply_overrides_rejects_unknown_node() -> None:
 def test_face_refine_example_workflow_converts() -> None:
     """The shipped H3 face-refine example has to survive the conversion."""
     example = Path(
-        "E:/ComfyUI_windows_portable_nvidia_cu126/ComfyUI_windows_portable/ComfyUI"
-        "/custom_nodes/ComfyUI-H3-FaceRefine/example_workflows"
-        "/H3_Face_Refine_Auto_Select.json"
+        os.environ.get("H3_FACEREFINE_EXAMPLE", "")
+        or os.path.join(
+            os.environ.get("COMFY_ROOT", ""),
+            "custom_nodes", "ComfyUI-H3-FaceRefine", "example_workflows",
+            "H3_Face_Refine_Auto_Select.json",
+        )
     )
     if not example.exists():
         pytest.skip("face-refine example workflow is not installed")
