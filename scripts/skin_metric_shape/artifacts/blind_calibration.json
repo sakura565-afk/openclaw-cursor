@@ -1,0 +1,664 @@
+{
+  "tool": "scripts.skin_metric_shape.calibration",
+  "source": "blind",
+  "summary": {
+    "truth_total": 20,
+    "human_is_ground_truth": true,
+    "human_vs_truth": 20,
+    "old_vs_human": 16,
+    "old_vs_truth": 16,
+    "new_vs_human": 20,
+    "new_vs_truth": 20,
+    "corrected_crops": [
+      10,
+      11,
+      18,
+      20
+    ],
+    "remaining_mismatches": []
+  },
+  "rows": [
+    {
+      "number": 1,
+      "case_id": "plastic_level_192",
+      "family": "plastic",
+      "crop": "crops/crop_01.png",
+      "truth": "plastic",
+      "human": "plastic",
+      "metric_old": "plastic",
+      "metric_new": "plastic",
+      "pore_rms_survival": [
+        0.0,
+        0.0
+      ],
+      "shape": {
+        "component_count": 0.0,
+        "component_density_per_10k": 0.0,
+        "component_area_fraction": 0.0,
+        "median_component_width_px": 0.0,
+        "p90_component_width_px": 0.0,
+        "sparsity_score": 1.0,
+        "peak_area_fraction": 0.0,
+        "peak_density_per_10k": 0.0,
+        "pit_noise_area_ratio": 0.0,
+        "laplacian_peak_correlation": 0.0,
+        "highpass_std": 1e-09
+      }
+    },
+    {
+      "number": 2,
+      "case_id": "mixed_core",
+      "family": "mixed",
+      "crop": "crops/crop_02.png",
+      "truth": "digital_sand",
+      "human": "digital_sand",
+      "metric_old": "digital_sand",
+      "metric_new": "digital_sand",
+      "pore_rms_survival": [
+        8.882970311061447,
+        0.3197527769750145
+      ],
+      "shape": {
+        "component_count": 4053.0,
+        "component_density_per_10k": 1099.4466145833333,
+        "component_area_fraction": 0.3152940538194444,
+        "median_component_width_px": 1.1283791670955126,
+        "p90_component_width_px": 2.5231325220201604,
+        "sparsity_score": 0.0,
+        "peak_area_fraction": 0.2794499905820305,
+        "peak_density_per_10k": 2012.2612847222222,
+        "pit_noise_area_ratio": 0.6076750143775814,
+        "laplacian_peak_correlation": 0.6014113366864516,
+        "highpass_std": 13.680932546354967
+      }
+    },
+    {
+      "number": 3,
+      "case_id": "pores_coarse_1",
+      "family": "pores",
+      "crop": "crops/crop_03.png",
+      "truth": "pores",
+      "human": "pores",
+      "metric_old": "pores",
+      "metric_new": "pores",
+      "pore_rms_survival": [
+        5.7485184911122165,
+        0.6200757425183961
+      ],
+      "shape": {
+        "component_count": 170.0,
+        "component_density_per_10k": 46.115451388888886,
+        "component_area_fraction": 0.2651909722222222,
+        "median_component_width_px": 7.225151993843567,
+        "p90_component_width_px": 12.094446433111093,
+        "sparsity_score": 1.0,
+        "peak_area_fraction": 0.02544647465675648,
+        "peak_density_per_10k": 133.73480902777777,
+        "pit_noise_area_ratio": 0.5177691859541338,
+        "laplacian_peak_correlation": 0.18622837664701392,
+        "highpass_std": 7.037377692459247
+      }
+    },
+    {
+      "number": 4,
+      "case_id": "mixed_2",
+      "family": "mixed",
+      "crop": "crops/crop_04.png",
+      "truth": "digital_sand",
+      "human": "digital_sand",
+      "metric_old": "digital_sand",
+      "metric_new": "digital_sand",
+      "pore_rms_survival": [
+        13.090192188558936,
+        0.22846482728357576
+      ],
+      "shape": {
+        "component_count": 4849.0,
+        "component_density_per_10k": 1315.3754340277778,
+        "component_area_fraction": 0.3170572916666667,
+        "median_component_width_px": 1.1283791670955126,
+        "p90_component_width_px": 2.5231325220201604,
+        "sparsity_score": 0.0,
+        "peak_area_fraction": 0.2936200342848625,
+        "peak_density_per_10k": 2137.3155381944443,
+        "pit_noise_area_ratio": 0.6166183065154313,
+        "laplacian_peak_correlation": 0.6157674297304313,
+        "highpass_std": 21.138530728478884
+      }
+    },
+    {
+      "number": 5,
+      "case_id": "noise_core",
+      "family": "noise",
+      "crop": "crops/crop_05.png",
+      "truth": "digital_sand",
+      "human": "digital_sand",
+      "metric_old": "digital_sand",
+      "metric_new": "digital_sand",
+      "pore_rms_survival": [
+        6.839565027234753,
+        0.1161877979237552
+      ],
+      "shape": {
+        "component_count": 5722.0,
+        "component_density_per_10k": 1552.1918402777778,
+        "component_area_fraction": 0.3152398003472222,
+        "median_component_width_px": 1.1283791670955126,
+        "p90_component_width_px": 2.256758334191025,
+        "sparsity_score": 0.0,
+        "peak_area_fraction": 0.30532579812118715,
+        "peak_density_per_10k": 2212.9991319444443,
+        "pit_noise_area_ratio": 0.6260977318032434,
+        "laplacian_peak_correlation": 0.6239909263476323,
+        "highpass_std": 11.815926803483626
+      }
+    },
+    {
+      "number": 6,
+      "case_id": "pores_coarse_3",
+      "family": "pores",
+      "crop": "crops/crop_06.png",
+      "truth": "pores",
+      "human": "pores",
+      "metric_old": "pores",
+      "metric_new": "pores",
+      "pore_rms_survival": [
+        6.916187539396584,
+        0.6178121203196607
+      ],
+      "shape": {
+        "component_count": 176.0,
+        "component_density_per_10k": 47.74305555555556,
+        "component_area_fraction": 0.2705078125,
+        "median_component_width_px": 7.001260989123988,
+        "p90_component_width_px": 11.45125802666805,
+        "sparsity_score": 1.0,
+        "peak_area_fraction": 0.023547400611620795,
+        "peak_density_per_10k": 125.32552083333333,
+        "pit_noise_area_ratio": 0.520513623551519,
+        "laplacian_peak_correlation": 0.1926547241975493,
+        "highpass_std": 8.17632504859409
+      }
+    },
+    {
+      "number": 7,
+      "case_id": "noise_sigma_16",
+      "family": "noise",
+      "crop": "crops/crop_07.png",
+      "truth": "digital_sand",
+      "human": "digital_sand",
+      "metric_old": "digital_sand",
+      "metric_new": "digital_sand",
+      "pore_rms_survival": [
+        9.11381638382891,
+        0.11410910328203336
+      ],
+      "shape": {
+        "component_count": 5779.0,
+        "component_density_per_10k": 1567.654079861111,
+        "component_area_fraction": 0.3172200520833333,
+        "median_component_width_px": 1.1283791670955126,
+        "p90_component_width_px": 2.256758334191025,
+        "sparsity_score": 0.0,
+        "peak_area_fraction": 0.3077154233340846,
+        "peak_density_per_10k": 2222.222222222222,
+        "pit_noise_area_ratio": 0.634508952794357,
+        "laplacian_peak_correlation": 0.6207292843968755,
+        "highpass_std": 15.808703812905392
+      }
+    },
+    {
+      "number": 8,
+      "case_id": "mixed_1",
+      "family": "mixed",
+      "crop": "crops/crop_08.png",
+      "truth": "digital_sand",
+      "human": "digital_sand",
+      "metric_old": "digital_sand",
+      "metric_new": "digital_sand",
+      "pore_rms_survival": [
+        10.761165570341191,
+        0.2572490251180275
+      ],
+      "shape": {
+        "component_count": 4430.0,
+        "component_density_per_10k": 1201.7144097222222,
+        "component_area_fraction": 0.3121202256944444,
+        "median_component_width_px": 1.1283791670955126,
+        "p90_component_width_px": 2.5231325220201604,
+        "sparsity_score": 0.0,
+        "peak_area_fraction": 0.28551067101759126,
+        "peak_density_per_10k": 2064.887152777778,
+        "pit_noise_area_ratio": 0.6040212084623865,
+        "laplacian_peak_correlation": 0.6137570082204687,
+        "highpass_std": 17.230115710023753
+      }
+    },
+    {
+      "number": 9,
+      "case_id": "noise_sigma_24",
+      "family": "noise",
+      "crop": "crops/crop_09.png",
+      "truth": "digital_sand",
+      "human": "digital_sand",
+      "metric_old": "digital_sand",
+      "metric_new": "digital_sand",
+      "pore_rms_survival": [
+        13.805857994802837,
+        0.11477300696194812
+      ],
+      "shape": {
+        "component_count": 5680.0,
+        "component_density_per_10k": 1540.798611111111,
+        "component_area_fraction": 0.3179796006944444,
+        "median_component_width_px": 1.1283791670955126,
+        "p90_component_width_px": 2.256758334191025,
+        "sparsity_score": 0.0,
+        "peak_area_fraction": 0.3060788793587775,
+        "peak_density_per_10k": 2216.796875,
+        "pit_noise_area_ratio": 0.6326982242133103,
+        "laplacian_peak_correlation": 0.6191398362717551,
+        "highpass_std": 23.643090066820232
+      }
+    },
+    {
+      "number": 10,
+      "case_id": "fine_pores_diagnostic_0",
+      "family": "fine_pores",
+      "crop": "crops/crop_10.png",
+      "truth": "pores",
+      "human": "pores",
+      "metric_old": "digital_sand",
+      "metric_new": "pores",
+      "pore_rms_survival": [
+        5.059772755231459,
+        0.2557363058659348
+      ],
+      "shape": {
+        "component_count": 958.0,
+        "component_density_per_10k": 259.87413194444446,
+        "component_area_fraction": 0.19962565104166666,
+        "median_component_width_px": 2.5231325220201604,
+        "p90_component_width_px": 5.170882945826411,
+        "sparsity_score": 0.8007761966364813,
+        "peak_area_fraction": 0.11511755390425144,
+        "peak_density_per_10k": 512.6953125,
+        "pit_noise_area_ratio": 0.5065390969162996,
+        "laplacian_peak_correlation": 0.494203978270966,
+        "highpass_std": 5.153831661104772
+      }
+    },
+    {
+      "number": 11,
+      "case_id": "fine_pores_diagnostic_3",
+      "family": "fine_pores",
+      "crop": "crops/crop_11.png",
+      "truth": "pores",
+      "human": "pores",
+      "metric_old": "digital_sand",
+      "metric_new": "pores",
+      "pore_rms_survival": [
+        5.333065677661386,
+        0.2690404084510483
+      ],
+      "shape": {
+        "component_count": 494.0,
+        "component_density_per_10k": 134.00607638888889,
+        "component_area_fraction": 0.17320421006944445,
+        "median_component_width_px": 2.985410660720923,
+        "p90_component_width_px": 6.282549314314218,
+        "sparsity_score": 0.9208279430789134,
+        "peak_area_fraction": 0.12426095820591233,
+        "peak_density_per_10k": 330.67491319444446,
+        "pit_noise_area_ratio": 0.7432196484693284,
+        "laplacian_peak_correlation": 0.5165066242375375,
+        "highpass_std": 5.417319385931434
+      }
+    },
+    {
+      "number": 12,
+      "case_id": "plastic_core",
+      "family": "plastic",
+      "crop": "crops/crop_12.png",
+      "truth": "plastic",
+      "human": "plastic",
+      "metric_old": "plastic",
+      "metric_new": "plastic",
+      "pore_rms_survival": [
+        0.0,
+        0.0
+      ],
+      "shape": {
+        "component_count": 0.0,
+        "component_density_per_10k": 0.0,
+        "component_area_fraction": 0.0,
+        "median_component_width_px": 0.0,
+        "p90_component_width_px": 0.0,
+        "sparsity_score": 1.0,
+        "peak_area_fraction": 0.0,
+        "peak_density_per_10k": 0.0,
+        "pit_noise_area_ratio": 0.0,
+        "laplacian_peak_correlation": 0.0,
+        "highpass_std": 1e-09
+      }
+    },
+    {
+      "number": 13,
+      "case_id": "plastic_level_160",
+      "family": "plastic",
+      "crop": "crops/crop_13.png",
+      "truth": "plastic",
+      "human": "plastic",
+      "metric_old": "plastic",
+      "metric_new": "plastic",
+      "pore_rms_survival": [
+        0.0,
+        0.0
+      ],
+      "shape": {
+        "component_count": 0.0,
+        "component_density_per_10k": 0.0,
+        "component_area_fraction": 0.0,
+        "median_component_width_px": 0.0,
+        "p90_component_width_px": 0.0,
+        "sparsity_score": 1.0,
+        "peak_area_fraction": 0.0,
+        "peak_density_per_10k": 0.0,
+        "pit_noise_area_ratio": 0.0,
+        "laplacian_peak_correlation": 0.0,
+        "highpass_std": 1e-09
+      }
+    },
+    {
+      "number": 14,
+      "case_id": "pores_core",
+      "family": "pores",
+      "crop": "crops/crop_14.png",
+      "truth": "pores",
+      "human": "pores",
+      "metric_old": "pores",
+      "metric_new": "pores",
+      "pore_rms_survival": [
+        5.8113662473322,
+        0.6207974725421871
+      ],
+      "shape": {
+        "component_count": 188.0,
+        "component_density_per_10k": 50.998263888888886,
+        "component_area_fraction": 0.2795681423611111,
+        "median_component_width_px": 7.001260989123988,
+        "p90_component_width_px": 10.781745678765887,
+        "sparsity_score": 1.0,
+        "peak_area_fraction": 0.023399201495931672,
+        "peak_density_per_10k": 125.59678819444444,
+        "pit_noise_area_ratio": 0.5333264334506314,
+        "laplacian_peak_correlation": 0.1867154028507091,
+        "highpass_std": 6.851120416287381
+      }
+    },
+    {
+      "number": 15,
+      "case_id": "noise_sigma_20",
+      "family": "noise",
+      "crop": "crops/crop_15.png",
+      "truth": "digital_sand",
+      "human": "digital_sand",
+      "metric_old": "digital_sand",
+      "metric_new": "digital_sand",
+      "pore_rms_survival": [
+        11.50653589474047,
+        0.11794063450011616
+      ],
+      "shape": {
+        "component_count": 5659.0,
+        "component_density_per_10k": 1535.1019965277778,
+        "component_area_fraction": 0.315673828125,
+        "median_component_width_px": 1.1283791670955126,
+        "p90_component_width_px": 2.256758334191025,
+        "sparsity_score": 0.0,
+        "peak_area_fraction": 0.303868847561431,
+        "peak_density_per_10k": 2207.3025173611113,
+        "pit_noise_area_ratio": 0.6242690842765946,
+        "laplacian_peak_correlation": 0.6151980153138065,
+        "highpass_std": 19.809624537300763
+      }
+    },
+    {
+      "number": 16,
+      "case_id": "mixed_3",
+      "family": "mixed",
+      "crop": "crops/crop_16.png",
+      "truth": "digital_sand",
+      "human": "digital_sand",
+      "metric_old": "digital_sand",
+      "metric_new": "digital_sand",
+      "pore_rms_survival": [
+        15.0799412894055,
+        0.2121833856872481
+      ],
+      "shape": {
+        "component_count": 4965.0,
+        "component_density_per_10k": 1346.8424479166667,
+        "component_area_fraction": 0.31787109375,
+        "median_component_width_px": 1.1283791670955126,
+        "p90_component_width_px": 2.5231325220201604,
+        "sparsity_score": 0.0,
+        "peak_area_fraction": 0.2928366334787635,
+        "peak_density_per_10k": 2130.2625868055557,
+        "pit_noise_area_ratio": 0.617907614427336,
+        "laplacian_peak_correlation": 0.6146839198535329,
+        "highpass_std": 24.816269048090593
+      }
+    },
+    {
+      "number": 17,
+      "case_id": "pores_coarse_2",
+      "family": "pores",
+      "crop": "crops/crop_17.png",
+      "truth": "pores",
+      "human": "pores",
+      "metric_old": "pores",
+      "metric_new": "pores",
+      "pore_rms_survival": [
+        6.373151531152051,
+        0.620700689576105
+      ],
+      "shape": {
+        "component_count": 192.0,
+        "component_density_per_10k": 52.083333333333336,
+        "component_area_fraction": 0.259033203125,
+        "median_component_width_px": 7.046725639945928,
+        "p90_component_width_px": 10.758120563683168,
+        "sparsity_score": 0.9989650711513585,
+        "peak_area_fraction": 0.022076215505913273,
+        "peak_density_per_10k": 113.93229166666667,
+        "pit_noise_area_ratio": 0.5132491265788767,
+        "laplacian_peak_correlation": 0.18942864764079445,
+        "highpass_std": 7.369780219556245
+      }
+    },
+    {
+      "number": 18,
+      "case_id": "fine_pores_diagnostic_1",
+      "family": "fine_pores",
+      "crop": "crops/crop_18.png",
+      "truth": "pores",
+      "human": "pores",
+      "metric_old": "plastic",
+      "metric_new": "pores",
+      "pore_rms_survival": [
+        3.4520551862162505,
+        0.25125095921319107
+      ],
+      "shape": {
+        "component_count": 1024.0,
+        "component_density_per_10k": 277.77777777777777,
+        "component_area_fraction": 0.212646484375,
+        "median_component_width_px": 2.5231325220201604,
+        "p90_component_width_px": 5.170882945826411,
+        "sparsity_score": 0.7836998706338939,
+        "peak_area_fraction": 0.12061472570384833,
+        "peak_density_per_10k": 519.4769965277778,
+        "pit_noise_area_ratio": 0.5614525139664804,
+        "laplacian_peak_correlation": 0.49503041070016335,
+        "highpass_std": 3.497026019204271
+      }
+    },
+    {
+      "number": 19,
+      "case_id": "plastic_level_96",
+      "family": "plastic",
+      "crop": "crops/crop_19.png",
+      "truth": "plastic",
+      "human": "plastic",
+      "metric_old": "plastic",
+      "metric_new": "plastic",
+      "pore_rms_survival": [
+        0.0,
+        0.0
+      ],
+      "shape": {
+        "component_count": 0.0,
+        "component_density_per_10k": 0.0,
+        "component_area_fraction": 0.0,
+        "median_component_width_px": 0.0,
+        "p90_component_width_px": 0.0,
+        "sparsity_score": 1.0,
+        "peak_area_fraction": 0.0,
+        "peak_density_per_10k": 0.0,
+        "pit_noise_area_ratio": 0.0,
+        "laplacian_peak_correlation": 0.0,
+        "highpass_std": 1e-09
+      }
+    },
+    {
+      "number": 20,
+      "case_id": "fine_pores_diagnostic_2",
+      "family": "fine_pores",
+      "crop": "crops/crop_20.png",
+      "truth": "pores",
+      "human": "pores",
+      "metric_old": "digital_sand",
+      "metric_new": "pores",
+      "pore_rms_survival": [
+        6.624535993207582,
+        0.27046776182499876
+      ],
+      "shape": {
+        "component_count": 923.0,
+        "component_density_per_10k": 250.37977430555554,
+        "component_area_fraction": 0.20667860243055555,
+        "median_component_width_px": 2.5231325220201604,
+        "p90_component_width_px": 5.170882945826411,
+        "sparsity_score": 0.8098318240620958,
+        "peak_area_fraction": 0.12345034581756492,
+        "peak_density_per_10k": 513.2378472222222,
+        "pit_noise_area_ratio": 0.5671430698228376,
+        "laplacian_peak_correlation": 0.5043980532525467,
+        "highpass_std": 6.68719873488719
+      }
+    }
+  ],
+  "candidate_comparison": {
+    "selected": "component_density_per_10k",
+    "selection_reason": "Largest measured class-bound ratio among the five requested candidates; the threshold is then derived from core controls only.",
+    "rows": [
+      {
+        "candidate": "peak_area_fraction",
+        "direction": "lower_is_pore_like",
+        "pore_range": [
+          0.022076215505913273,
+          0.12426095820591233
+        ],
+        "sand_range": [
+          0.2794499905820305,
+          0.3077154233340846
+        ],
+        "separation_ratio": 2.2488961506232314,
+        "has_positive_gap": true
+      },
+      {
+        "candidate": "component_density_per_10k",
+        "direction": "lower_is_pore_like",
+        "pore_range": [
+          46.115451388888886,
+          277.77777777777777
+        ],
+        "sand_range": [
+          1099.4466145833333,
+          1567.654079861111
+        ],
+        "separation_ratio": 3.9580078125,
+        "has_positive_gap": true
+      },
+      {
+        "candidate": "median_component_width_px",
+        "direction": "higher_is_pore_like",
+        "pore_range": [
+          2.5231325220201604,
+          7.225151993843567
+        ],
+        "sand_range": [
+          1.1283791670955126,
+          1.1283791670955126
+        ],
+        "separation_ratio": 2.23606797749979,
+        "has_positive_gap": true
+      },
+      {
+        "candidate": "pit_noise_area_ratio",
+        "direction": "higher_is_pore_like",
+        "pore_range": [
+          0.5065390969162996,
+          0.7432196484693284
+        ],
+        "sand_range": [
+          0.6040212084623865,
+          0.634508952794357
+        ],
+        "separation_ratio": 0.798316705675338,
+        "has_positive_gap": false
+      },
+      {
+        "candidate": "laplacian_peak_correlation",
+        "direction": "lower_is_pore_like",
+        "pore_range": [
+          0.18622837664701392,
+          0.5165066242375375
+        ],
+        "sand_range": [
+          0.6014113366864516,
+          0.6239909263476323
+        ],
+        "separation_ratio": 1.1643826205990093,
+        "has_positive_gap": true
+      },
+      {
+        "candidate": "survival_existing_baseline",
+        "direction": "higher_is_pore_like",
+        "pore_range": [
+          0.25125095921319107,
+          0.6207974725421871
+        ],
+        "sand_range": [
+          0.11410910328203336,
+          0.3197527769750145
+        ],
+        "separation_ratio": 0.7857663085528851,
+        "has_positive_gap": false
+      }
+    ]
+  },
+  "calibration": {
+    "shape_max_component_density": 575.2224392361111,
+    "shape_min_component_density": 25.499131944444443,
+    "shape_min_pore_rms": 2.9056831236661,
+    "basis": {
+      "core_control_count": 4,
+      "core_pore_component_density_max": 50.998263888888886,
+      "core_sand_component_density_min": 1099.4466145833333,
+      "core_plastic_pore_rms_max": 0.0,
+      "core_pore_pore_rms_min": 5.8113662473322
+    }
+  }
+}

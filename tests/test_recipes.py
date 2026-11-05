@@ -23,6 +23,12 @@ EXPECTED_SCENES = {
     "DRAPE_P2",
     "GOWN_P1",
     "GOWN_P2",
+    # Restored: commit cd4327e dropped PEARL_KISS because it used the old
+    # lora/prompt schema. It is an approved scene (user: "Видео успех"), so
+    # the entry was rewritten to the current contract instead of deleted.
+    "PEARL_KISS",
+    # New: bohemian fashion portrait with face lock and an instrumental track.
+    "BOHO_FACE_LOCK",
 }
 
 
@@ -163,4 +169,7 @@ def test_check_loras_can_check_the_whole_registry(monkeypatch, capsys) -> None:
         lambda *args, **kwargs: io.BytesIO(json.dumps(payload).encode("utf-8")),
     )
     assert print_recipe.main(["--check-loras"]) == 0
-    assert "7 LoRA names checked" in capsys.readouterr().out
+    # The registry grew: PEARL_KISS was restored and BOHO_FACE_LOCK added, so
+    # the exact count is derived from the registry instead of hardcoded.
+    expected = len({lora["name"] for scene in scenes for lora in scene["loras"]})
+    assert f"{expected} LoRA names checked" in capsys.readouterr().out
