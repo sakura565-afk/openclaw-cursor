@@ -4,13 +4,22 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
-from .calibration import write_blind_report
-from .renders import write_render_report
-from .validation import write_validation_report
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+try:  # package import
+    from .calibration import write_blind_report
+    from .renders import write_render_report
+    from .validation import write_validation_report
+except ImportError:  # direct `python scripts/skin_metric_shape/cli.py`
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    from scripts.skin_metric_shape.calibration import write_blind_report
+    from scripts.skin_metric_shape.renders import write_render_report
+    from scripts.skin_metric_shape.validation import write_validation_report
+
 DEFAULT_BLIND_ROOT = REPO_ROOT / "scripts" / "skin_metric_groundtruth" / "artifacts" / "blind"
 DEFAULT_OUT_DIR = Path(__file__).resolve().parent / "artifacts"
 
