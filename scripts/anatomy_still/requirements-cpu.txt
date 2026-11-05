@@ -1,0 +1,25 @@
+# CPU tools environment for the anatomy-still pipeline.
+#
+# The pipeline needs mediapipe for the pose mask, and mediapipe 0.10.21 wants
+# numpy<2 - installing it in the repository virtualenv would force numpy back
+# from 2.4.6 to 1.26.4 and put a second opencv over cv2 5.0.0. So the pose
+# tooling lives in its own environment.
+#
+#   uv venv --python 3.11 G:/hermes_archives/tools/anatomy_env
+#   uv pip install --python G:/hermes_archives/tools/anatomy_env/Scripts/python.exe \
+#       -r scripts/anatomy_still/requirements-cpu.txt
+#
+# The h3 runner reaches into video_pipeline, which pulls the rest of this
+# list in through its own imports.
+numpy==1.26.4
+opencv-contrib-python==4.11.0.86
+mediapipe==0.10.21
+pillow
+pyyaml
+pydantic
+loguru
+requests
+portalocker
+tenacity
+rich
+filelock
