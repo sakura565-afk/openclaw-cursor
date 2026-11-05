@@ -907,32 +907,35 @@
           "strength_clip": 0.35
         }
       ],
-      "analysis": "The rejected clip had two defects: the face was not the reference woman, and the lips did not follow the song. Both were measured and fixed separately. (1) FACE. ArcFace similarity to the reference photo (scripts/face_ref_similarity.py): the ref2va render scored 0.030 - not a drifting face but a DIFFERENT WOMAN. The fl2va render scores 0.944. ref2va is required only because fl2va cannot take an external audio reference. (2) LIPS. LatentSync 1.6 (local, open weights) drives the mouth from the actual track: lip-sync correlation between the audio envelope and mouth openness went from -0.213 (inverted, lips moving against the music) to +0.236, and mouth amplitude grew from 0.027 to 0.102 (four times). Vision on six frames: the mouth shows four distinct shapes (closed / parted / rounded open / wide open with teeth) and there are no lip-sync artefacts - no seam, no blurred patch, no doubled lip. Face similarity after lip-sync is 0.933, so the lipsync did not damage the identity. What is still weak is the skin: it is airbrushed and poreless (vision 5.5/10). That is the known H3 ceiling and is a separate problem from the two defects this clip was rejected for.",
+      "analysis": "The rejected clip had two defects: the face was not the reference woman, and the lips did not follow the song. Both were measured and fixed separately. (1) FACE. ArcFace similarity to the reference photo (scripts/face_ref_similarity.py): the ref2va render scored 0.030 - not a drifting face but a DIFFERENT WOMAN. The fl2va render scores 0.944, and after lip-sync 0.932 (min 0.897), so the lip-sync does not damage the identity. (2) LIPS. LatentSync 1.6 (local, open weights) drives the mouth from the actual track. The pipeline has a constant ~625 ms lead between the mouth and the audio features, so the driver track is given 625 ms earlier (track 37.375-44.675) while the delivered audio stays at 38.0-45.3. The correlation between the audio envelope and mouth openness goes from -0.030 (inverted, lips moving against the music) to +0.227, and the mouth amplitude grows fourfold. Vision on six frames: the mouth is clearly open in three frames and closed in three, identity 8/10, continuity 8.5/10, overall 7/10. What is still weak: the skin is airbrushed and poreless (5.5/10) and the mouth articulation is mostly binary open/closed rather than varied vowel shapes. Both are H3-generation limits, not the two defects this clip was rejected for.",
       "measured": {
-        "face_similarity_to_reference": 0.9327,
+        "face_similarity_to_reference": 0.9315,
         "face_similarity_before_lipsync": 0.944,
         "face_similarity_of_rejected_ref2va_render": 0.0302,
-        "lipsync_corr_after": 0.236,
-        "lipsync_corr_before": -0.2134,
-        "mouth_amplitude_after": 0.154,
-        "mouth_amplitude_before": 0.066,
+        "lipsync_corr_after": 0.227,
+        "lipsync_corr_before": -0.03,
+        "mouth_amplitude_after": 0.106,
+        "mouth_amplitude_before": 0.027,
         "audio_corr_muxed_vs_ace_window": 0.9997,
-        "vision_overall": 5.5,
-        "vision_identity": "same woman, mild micro-drift",
-        "vision_mouth": "four distinct shapes across six frames, no artefacts",
-        "vision_skin": "airbrushed, poreless",
-        "vision_continuity": "no cuts, no zoom jumps",
-        "frames": 182,
-        "duration_s": 7.3,
+        "vision_overall": 7.0,
+        "vision_identity": 8.0,
+        "vision_mouth": 6.0,
+        "vision_skin": 5.5,
+        "vision_continuity": 8.5,
+        "frames": 175,
+        "duration_s": 7.29,
         "resolution": "736x1120",
-        "fps": 25
+        "fps": 24,
+        "face_similarity_min": 0.8965,
+        "vision_wardrobe": 8.0
       },
       "pipeline": {
         "step_1_render": "scripts/h3_i2v_run.py --image boho_src.jpg --guide-image boho_guide.jpg --guide-frame 87 --tst-tau 0.2 --sampler res_multistep --scheduler beta --seed 424245 --steps 20 (fl2va: face locked, mouth closed)",
-        "step_2_lipsync": "scripts/lipsync_clip.py --video BOHO_INSTR2.mp4 --audio ace_win38.wav --fps 25 --out-fps 24 --steps 20 --lips-expression 1.5",
-        "step_3_mux": "ffmpeg -map 0:v:0 -map 1:a:0 with the same ACE-Step window",
+        "step_2_lipsync": "scripts/lipsync_clip.py --video BOHO_INSTR2.mp4 --audio ace_driver_early.wav (track 37.375-44.675, i.e. 625 ms earlier than the delivered window) --fps 25 --out-fps 24 --steps 20 --lips-expression 1.5",
+        "step_3_mux": "resample the 25 fps lipsync result to 24 fps / 175 frames, then mux track 38.0-45.3 as the audio",
         "why_this_order": "fl2va keeps the reference face (0.944) but cannot take an external track; LatentSync adds the singing on top and leaves the identity intact (0.933).",
-        "comfyui_patch": "scripts/apply_latentsync_patches.py - the wrapper lives outside the repo and needs three fixes: torchvision.io.read_video/write_video are gone, and the per-chunk tensors must be freed or a 175-frame clip OOMs around chunk 10-12."
+        "comfyui_patch": "scripts/apply_latentsync_patches.py - the wrapper lives outside the repo and needs three fixes: torchvision.io.read_video/write_video are gone, and the per-chunk tensors must be freed or a 175-frame clip OOMs around chunk 10-12.",
+        "latency_note": "LatentSync leads the audio by ~625 ms (measured: the mouth at frame j matches the audio at j+15). Feed it the track 625 ms earlier than the window you deliver."
       },
       "music": {
         "provider": "ACE-Step 1.5 (local, open weights, no key)",
@@ -946,11 +949,12 @@
         }
       },
       "unrecorded": [
-        "skin remains airbrushed and poreless (vision 5.5/10)",
-        "mild facial micro-drift between frames (eye aperture, brow angle, nose tip)",
+        "skin remains airbrushed and poreless (vision 5.5/10) - the known H3 ceiling",
+        "mild facial micro-drift: eye aperture, cheek fullness, nose tip, jaw taper",
+        "mouth articulation is mostly binary open/closed, not varied vowel shapes",
+        "a similar upper-teeth strip is reused in the open-mouth frames",
         "individual flower shapes on the dress regenerate rather than track",
-        "necklace chain configuration shifts between frames",
-        "headband braid pattern is not pixel-identical between frames"
+        "necklace chain configuration shifts between frames"
       ]
     }
   ]
