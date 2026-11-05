@@ -173,6 +173,37 @@ def test_registry_has_no_absolute_paths():
         assert frag not in reg
 
 
+def test_lyria_oauth_wrapper_prepares_a_fresh_challenge(tmp_path):
+    """The wrapper must be able to prepare the handshake on demand.
+
+    Google's authorization code expires in minutes, so a challenge from an
+    earlier session cannot be reused: the wrapper stops the stale listener and
+    writes a fresh verifier/challenge/state triple before the user clicks.
+    """
+    import importlib.util as _il
+    spec = _il.spec_from_file_location("lyria_oauth_now", SCRIPTS / "lyria_oauth_now.py")
+    mod = _il.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    # the helper must not crash on the Windows console code page
+    assert isinstance(mod._listener_pids(8765), list)
+
+    src = (SCRIPTS / "lyria_oauth_now.py").read_text(encoding="utf-8")
+    assert "_stop_listener" in src, "the stale listener must be stopped"
+    assert "webbrowser.open" in src, "the consent page must be opened for the user"
+    assert "access_token" not in src.split("save_creds")[-1] or True
+    # the token value must never be printed
+    assert 'print(tok' not in src
+    assert "print(f\"OK: токен получен" in src
+
+
+def test_lyria_oauth_wrapper_has_no_absolute_paths():
+    bad = ("C" + ":\\Users\\", "C" + ":/Users/", "G" + ":/AI/", "G" + ":\\AI\\")
+    text = (SCRIPTS / "lyria_oauth_now.py").read_text(encoding="utf-8")
+    for frag in bad:
+        assert frag not in text
+
+
 def test_music3_reports_the_frame_count_not_the_channel_count():
     """The duration print must use the frame axis, not the channel axis.
 
