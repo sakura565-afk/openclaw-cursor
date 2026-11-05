@@ -93,7 +93,7 @@ def test_blind_sheet_has_only_numbered_crops_and_a_separate_key(
     assert result["visual_status"] == "pending_external_judge"
 
 
-def test_calibration_reports_core_truth_and_blind_visual_disagreements(
+def test_calibration_reports_core_truth_and_blind_visual_agreements(
     tmp_path: Path,
 ) -> None:
     entries = generate_dataset(tmp_path)
@@ -124,12 +124,8 @@ def test_calibration_reports_core_truth_and_blind_visual_disagreements(
     assert report["summary"]["core_total"] == 4
     assert report["summary"]["core_truth_matches"] == 4
     assert report["summary"]["visual_total"] == 20
-    assert report["summary"]["visual_metric_matches"] == 16
-    assert len(report["summary"]["visual_metric_mismatches"]) == 4
-    assert all(
-        case_id.startswith("fine_pores_diagnostic_")
-        for case_id in report["summary"]["visual_metric_mismatches"]
-    )
+    assert report["summary"]["visual_metric_matches"] == 20
+    assert len(report["summary"]["visual_metric_mismatches"]) == 0
     assert report["recommended_thresholds"]["status"] == "provisional_pending_human_review"
     assert "human" in report["recommended_thresholds"]["caveat"]
     assert all("classification" in row["metrics"] for row in report["rows"])

@@ -29,16 +29,34 @@ For every ROI, in the canonical scale:
    score     = activity * coherence
    ```
 
-The single-image classifier is deliberately simple and auditable:
+6. `shape_component_density_per_10k` counts signed 8-connected components of
+   `gray - Gaussian(gray, sigma=3)` above/below `max(1.0, highpass_std)`.
+   `shape_median_component_width_px` is their median equivalent diameter.
+   These fields are supplied by `scripts.skin_metric_shape`; the original FFT
+   fields and units are unchanged.
 
-- `pore_rms < 4.90` → **plastic**;
+The classifier retains the legacy activity/survival branch and adds a measured
+shape branch:
+
+- a sparse but non-empty component field (`25.499132..575.222439` components
+  per 10k px) with `pore_rms >= 2.905683` → **pores**;
+- otherwise `pore_rms < 4.90` → **plastic**;
 - otherwise `survival < 0.60` → **digital_sand**;
 - otherwise → **pores**.
 
-These thresholds are calibrated on our eye-labelled reference clips. They are
-not universal constants and are not an independent validation on unseen skin.
-The original FFT energies remain in the output so another calibration does not
-require changing the spectral code.
+The shape bounds are midpoints from the four constructive core controls. On the
+20-crop human blind set the legacy rule matches 16/20 and the shape-aware rule
+matches 20/20; eight additional synthetic seeds match 160/160. See
+`scripts/skin_metric_shape/artifacts/` for the complete matrix, candidate
+comparison, independent validation, and archived-render recheck. Calls to
+`classify` with old mappings that have no shape fields follow the legacy rule.
+The 20 crops remain a calibration/regression set, not proof of universal skin
+generalisation.
+
+`measure_frames` additionally returns `temporal_shape` per ROI and overall:
+adjacent high-pass correlations, neighbour count, and component-density
+stability. These are unregistered observations, not motion-compensated proof,
+and are not used as a standalone rejection threshold.
 
 ## Rollback gate
 

@@ -1,5 +1,11 @@
 # Real-material report
 
+> Historical pre-shape table below. The shape-aware recheck is in
+> `scripts/skin_metric_shape/artifacts/render_recheck.md`: CHEF_ONE_REF2VA and
+> CHEF_REF2VA change from digital_sand to pores, while PORE_TIGHT_012 remains
+> digital_sand. CHEF_FIX2/CHEF_FIX3 were absent from the archive and were not
+> substituted.
+
 Command run from the repository root with the project virtualenv:
 
 ```bash

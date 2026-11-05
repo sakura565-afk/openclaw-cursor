@@ -1,0 +1,77 @@
+{
+  "tool": "scripts.skin_metric_shape.validation",
+  "independent_of_threshold_core_seed": true,
+  "summary": {
+    "seeds": 8,
+    "total": 160,
+    "matches": 160,
+    "all_pore_density_max": 286.18706597222223,
+    "all_sand_density_min": 1087.5108506944443
+  },
+  "per_seed": [
+    {
+      "seed": 4103,
+      "total": 20,
+      "matches": 20,
+      "pore_density_max": 277.77777777777777,
+      "sand_density_min": 1120.0629340277778,
+      "mismatches": []
+    },
+    {
+      "seed": 5102,
+      "total": 20,
+      "matches": 20,
+      "pore_density_max": 279.9479166666667,
+      "sand_density_min": 1131.7274305555557,
+      "mismatches": []
+    },
+    {
+      "seed": 6102,
+      "total": 20,
+      "matches": 20,
+      "pore_density_max": 266.65581597222223,
+      "sand_density_min": 1103.786892361111,
+      "mismatches": []
+    },
+    {
+      "seed": 7102,
+      "total": 20,
+      "matches": 20,
+      "pore_density_max": 276.42144097222223,
+      "sand_density_min": 1118.9778645833333,
+      "mismatches": []
+    },
+    {
+      "seed": 8102,
+      "total": 20,
+      "matches": 20,
+      "pore_density_max": 272.6236979166667,
+      "sand_density_min": 1118.435329861111,
+      "mismatches": []
+    },
+    {
+      "seed": 9102,
+      "total": 20,
+      "matches": 20,
+      "pore_density_max": 275.0651041666667,
+      "sand_density_min": 1127.9296875,
+      "mismatches": []
+    },
+    {
+      "seed": 10102,
+      "total": 20,
+      "matches": 20,
+      "pore_density_max": 261.77300347222223,
+      "sand_density_min": 1094.2925347222222,
+      "mismatches": []
+    },
+    {
+      "seed": 11102,
+      "total": 20,
+      "matches": 20,
+      "pore_density_max": 286.18706597222223,
+      "sand_density_min": 1087.5108506944443,
+      "mismatches": []
+    }
+  ]
+}
