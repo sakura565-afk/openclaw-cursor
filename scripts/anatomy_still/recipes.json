@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "measurement_note": "Inside the pose mask the source keeps a texture contrast of 5.23; after the Qwen-Image-Edit pass it is 1.15 - a flat grey fill at the same brightness. That is the image editor own filter, not a pipeline defect, so the anatomy has to come from H3 with the minimal LoRA stack.",
+  "measurement_note": "Inside the pose mask the source keeps a texture contrast of 5.23; after the Qwen-Image-Edit pass it is 1.15 - a flat grey fill at the same brightness. That is the image editor own filter, not a pipeline defect, so the anatomy has to come from H3 with the minimal LoRA stack. The action also takes time: frame 0 of the approved clip still has the apron down (visibility 0.123) and the anatomy appears around frame 108 (visibility 0.806). The clip transitions into a macro close-up of the pelvis and that is inherent to this scene - the approved clip does it too - so the anatomy still is a macro frame chosen by the validator.",
   "known_failure": {
     "scene": "chef",
     "edit_denoise": 0.55,
@@ -62,7 +62,7 @@
       },
       "h3": {
         "prompt_suffix": "Preserve the exact visible anatomy and uncovered state of the reference still; keep natural skin detail and do not restore any clothing coverage.",
-        "prompt": "A full-body shot of the same adult woman in the same kitchen as the reference photo: white satin chef hat, black bra, white lace apron lifted above the waist, black thigh-high stockings. She stands with her weight on one leg and one hand resting at her hip, natural realistic body proportions, natural waist-to-hip transition, smooth lower back. Between her upper thighs her anatomy is uncovered and visible as one simple uninterrupted vertical cleft with natural asymmetric folds and fine skin texture, matching the structure of the reference. The kitchen stays in frame in every frame: the same shelves with jars and blue mugs, the same countertop, warm evening light. The same face, the same camera angle and the same body proportions as the reference photograph.",
+        "prompt": "A full-body shot of the same adult woman in the same kitchen as the reference photo, facing the camera in a front view: white satin chef hat, black bra, white lace apron, black thigh-high stockings. She pulls her panties down to her knees and lifts the front of the apron up with one hand, posing with her vulva exposed and facing the camera. Her vulva is drawn as one simple uninterrupted vertical cleft with natural asymmetric folds and fine skin texture. Natural realistic body proportions, natural waist-to-hip transition, smooth lower back. The kitchen stays in frame in every frame: the same shelves with jars and blue mugs, the same countertop, warm evening light. The same face, the same camera angle and the same body proportions as the reference photograph.",
         "loras": [
           {
             "name": "Panties Off! v1.1 - MinimaxH3 -.safetensors",
@@ -269,7 +269,7 @@
       },
       "h3": {
         "prompt_suffix": "Preserve the exact visible anatomy and uncovered state of the reference still; keep natural skin detail and do not restore any clothing coverage.",
-        "prompt": "A full-body shot of the same adult woman in the same kitchen as the reference photo: white satin chef hat, black bra, white lace apron lifted above the waist, black thigh-high stockings. She stands with her weight on one leg and one hand resting at her hip, natural realistic body proportions, natural waist-to-hip transition, smooth lower back. Between her upper thighs her anatomy is uncovered and visible as one simple uninterrupted vertical cleft with natural asymmetric folds and fine skin texture, matching the structure of the reference. The kitchen stays in frame in every frame: the same shelves with jars and blue mugs, the same countertop, warm evening light. The same face, the same camera angle and the same body proportions as the reference photograph.",
+        "prompt": "A full-body shot of the same adult woman in the same kitchen as the reference photo, facing the camera in a front view: white satin chef hat, black bra, white lace apron, black thigh-high stockings. She pulls her panties down to her knees and lifts the front of the apron up with one hand, posing with her vulva exposed and facing the camera. Her vulva is drawn as one simple uninterrupted vertical cleft with natural asymmetric folds and fine skin texture. Natural realistic body proportions, natural waist-to-hip transition, smooth lower back. The kitchen stays in frame in every frame: the same shelves with jars and blue mugs, the same countertop, warm evening light. The same face, the same camera angle and the same body proportions as the reference photograph.",
         "loras": [
           {
             "name": "Panties Off! v1.1 - MinimaxH3 -.safetensors",

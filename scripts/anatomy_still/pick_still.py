@@ -89,7 +89,15 @@ def main() -> int:
     rows = []
     for idx in indices:
         frame = extract(str(clip), idx, work / f"f{idx:05d}.png")
-        m = validate_anatomy(load_rgb(frame), mask)
+        image = load_rgb(frame)
+        # the mask may come from a differently sized source photo
+        if mask.shape[:2] != image.shape[:2]:
+            import cv2
+            scaled = cv2.resize(mask, (image.shape[1], image.shape[0]),
+                                interpolation=cv2.INTER_NEAREST)
+        else:
+            scaled = mask
+        m = validate_anatomy(image, scaled)
         rows.append({"frame": idx, "visibility": m.visibility,
                      "texture_score": m.texture_score, "skin_fraction": m.skin_fraction,
                      "cloth_score": m.cloth_score, "passed": m.passed})
