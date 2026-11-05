@@ -23,6 +23,7 @@ class AnatomyMetrics:
     texture_score: float
     uniform_fraction: float
     non_skin_uniform_fraction: float
+    skin_fraction: float
     edge_energy: float
     structural_edge_energy: float
     cloth_score: float
@@ -96,6 +97,10 @@ def validate_anatomy(
     cb = ycrcb[:, :, 2]
     skin = (y_channel > 35) & (cr >= 133) & (cr <= 183) & (cb >= 72) & (cb <= 136)
     non_skin_uniform_fraction = float(np.mean((uniform & ~skin)[selected]))
+    # Satin, lace and grey censor blobs all carry high-frequency detail, so a
+    # texture score alone cannot tell anatomy from fabric. The exposed region
+    # has to be skin-coloured as well.
+    skin_fraction = float(np.mean(skin[selected]))
 
     edges = cv2.Canny(gray.astype(np.uint8), 35, 105)
     edges[~selected] = 0
@@ -105,17 +110,21 @@ def validate_anatomy(
     edged_fabric_score = structural_edge_energy * (0.55 + 0.45 * uniform_fraction)
     cloth_score = _unit(max(panel_score, edged_fabric_score))
     uncovered_score = 1.0 - cloth_score
-    visibility = _unit(texture_score * uncovered_score)
+    # Texture alone is fooled by satin and lace, and skin tone alone is fooled
+    # by warm fabric. Both have to hold for the region to read as exposed skin.
+    visibility = _unit(texture_score * uncovered_score * min(1.0, skin_fraction / 0.55))
     passed = bool(
         visibility >= pass_threshold
         and texture_score >= 0.30
         and cloth_score <= 0.50
+        and skin_fraction >= 0.55
     )
     return AnatomyMetrics(
         texture_energy=round(texture_energy, 6),
         texture_score=round(texture_score, 6),
         uniform_fraction=round(uniform_fraction, 6),
         non_skin_uniform_fraction=round(non_skin_uniform_fraction, 6),
+        skin_fraction=round(skin_fraction, 6),
         edge_energy=round(edge_energy, 6),
         structural_edge_energy=round(structural_edge_energy, 6),
         cloth_score=round(cloth_score, 6),

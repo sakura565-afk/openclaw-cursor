@@ -13,6 +13,10 @@ seaborn
 numpy
 imagehash
 opencv-python-headless>=4.8.0
+# mediapipe 0.10.21 pulls opencv-contrib-python, which conflicts with
+# opencv-python-headless (the same cv2 package directory). Install mediapipe
+# with --no-deps and add its runtime deps by hand, or cv2 breaks.
+mediapipe==0.10.21
 pydantic>=2.0
 pyyaml>=6.0
 portalocker>=2.0
