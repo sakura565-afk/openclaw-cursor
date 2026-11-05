@@ -198,6 +198,8 @@ def test_music3_frame_count_matches_the_written_file(tmp_path):
     with wave.open(str(out), "rb") as w:
         assert w.getnframes() == frames
         assert w.getnchannels() == channels
-        # this is the axis the report must use
-        assert frames / rate == pytest.approx(1.0)
-        assert channels / rate == pytest.approx(4.5e-5)
+    # the frame axis is the duration; the channel axis is the bug
+    right = frames / rate
+    wrong = channels / rate
+    assert right == pytest.approx(1.0)
+    assert wrong < 0.001, "the wrong axis must be obviously wrong"
