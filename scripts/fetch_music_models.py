@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -26,6 +27,8 @@ ACE_FILES = [
     ("split_files/diffusion_models/acestep_v1.5_turbo.safetensors", "diffusion_models"),
     ("split_files/diffusion_models/acestep_v1.5_base.safetensors", "diffusion_models"),
     ("split_files/text_encoders/qwen_0.6b_ace15.safetensors", "text_encoders"),
+    ("split_files/text_encoders/qwen_1.7b_ace15.safetensors", "text_encoders"),
+    ("split_files/text_encoders/qwen_4b_ace15.safetensors", "text_encoders"),
     ("split_files/vae/ace_1.5_vae.safetensors", "vae"),
 ]
 
@@ -126,6 +129,22 @@ def main() -> int:
         )
         size = os.path.getsize(got) if os.path.exists(got) else 0
         print(f"    готово: {size/1024**3:.2f} ГБ за {time.time()-started:.0f} с")
+        # hf_hub_download keeps the repo layout under local_dir, so the file
+        # lands in split_files/<kind>/<name>; move it next to its siblings
+        # where ComfyUI scans for models.
+        flat = dst.parent / Path(rel).name
+        if os.path.exists(got) and os.path.abspath(got) != os.path.abspath(str(flat)):
+            if flat.exists():
+                os.remove(flat)
+            shutil.move(got, str(flat))
+            for folder in (got.parent, got.parent.parent):
+                try:
+                    if folder.is_dir() and not any(folder.iterdir()):
+                        folder.rmdir()
+                except OSError:
+                    pass
+            got = str(flat)
+        print(f"    итог: {got} ({size/1024**3:.2f} ГБ)")
     print("DONE")
     return 0
 
