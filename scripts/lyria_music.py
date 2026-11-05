@@ -23,6 +23,25 @@ import urllib.error
 import urllib.request
 
 BASE = "https://generativelanguage.googleapis.com/v1beta/interactions"
+CRED_PATHS = (
+    os.path.join(os.path.expanduser("~"), ".hermes", "oauth", "oauth_creds.json"),
+    os.path.join(os.path.expanduser("~"), ".gemini", "oauth_creds.json"),
+)
+
+
+def _oauth_token() -> str:
+    """Access token from the PKCE flow in google_oauth_pkce.py."""
+    for path in CRED_PATHS:
+        if not os.path.exists(path):
+            continue
+        try:
+            creds = json.load(open(path, encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        tok = creds.get("access_token")
+        if tok:
+            return tok
+    return ""
 
 
 def _key() -> str:
@@ -30,17 +49,30 @@ def _key() -> str:
         v = os.environ.get(name, "").strip()
         if v:
             return v
-    raise SystemExit("Set GEMINI_API_KEY (https://aistudio.google.com/apikey)")
+    return ""
+
+
+def _headers() -> dict:
+    """A bearer token works too - the Gemini API accepts OAuth access tokens."""
+    tok = _oauth_token()
+    if tok:
+        return {"Authorization": "Bearer " + tok}
+    key = _key()
+    if key:
+        return {"x-goog-api-key": key}
+    raise SystemExit(
+        "Нет ни OAuth-токена, ни API-ключа. Токен лежит в "
+        "~/.hermes/oauth/oauth_creds.json, ключ - в GEMINI_API_KEY.")
 
 
 def generate(model: str, prompt: str, lyrics: str | None, timeout: int) -> dict:
     body: dict = {"model": model, "input": prompt}
     if lyrics:
         body["input"] = prompt + "\n\nLyrics:\n" + lyrics
-    req = urllib.request.Request(
-        BASE, data=json.dumps(body).encode(),
-        headers={"x-goog-api-key": _key(), "Content-Type": "application/json"},
-        method="POST")
+    headers = {"Content-Type": "application/json"}
+    headers.update(_headers())
+    req = urllib.request.Request(BASE, data=json.dumps(body).encode(),
+                                 headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode())
