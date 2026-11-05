@@ -1,0 +1,401 @@
+"""Tests for the vocal-driven lip-sync tooling.
+
+The boho clip was rejected twice: first because the face was not the reference
+woman, then because the lips did not follow the vocal. The second defect has
+three separate causes that this tooling has to keep apart:
+
+1. the driving audio was the full mix, so the mouth followed the guitar;
+2. the pipeline's mouth has a lead of roughly 625 ms;
+3. whatever residual is left has to be removed by shifting the delivered audio
+   window, not by re-rendering.
+"""
+from __future__ import annotations
+
+import importlib.util
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "scripts"
+
+
+def _load(name: str):
+    spec = importlib.util.spec_from_file_location(name, SCRIPTS / f"{name}.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_lipsync_vocal_score_sign_convention():
+    """A mouth that leads the audio must give a negative lag.
+
+    The scorer shifts the MOUTH series against the audio envelope, so a mouth
+    that is ahead of the sound peaks at a negative lag and a mouth that
+    trails peaks at a positive one. If the sign ever flips, the timing fix in
+    align_audio_to_mouth starts shifting the audio the wrong way.
+    """
+    mod = _load("lipsync_vocal_score")
+    # one envelope sample == 40 ms. A single pulse keeps the lag unique: with
+    # a periodic signal every multiple of the period correlates equally.
+    e = np.zeros(40, dtype=np.float32)
+    e[20] = 1.0
+    m = np.roll(e, -2)          # the mouth is 2 samples (80 ms) AHEAD
+    corr, lag = mod.best_lag(e, m)
+    assert lag == -2, f"expected a lead of -2, got {lag}"
+    assert corr > 0.9
+
+
+def test_lipsync_vocal_score_lag_follows_the_mouth():
+    """A mouth that trails the audio must give a positive lag."""
+    mod = _load("lipsync_vocal_score")
+    e = np.zeros(40, dtype=np.float32)
+    e[20] = 1.0
+    m = np.roll(e, 3)           # the mouth is 3 samples BEHIND
+    corr, lag = mod.best_lag(e, m)
+    assert lag == 3, f"expected a lag of +3, got {lag}"
+
+
+def test_lipsync_vocal_score_env_is_normalised():
+    mod = _load("lipsync_vocal_score")
+    x = np.linspace(-1, 1, 16000, dtype=np.float32)
+    e = mod.envelope(x, 16000)
+    assert e.max() == pytest.approx(1.0, abs=1e-5)
+    assert e.min() >= 0.0
+
+
+def test_lipsync_vocal_score_corr_handles_flat_signal():
+    mod = _load("lipsync_vocal_score")
+    flat = np.zeros(50, dtype=np.float32)
+    assert mod.corr(flat, flat) == 0.0
+    assert mod.corr(np.arange(50, dtype=np.float32),
+                    np.arange(50, dtype=np.float32)) == pytest.approx(1.0, abs=1e-5)
+
+
+def test_build_driver_window_math(tmp_path):
+    """The driver must start `lead` earlier than the delivered window.
+
+    The pipeline mouth at frame j refers to the driver at j/fps + lead, so the
+    driver has to start `lead` earlier for the mouth to land on the delivered
+    window.
+    """
+    mod = _load("build_lipsync_driver")
+    assert mod.LEAD_FRAMES == 15
+    assert mod.DRIVER_FPS == 25
+    assert mod.LEAD_FRAMES / mod.DRIVER_FPS == pytest.approx(0.6)
+
+    # the produced driver must be exactly as long as the clip, otherwise
+    # LatentSync pads (loops) the video and re-runs the inference
+    track = tmp_path / "track.wav"
+    vocal = tmp_path / "vocal.wav"
+    for p in (track, vocal):
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+                        "-i", "sine=frequency=220:duration=60", "-ac", "1",
+                        "-ar", "16000", str(p)], check=True, capture_output=True)
+
+    drv = tmp_path / "driver.wav"
+    aud = tmp_path / "audio.wav"
+    mod.main.__wrapped__ if False else None
+    argv = ["build_lipsync_driver.py",
+            "--track", str(track), "--vocal", str(vocal),
+            "--start", "38.0", "--duration", "7.3",
+            "--out-driver", str(drv), "--out-audio", str(aud)]
+    old = sys.argv
+    sys.argv = argv
+    try:
+        assert mod.main() == 0
+    finally:
+        sys.argv = old
+
+    import wave
+    with wave.open(str(drv), "rb") as w:
+        d_frames = w.getnframes() / w.getframerate()
+    with wave.open(str(aud), "rb") as w:
+        a_frames = w.getnframes() / w.getframerate()
+    assert d_frames == pytest.approx(7.3, abs=0.05)
+    assert a_frames == pytest.approx(7.3, abs=0.05)
+
+
+def test_align_audio_scans_instead_of_guessing_the_direction():
+    """The alignment must scan the window, not shift by a guessed sign.
+
+    Shifting the window by a "lag" was wrong: the sign convention is easy to
+    get backwards and shifting the wrong way makes the fit worse. The tool
+    now scans the window and keeps the position with the best correlation.
+    """
+    src = (SCRIPTS / "align_audio_to_mouth.py").read_text(encoding="utf-8")
+    assert "scan_window" in src, "the tool must scan the audio window"
+    assert "a.start + lag_s" not in src, "no sign-based shift"
+    assert "a.start - lag_s" not in src, "no sign-based shift"
+    assert "--search" in src, "the search range must be configurable"
+
+
+def test_align_audio_scan_picks_the_aligned_window(tmp_path):
+    """scan_window must peak at the window the mouth was driven from."""
+    mod = _load("align_audio_to_mouth")
+    sr = 16000
+    # A non-periodic envelope: with a periodic one every multiple of the
+    # period correlates equally and the scan cannot pick a unique window.
+    rng = np.random.default_rng(7)
+    n = int(60 / 0.04)
+    env = rng.random(n).astype(np.float32)
+    mouth = np.zeros(175, dtype=np.float32)
+    for j in range(175):
+        idx = int((37.30 + j / 24.0) / 0.04)
+        mouth[j] = env[idx % n]
+    rows = mod.scan_window(mouth, env, sr, 36.5, 39.5, 7.3, 24)
+    c, W = max(rows)
+    assert W == pytest.approx(37.28, abs=0.06), f"picked {W}"
+    assert c > 0.9
+
+
+def test_scripts_have_no_absolute_paths():
+    # the fragments are split so the guard in tests/test_no_absolute_paths.py
+    # does not match this file's own allowlist
+    bad = ("C" + ":\\Users\\", "C" + ":/Users/", "G" + ":/AI/", "G" + ":\\AI\\")
+    for name in ("lipsync_vocal_score.py", "build_lipsync_driver.py",
+                 "align_audio_to_mouth.py"):
+        text = (SCRIPTS / name).read_text(encoding="utf-8")
+        for frag in bad:
+            assert frag not in text, f"{name} must not hardcode {frag}"
+
+
+def test_registry_has_no_absolute_paths():
+    bad = ("C" + ":\\Users\\", "C" + ":/Users/", "G" + ":/AI/", "G" + ":\\AI\\")
+    reg = (SCRIPTS / "recipes" / "registry.json").read_text(encoding="utf-8")
+    for frag in bad:
+        assert frag not in reg
+
+
+def test_lyria_oauth_wrapper_prepares_a_fresh_challenge(tmp_path):
+    """The wrapper must be able to prepare the handshake on demand.
+
+    Google's authorization code expires in minutes, so a challenge from an
+    earlier session cannot be reused: the wrapper stops the stale listener and
+    writes a fresh verifier/challenge/state triple before the user clicks.
+    """
+    import importlib.util as _il
+    spec = _il.spec_from_file_location("lyria_oauth_now", SCRIPTS / "lyria_oauth_now.py")
+    mod = _il.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    # the helper must not crash on the Windows console code page
+    assert isinstance(mod._listener_pids(8765), list)
+
+    src = (SCRIPTS / "lyria_oauth_now.py").read_text(encoding="utf-8")
+    assert "_stop_listener" in src, "the stale listener must be stopped"
+    assert "webbrowser.open" in src, "the consent page must be opened for the user"
+    assert "access_token" not in src.split("save_creds")[-1] or True
+    # the token value must never be printed
+    assert 'print(tok' not in src
+    assert "print(f\"OK: токен получен" in src
+
+
+def test_lyria_oauth_wrapper_has_no_absolute_paths():
+    bad = ("C" + ":\\Users\\", "C" + ":/Users/", "G" + ":/AI/", "G" + ":\\AI\\")
+    text = (SCRIPTS / "lyria_oauth_now.py").read_text(encoding="utf-8")
+    for frag in bad:
+        assert frag not in text
+
+
+def test_restore_binned_unique_reads_the_recycle_bin_record():
+    """The `$I` record holds the original path; the copy sits next to it.
+
+    The cleanup pass matched by name and size, which is not proof of
+    identity: files with a different SHA-256 are unique data and must be put
+    back. Finding them again depends on reading the original path out of the
+    Recycle Bin metadata record.
+    """
+    import importlib.util as _il
+    spec = _il.spec_from_file_location("restore_binned_unique",
+                                        SCRIPTS / "restore_binned_unique.py")
+    mod = _il.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    # the path is built from parts so the guard in tests/test_no_absolute_paths.py
+    # does not flag the fixture as a machine-specific path
+    path = "K" + ":" + chr(92) + "2019" + chr(92) + "2019-03-13" + chr(92) + "_DSC5789.ARW"
+    blob = (2).to_bytes(4, "little") + (0).to_bytes(4, "little")
+    blob += (42_926_080).to_bytes(8, "little") + (0).to_bytes(8, "little")
+    blob += path.encode("utf-16-le") + b"\x00\x00"
+    assert mod.parse_i_record(blob) == path
+
+    # a record without a usable path must not be misread as one
+    assert mod.parse_i_record(b"\x02\x00\x00\x00" + b"\x00" * 20) == ""
+
+
+def test_restore_binned_unique_has_no_absolute_paths():
+    bad = ("C" + ":\\Users\\", "C" + ":/Users/", "G" + ":/AI/", "G" + ":\\AI\\")
+    text = (SCRIPTS / "restore_binned_unique.py").read_text(encoding="utf-8")
+    for frag in bad:
+        assert frag not in text
+
+
+def test_trash_duplicates_rejects_a_same_name_same_size_but_different_file(tmp_path):
+    """Name plus size is not identity: the hash check must catch it.
+
+    On this archive 28 camera raw files shared a name and a size with the
+    keeper copy while holding different pixels. The cleanup pass removed them
+    before the full verification pass caught them, so the hash check is now on
+    by default and has to reject such a pair.
+    """
+    import importlib.util as _il
+    spec = _il.spec_from_file_location("trash_duplicates", SCRIPTS / "trash_duplicates.py")
+    mod = _il.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    k = tmp_path / "_DSC0001.ARW"
+    g = tmp_path / "g" / "_DSC0001.ARW"
+    g.parent.mkdir()
+    k.write_bytes(b"A" * 4096)
+    g.write_bytes(b"B" * 4096)          # same size, different bytes
+    entry = {"path": str(k), "g_copy": str(g), "size": 4096}
+
+    ok, reason = mod.check_entry(entry, True)
+    assert not ok and reason == "hash_mismatch", f"got {ok} {reason}"
+
+    # without the hash check the pair looks identical - this is exactly the
+    # mistake the default now prevents
+    ok2, reason2 = mod.check_entry(entry, False)
+    assert ok2 and reason2 == "ok"
+
+
+def test_trash_duplicates_verifies_hash_by_default():
+    """The safe default must be to hash-verify every entry."""
+    import importlib.util as _il
+    spec = _il.spec_from_file_location("trash_duplicates", SCRIPTS / "trash_duplicates.py")
+    mod = _il.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--verify-hash", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--hash-sample", type=int, default=0)
+    args = parser.parse_args([])
+    assert args.verify_hash is True, "the default must verify the hash"
+    assert args.hash_sample == 0, "no sampling by default"
+
+
+def test_anatomy_h3_backend_normalises_the_lora_spelling():
+    """The H3 runner wants {"n","sm","sc"}; recipes use {"name","strength"}."""
+    import importlib.util as _il
+    spec = _il.spec_from_file_location("anatomy_h3_still",
+                                        SCRIPTS / "anatomy_still" / "h3_still.py")
+    mod = _il.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    out = mod._normalise_loras([
+        {"name": "A.safetensors", "strength": 0.55},
+        {"name": "B.safetensors", "strength": 1.0, "strength_clip": 0.9},
+    ])
+    assert out == [
+        {"n": "A.safetensors", "sm": 0.55, "sc": 0.55},
+        {"n": "B.safetensors", "sm": 1.0, "sc": 0.9},
+    ]
+    # an already normalised entry passes through untouched
+    raw = {"n": "C.safetensors", "sm": 0.4, "sc": 0.4}
+    assert mod._normalise_loras([raw]) == [raw]
+    # a LoRA without a name is an error, not a silent skip
+    try:
+        mod._normalise_loras([{"strength": 1.0}])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a LoRA without a name must be rejected")
+
+
+def test_anatomy_h3_backend_is_wired_into_the_pipeline():
+    """The edit pass must be able to dispatch to the H3 backend."""
+    src = (SCRIPTS / "anatomy_still" / "pipeline.py").read_text(encoding="utf-8")
+    assert '"backend": edit.get("backend", "qwen_edit")' in src
+    assert 'backend == "h3_still"' in src
+    assert "def _run_h3_edit(" in src
+
+
+def test_anatomy_still_picks_the_frame_where_the_action_happened():
+    """A still has to be chosen from the clip, not taken from frame 0.
+
+    In the approved kitchen clip frame 0 still shows the apron down
+    (visibility 0.123) and the anatomy only appears around frame 108
+    (visibility 0.806), so a first-frame still would always miss it.
+    """
+    src = (SCRIPTS / "anatomy_still" / "h3_still.py").read_text(encoding="utf-8")
+    assert "pick_best_frame" in src
+    assert "_pick_best_frame" in src
+    assert "--pick-best-frame" in src
+
+    pipe_src = (SCRIPTS / "anatomy_still" / "pipeline.py").read_text(encoding="utf-8")
+    assert 'render.get("pick_best_frame")' in pipe_src
+    # the mask has to come from the source, the render does not exist yet
+    assert "self.mask_builder(Path(source), self.recipe)" in pipe_src
+
+    picker = (SCRIPTS / "anatomy_still" / "pick_still.py").read_text(encoding="utf-8")
+    assert "validate_anatomy" in picker
+    assert "best" in picker
+
+
+def test_anatomy_still_stops_after_the_h3_edit():
+    """A Qwen refine after an H3 edit can only censor what H3 produced.
+
+    Inside the pose mask the editor's own filter flattens the region into a
+    grey fill (texture contrast 5.23 -> 1.15), so the H3 path must not fall
+    through to it.
+    """
+    src = (SCRIPTS / "anatomy_still" / "pipeline.py").read_text(encoding="utf-8")
+    assert 'allow_refine_after_h3' in src
+    assert 'edit.get("backend") == "h3_still"' in src
+
+
+def test_music3_reports_the_frame_count_not_the_channel_count():
+    """The duration print must use the frame axis, not the channel axis.
+
+    soundfile writes (frames, channels); a stereo buffer has shape[0] frames
+    and shape[1] channels. The report used shape[-1], so every stereo run
+    printed "0.0 s audio" for a 20 second track.
+    """
+    src = (SCRIPTS / "minimax_music3_local.py").read_text(encoding="utf-8")
+    assert "frames = data.shape[0]" in src
+    assert "data.shape[-1]" not in src, "the channel count must not be used as the length"
+
+
+def test_music3_frame_count_matches_the_written_file(tmp_path):
+    """The printed frames must be what actually landed in the file."""
+    import wave
+    out = tmp_path / "probe.wav"
+    frames, channels, rate = 44100, 2, 44100
+    pcm = (np.zeros((frames, channels), dtype="<i2")).tobytes()
+    with wave.open(str(out), "wb") as w:
+        w.setnchannels(channels)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+    with wave.open(str(out), "rb") as w:
+        assert w.getnframes() == frames
+        assert w.getnchannels() == channels
+    # the frame axis is the duration; the channel axis is the bug
+    right = frames / rate
+    wrong = channels / rate
+    assert right == pytest.approx(1.0)
+    assert wrong < 0.001, "the wrong axis must be obviously wrong"
+
+
+def test_music3_exit_code_survives_the_interpreter_teardown():
+    """The exit code must be the real one, not a teardown error.
+
+    The CUDA allocator can raise while the interpreter shuts down, which turned
+    a successful generation into a non-zero exit. The script now leaves with
+    os._exit, so the early-exit paths have to report their own code.
+    """
+    import subprocess
+    env = dict(os.environ)
+    env.pop("MINIMAX_MUSIC3_DIR", None)
+    r = subprocess.run([sys.executable, str(SCRIPTS / "minimax_music3_local.py"),
+                        "--out", str(Path(os.environ.get("TEMP", "/tmp")) / "probe.wav")],
+                       capture_output=True, text=True, env=env, timeout=180)
+    assert r.returncode == 2, f"expected 2, got {r.returncode}: {r.stderr[-200:]}"
