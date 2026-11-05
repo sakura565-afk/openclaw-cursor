@@ -103,6 +103,14 @@ class AnatomyStillPipeline:
         h3 = self.recipe["h3"]
         render = h3.get("render", {})
         out = Path(local_paths.SCRATCH) / f"{tag}_h3.png"
+
+        # The frame picker needs a pose mask, and the mask is normally built
+        # from the rendered image - which does not exist yet. The pose is the
+        # same across the clip, so the mask is built from the source instead.
+        mask_png = None
+        if render.get("pick_best_frame"):
+            mask_png = Path(self.mask_builder(Path(source), self.recipe))
+
         return h3_still.render_still(
             source=source,
             prompt=h3["prompt"],
@@ -110,12 +118,14 @@ class AnatomyStillPipeline:
             out_png=out,
             width=int(render.get("width", self.recipe["size"][0])),
             height=int(render.get("height", self.recipe["size"][1])),
-            length=int(render.get("length", 33)),
+            length=int(render.get("length", 175)),
             steps=int(render.get("steps", steps)),
             seed=int(render.get("seed", seed)),
             sampler=str(render.get("sampler", "euler")),
             scheduler=str(render.get("scheduler", "simple")),
             negative=str(h3.get("negative", "")),
+            pick_best_frame=bool(render.get("pick_best_frame", False)),
+            mask_png=mask_png,
         )
 
     def _run_edit(

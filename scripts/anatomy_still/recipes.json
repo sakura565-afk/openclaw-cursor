@@ -15,7 +15,7 @@
         736,
         1120
       ],
-      "status": "dry_run_unverified",
+      "status": "measured",
       "edit": {
         "denoise": 0.38,
         "steps": 28,
@@ -77,38 +77,26 @@
         "render": {
           "width": 736,
           "height": 1120,
-          "length": 33,
+          "length": 175,
           "steps": 20,
           "seed": 505050,
           "sampler": "euler",
-          "scheduler": "simple"
+          "scheduler": "simple",
+          "pick_best_frame": true
         }
       },
       "measured": {
-        "gpu_run": "2026-11-05, Qwen edit 2509 fp8, 736x1120",
-        "edit": {
-          "denoise": 0.38,
-          "loras": [
-            0.55,
-            0.85
-          ],
-          "visibility_new": 0.082,
-          "cloth": 0.526,
-          "texture": 1.0,
-          "skin_fraction": 0.096,
-          "verdict": "apron still covers the pelvis - skin_fraction 9.6%"
-        },
-        "refine_lora_0.70": {
-          "visibility": 0.0,
-          "skin_fraction": 0.059,
-          "verdict": "grey censor blob painted over the mask"
-        },
-        "refine_lora_0.35": {
-          "visibility": 0.0,
-          "skin_fraction": 0.694,
-          "verdict": "same blob, slightly warmer tone"
-        },
-        "conclusion": "masked refine with the NSFW anatomy LoRA paints a uniform grey blob inside the mask instead of anatomy; Qwen edit keeps the apron. The working still is the H3 frame, not a Qwen render."
+        "source_clip": "G:/hermes_archives/renders/CHEF_PHOTO.mp4 (user approved \"Успех\")",
+        "best_frame": 108,
+        "visibility": 0.806,
+        "skin_fraction": 1.0,
+        "cloth_score": 0.194,
+        "texture_score": 1.0,
+        "validator_passed": true,
+        "vision_anatomy_plausibility": "7/10",
+        "vision_notes": "vertical cleft, paired inner folds, hood-like prominence, mucosal tissue, pubic hair stubble, pores; no grey censor patch",
+        "frame_0_visibility": 0.123,
+        "note": "the action takes time - frame 0 still has the apron down; the anatomy only appears around frame 108"
       },
       "h3_anatomy_still": {
         "still": "scripts/anatomy_still/examples/chef3_final.png",
@@ -296,7 +284,7 @@
         "render": {
           "width": 736,
           "height": 1120,
-          "length": 33,
+          "length": 175,
           "steps": 20,
           "seed": 505050,
           "sampler": "euler",
