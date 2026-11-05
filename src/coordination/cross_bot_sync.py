@@ -38,6 +38,9 @@ DEFAULT_SHARED_DIR = Path.home() / ".openclaw" / "shared"
 DEFAULT_STATE_FILE = DEFAULT_SHARED_DIR / "state.json"
 DEFAULT_STATUS_FILE = DEFAULT_SHARED_DIR / "bot_status.json"
 DEFAULT_LOCK_FILE = DEFAULT_SHARED_DIR / "state.lock"
+
+# Locks this process currently holds, keyed by absolute lock-file path.
+_ACTIVE_LOCKS: Dict[str, list] = {}
 DEFAULT_MEMORY_FILE = Path.cwd() / "MEMORY.md"
 
 
@@ -207,6 +210,10 @@ class FileLock:
             else FallbackFileLock(self.lock_path, timeout=timeout)
         )
 
+    @property
+    def _key(self) -> str:
+        return os.path.abspath(str(self.lock_path))
+
     def acquire(self) -> None:
         try:
             self._lock.acquire()
@@ -214,9 +221,17 @@ class FileLock:
             raise LockTimeoutError(str(exc)) from exc
         except TimeoutError as exc:
             raise LockTimeoutError(str(exc)) from exc
+        _ACTIVE_LOCKS.setdefault(self._key, []).append(self)
 
     def release(self) -> None:
-        self._lock.release()
+        try:
+            self._lock.release()
+        finally:
+            holders = _ACTIVE_LOCKS.get(self._key)
+            if holders and self in holders:
+                holders.remove(self)
+                if not holders:
+                    _ACTIVE_LOCKS.pop(self._key, None)
 
     def __enter__(self) -> "FileLock":
         self.acquire()
@@ -224,6 +239,22 @@ class FileLock:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.release()
+
+
+def _release_local_locks(lock_path: Path) -> int:
+    """Release locks this process still holds on ``lock_path``.
+
+    Windows refuses to delete a file that has an open handle, so a lock that
+    is still held in-process has to be released before the file can be removed.
+    """
+    key = os.path.abspath(str(Path(lock_path)))
+    holders = list(_ACTIVE_LOCKS.get(key, []))
+    for lock in holders:
+        try:
+            lock.release()
+        except Exception:  # pragma: no cover - best-effort cleanup.
+            pass
+    return len(holders)
 
 
 def build_lock(lock_path: Path, timeout: float = 10.0):
@@ -273,10 +304,21 @@ class CrossBotSyncCoordinator:
     def unlock(self) -> bool:
         """Remove the shared lock file if present."""
 
-        if self.lock_file.exists():
+        if not self.lock_file.exists():
+            return False
+        # Windows cannot delete a file that still has an open handle, so
+        # release any lock this process holds before removing it. The release
+        # may remove the file itself, which counts as unlocked.
+        _release_local_locks(self.lock_file)
+        try:
             self.lock_file.unlink()
             return True
-        return False
+        except FileNotFoundError:
+            # released lock already removed it
+            return True
+        except PermissionError:
+            # another process holds it open; the lock is not ours to drop
+            return False
 
     def sync_memory(self, bot_name: str, memory_path: Path) -> Dict[str, Any]:
         """Merge a local MEMORY.md file with shared memory entries."""
