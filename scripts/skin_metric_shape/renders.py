@@ -20,6 +20,14 @@ RENDER_NAMES = (
     "CHEF_FIX3",
 )
 CONTROL_NAMES = ("PORE_TIGHT_012", "PORE_FLOW_0.05")
+# Extra renders to re-check; the report marks anything it cannot find as missing.
+EXTRA_RENDER_NAMES = (
+    "BOHO_MUSIC3",
+    "BOHO_INSTR2",
+    "BOHO_SONG_ALIGNED",
+    "BOHO_SONG_GUITAR",
+    "BOHO_INSTR",
+)
 
 
 def _scratch_root() -> Path:
@@ -39,7 +47,7 @@ def build_render_report(
     work = Path(work_dir) if work_dir else _scratch_root() / "skin_metric_shape" / "renders"
     rows = []
     canonical = None
-    for name in RENDER_NAMES + CONTROL_NAMES:
+    for name in RENDER_NAMES + CONTROL_NAMES + EXTRA_RENDER_NAMES:
         path = root / f"{name}.mp4"
         if not path.exists():
             rows.append({"render": name, "status": "missing", "control": name in CONTROL_NAMES})

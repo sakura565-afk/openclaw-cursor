@@ -13,8 +13,13 @@ The same decoded pixels and canonical ROI scale are used for old and new columns
 | CHEF_FIX3 | missing | — | — | — | — | — | — |
 | PORE_TIGHT_012 | digital_sand | digital_sand | 6.4026 | 0.4822 | 1304.530 | 1.128 | 0.9994 |
 | PORE_FLOW_0.05 | pores | pores | 5.1305 | 0.7267 | 1225.799 | 1.128 | 0.9972 |
+| BOHO_MUSIC3 | digital_sand | pores | 17.2797 | 0.4504 | 72.242 | 3.545 | 0.8203 |
+| BOHO_INSTR2 | digital_sand | pores | 17.2797 | 0.4504 | 72.242 | 3.545 | 0.8203 |
+| BOHO_SONG_ALIGNED | digital_sand | pores | 10.3443 | 0.5021 | 66.013 | 2.696 | 0.0093 |
+| BOHO_SONG_GUITAR | digital_sand | pores | 10.3443 | 0.5021 | 66.013 | 2.696 | 0.0093 |
+| BOHO_INSTR | digital_sand | pores | 16.6169 | 0.4750 | 68.549 | 3.472 | 0.7367 |
 
-Old sand/plastic reinterpreted as pores: **CHEF_ONE_REF2VA, CHEF_REF2VA**.
+Old sand/plastic reinterpreted as pores: **CHEF_ONE_REF2VA, CHEF_REF2VA, BOHO_MUSIC3, BOHO_INSTR2, BOHO_SONG_ALIGNED, BOHO_SONG_GUITAR, BOHO_INSTR**.
 Missing inputs: **CHEF_FIX2, CHEF_FIX3**.
 
 Changed classes are metric reinterpretations, not new human labels. Temporal correlations are unregistered and are not used by classify().
