@@ -144,4 +144,12 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    _code = main()
+    # The CUDA allocator can raise while the interpreter tears down, which
+    # turns a successful generation into a non-zero exit code - a cron job
+    # would then report a failure for a run that actually wrote the file.
+    # The output is already flushed and the file already closed, so leave
+    # immediately with the real code.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(_code)
