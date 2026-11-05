@@ -872,7 +872,7 @@
       "id": "BOHO_LIPSYNC_FIXED",
       "title": "Boho portrait singing to an ACE-Step track, face locked, lips synced",
       "clip": "BOHO_LIPSYNC_FIXED.mp4",
-      "approval": "Pending user review (was rejected as \"face not reference, vocals not in time\")",
+      "approval": "Успех (2026-11-05): \"Референс ок, синхронизация с вокалом ок\" - the two defects of the rejected clip are fixed and measured",
       "source_section": "Fix for the rejected BOHO_ACESTEP_SONG: reference face + lip-sync",
       "reference_description": "Original boho portrait photo (853x1280) of the woman in the dark green floral off-the-shoulder dress with a braided headband and gold chain.",
       "checkpoint": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",

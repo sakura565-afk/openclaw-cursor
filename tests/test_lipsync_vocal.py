@@ -282,6 +282,42 @@ def test_trash_duplicates_verifies_hash_by_default():
     assert args.hash_sample == 0, "no sampling by default"
 
 
+def test_anatomy_h3_backend_normalises_the_lora_spelling():
+    """The H3 runner wants {"n","sm","sc"}; recipes use {"name","strength"}."""
+    import importlib.util as _il
+    spec = _il.spec_from_file_location("anatomy_h3_still",
+                                        SCRIPTS / "anatomy_still" / "h3_still.py")
+    mod = _il.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    out = mod._normalise_loras([
+        {"name": "A.safetensors", "strength": 0.55},
+        {"name": "B.safetensors", "strength": 1.0, "strength_clip": 0.9},
+    ])
+    assert out == [
+        {"n": "A.safetensors", "sm": 0.55, "sc": 0.55},
+        {"n": "B.safetensors", "sm": 1.0, "sc": 0.9},
+    ]
+    # an already normalised entry passes through untouched
+    raw = {"n": "C.safetensors", "sm": 0.4, "sc": 0.4}
+    assert mod._normalise_loras([raw]) == [raw]
+    # a LoRA without a name is an error, not a silent skip
+    try:
+        mod._normalise_loras([{"strength": 1.0}])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a LoRA without a name must be rejected")
+
+
+def test_anatomy_h3_backend_is_wired_into_the_pipeline():
+    """The edit pass must be able to dispatch to the H3 backend."""
+    src = (SCRIPTS / "anatomy_still" / "pipeline.py").read_text(encoding="utf-8")
+    assert '"backend": edit.get("backend", "qwen_edit")' in src
+    assert 'backend == "h3_still"' in src
+    assert "def _run_h3_edit(" in src
+
+
 def test_music3_reports_the_frame_count_not_the_channel_count():
     """The duration print must use the frame axis, not the channel axis.
 
