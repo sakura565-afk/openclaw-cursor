@@ -12,6 +12,7 @@ three separate causes that this tooling has to keep apart:
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -203,3 +204,19 @@ def test_music3_frame_count_matches_the_written_file(tmp_path):
     wrong = channels / rate
     assert right == pytest.approx(1.0)
     assert wrong < 0.001, "the wrong axis must be obviously wrong"
+
+
+def test_music3_exit_code_survives_the_interpreter_teardown():
+    """The exit code must be the real one, not a teardown error.
+
+    The CUDA allocator can raise while the interpreter shuts down, which turned
+    a successful generation into a non-zero exit. The script now leaves with
+    os._exit, so the early-exit paths have to report their own code.
+    """
+    import subprocess
+    env = dict(os.environ)
+    env.pop("MINIMAX_MUSIC3_DIR", None)
+    r = subprocess.run([sys.executable, str(SCRIPTS / "minimax_music3_local.py"),
+                        "--out", str(Path(os.environ.get("TEMP", "/tmp")) / "probe.wav")],
+                       capture_output=True, text=True, env=env, timeout=180)
+    assert r.returncode == 2, f"expected 2, got {r.returncode}: {r.stderr[-200:]}"
