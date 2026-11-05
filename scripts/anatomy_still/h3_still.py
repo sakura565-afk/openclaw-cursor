@@ -91,7 +91,17 @@ def _pick_best_frame(video: Path, out_png: Path, mask_png: Path | None,
     best = None
     for idx in range(0, total, step):
         frame = extract(str(video), idx, work / f"f{idx:05d}.png")
-        m = validate_anatomy(load_rgb(frame), mask)
+        image = load_rgb(frame)
+        # The mask was built from the source photo, which has a different size
+        # than the render. Scale it instead of rebuilding it: the pose is the
+        # same, only the resolution differs.
+        if mask.shape[:2] != image.shape[:2]:
+            import cv2
+            scaled = cv2.resize(mask, (image.shape[1], image.shape[0]),
+                                interpolation=cv2.INTER_NEAREST)
+        else:
+            scaled = mask
+        m = validate_anatomy(image, scaled)
         if best is None or m.visibility > best["visibility"]:
             best = {"frame": idx, "visibility": m.visibility}
     if best is None:
