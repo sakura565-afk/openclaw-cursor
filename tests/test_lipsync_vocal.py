@@ -318,6 +318,28 @@ def test_anatomy_h3_backend_is_wired_into_the_pipeline():
     assert "def _run_h3_edit(" in src
 
 
+def test_anatomy_still_picks_the_frame_where_the_action_happened():
+    """A still has to be chosen from the clip, not taken from frame 0.
+
+    In the approved kitchen clip frame 0 still shows the apron down
+    (visibility 0.123) and the anatomy only appears around frame 108
+    (visibility 0.806), so a first-frame still would always miss it.
+    """
+    src = (SCRIPTS / "anatomy_still" / "h3_still.py").read_text(encoding="utf-8")
+    assert "pick_best_frame" in src
+    assert "_pick_best_frame" in src
+    assert "--pick-best-frame" in src
+
+    pipe_src = (SCRIPTS / "anatomy_still" / "pipeline.py").read_text(encoding="utf-8")
+    assert 'render.get("pick_best_frame")' in pipe_src
+    # the mask has to come from the source, the render does not exist yet
+    assert "self.mask_builder(Path(source), self.recipe)" in pipe_src
+
+    picker = (SCRIPTS / "anatomy_still" / "pick_still.py").read_text(encoding="utf-8")
+    assert "validate_anatomy" in picker
+    assert "best" in picker
+
+
 def test_music3_reports_the_frame_count_not_the_channel_count():
     """The duration print must use the frame axis, not the channel axis.
 

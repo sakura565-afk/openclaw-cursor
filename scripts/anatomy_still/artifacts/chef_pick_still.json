@@ -1,0 +1,76 @@
+{
+  "best": {
+    "frame": 108,
+    "visibility": 0.806122,
+    "texture_score": 1.0,
+    "skin_fraction": 1.0,
+    "cloth_score": 0.193878,
+    "passed": true
+  },
+  "frames": [
+    {
+      "frame": 0,
+      "visibility": 0.122617,
+      "texture_score": 1.0,
+      "skin_fraction": 0.155449,
+      "cloth_score": 0.566164,
+      "passed": false
+    },
+    {
+      "frame": 48,
+      "visibility": 0.444097,
+      "texture_score": 1.0,
+      "skin_fraction": 0.96457,
+      "cloth_score": 0.555903,
+      "passed": false
+    },
+    {
+      "frame": 72,
+      "visibility": 0.714872,
+      "texture_score": 0.96705,
+      "skin_fraction": 1.0,
+      "cloth_score": 0.26077,
+      "passed": true
+    },
+    {
+      "frame": 96,
+      "visibility": 0.784702,
+      "texture_score": 1.0,
+      "skin_fraction": 0.895795,
+      "cloth_score": 0.215298,
+      "passed": true
+    },
+    {
+      "frame": 108,
+      "visibility": 0.806122,
+      "texture_score": 1.0,
+      "skin_fraction": 1.0,
+      "cloth_score": 0.193878,
+      "passed": true
+    },
+    {
+      "frame": 120,
+      "visibility": 0.34749,
+      "texture_score": 0.478029,
+      "skin_fraction": 0.737158,
+      "cloth_score": 0.273079,
+      "passed": false
+    },
+    {
+      "frame": 144,
+      "visibility": 0.743113,
+      "texture_score": 1.0,
+      "skin_fraction": 0.983818,
+      "cloth_score": 0.256887,
+      "passed": true
+    },
+    {
+      "frame": 168,
+      "visibility": 0.756781,
+      "texture_score": 1.0,
+      "skin_fraction": 1.0,
+      "cloth_score": 0.243219,
+      "passed": true
+    }
+  ]
+}

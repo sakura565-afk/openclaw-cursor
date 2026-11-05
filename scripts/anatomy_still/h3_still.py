@@ -63,6 +63,44 @@ def _normalise_loras(loras: list[dict]) -> list[dict]:
     return out
 
 
+def _pick_best_frame(video: Path, out_png: Path, mask_png: Path | None,
+                     step: int = 4) -> dict:
+    """Choose the frame where the anatomy is exposed.
+
+    The validator needs the pose mask, which needs mediapipe and therefore a
+    CPU environment. When it is not available the first frame is used and the
+    limitation is reported, rather than pretending the pick was measured.
+    """
+    if mask_png is None or not Path(mask_png).exists():
+        print("нет маски - беру первый кадр (выбор кадра не измерен)",
+              file=sys.stderr)
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(video),
+                        "-frames:v", "1", str(out_png)], capture_output=True, timeout=300)
+        return {"frame": 0, "visibility": float("nan")}
+
+    from scripts.anatomy_still.pick_still import extract, load_mask, load_rgb
+    from scripts.anatomy_still.metrics import validate_anatomy
+
+    mask = load_mask(Path(mask_png))
+    work = out_png.parent / "_pick"
+    work.mkdir(parents=True, exist_ok=True)
+    total = int(subprocess.run(
+        ["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0",
+         "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", str(video)],
+        capture_output=True, text=True, timeout=900).stdout.strip() or 0)
+    best = None
+    for idx in range(0, total, step):
+        frame = extract(str(video), idx, work / f"f{idx:05d}.png")
+        m = validate_anatomy(load_rgb(frame), mask)
+        if best is None or m.visibility > best["visibility"]:
+            best = {"frame": idx, "visibility": m.visibility}
+    if best is None:
+        best = {"frame": 0, "visibility": float("nan")}
+    src = work / f"f{best['frame']:05d}.png"
+    shutil.copy2(src, out_png)
+    return best
+
+
 def render_still(
     *,
     source: Path,
@@ -80,6 +118,8 @@ def render_still(
     extra_args: list[str] | None = None,
     python: str | None = None,
     log: Path | None = None,
+    pick_best_frame: bool = False,
+    mask_png: Path | None = None,
 ) -> Path:
     """Render with H3 fl2va and write frame 0 as a still."""
     source = Path(source)
@@ -134,6 +174,15 @@ def render_still(
         raise RuntimeError("h3 render produced no video")
 
     out_png.parent.mkdir(parents=True, exist_ok=True)
+
+    if pick_best_frame:
+        # The action takes time: in the approved kitchen clip frame 0 still
+        # shows the apron down and the anatomy only appears around frame 108.
+        # A still therefore has to be chosen from the clip.
+        best = _pick_best_frame(video, out_png, mask_png)
+        print(f"still: {best['frame']} visibility={best['visibility']:.3f}")
+        return out_png
+
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(video),
                     "-frames:v", "1", str(out_png)], capture_output=True, timeout=300)
     if not out_png.exists():
@@ -157,6 +206,10 @@ def main() -> int:
     ap.add_argument("--scheduler", default="simple")
     ap.add_argument("--negative", default="")
     ap.add_argument("--log", default="")
+    ap.add_argument("--pick-best-frame", action="store_true",
+                    help="choose the frame where the anatomy is exposed instead "
+                         "of taking the first one")
+    ap.add_argument("--mask", default="", help="pose mask used by the frame picker")
     a = ap.parse_args()
 
     prompt = a.prompt
@@ -171,6 +224,8 @@ def main() -> int:
         seed=a.seed, sampler=a.sampler, scheduler=a.scheduler,
         negative=a.negative,
         log=Path(a.log) if a.log else None,
+        pick_best_frame=a.pick_best_frame,
+        mask_png=Path(a.mask) if a.mask else None,
     )
     print(f"still: {out} ({out.stat().st_size} байт)")
     return 0
