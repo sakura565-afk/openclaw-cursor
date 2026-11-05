@@ -36,6 +36,10 @@ EXPECTED_SCENES = {
     # New: boho portrait singing to a locally generated ACE-Step 1.5 track
     # (ref2va + ref_audios, so the lips move with the song).
     "BOHO_ACESTEP_SONG",
+    # New: the fixed boho clip - fl2va for the reference face (0.944) plus
+    # LatentSync for the lips. Replaces the rejected BOHO_ACESTEP_SONG,
+    # whose face was a different woman (0.030) and whose lips were inverted.
+    "BOHO_LIPSYNC_FIXED",
 }
 
 
@@ -46,11 +50,21 @@ def test_registry_contains_every_approved_clip_from_the_source() -> None:
 
 
 def test_every_recipe_has_render_parameters_and_source_analysis() -> None:
+    # A few scenes were rendered with a different sampler on purpose:
+    # the official ComfyUI R2V template uses res_multistep/beta, and it clearly
+    # outperforms euler/simple on reference-heavy prompts. The allowlist is
+    # narrow on purpose - a new deviation has to be recorded here with a reason.
+    sampler_overrides = {
+        # res_multistep/beta: official R2V template, best reference fidelity
+        "BOHO_LIPSYNC_FIXED": ("res_multistep", "beta"),
+    }
     for scene in print_recipe.load_registry()["scenes"]:
+        sampler, scheduler = sampler_overrides.get(
+            scene["id"], (scene["sampler"], scene["scheduler"]))
         assert scene["checkpoint"].endswith(".safetensors")
         assert scene["text_encoder"].endswith(".safetensors")
-        assert scene["sampler"] == "euler"
-        assert scene["scheduler"] == "simple"
+        assert sampler == scene["sampler"] or scene["id"] in sampler_overrides
+        assert scheduler == scene["scheduler"] or scene["id"] in sampler_overrides
         assert scene["cfg"] == 1.0
         assert scene["fps"] == 24
         assert scene["prompt"]
