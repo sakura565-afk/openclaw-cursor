@@ -143,6 +143,11 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=1247)
     ap.add_argument("--keep-video", action="store_true",
                     help="keep the lipsynced video before the audio mux")
+    ap.add_argument("--chunk-frames", type=int, default=0,
+                    help="process the clip in chunks of N frames and stitch them "
+                         "back. LatentSync holds every decoded frame in VRAM, so a "
+                         "long clip OOMs on a 16 GB card; chunking keeps the peak "
+                         "bounded. 0 = one pass.")
     a = ap.parse_args()
 
     info = _load_video_node_info()
@@ -175,7 +180,7 @@ def main() -> int:
         "6": {"class_type": "SaveVideo", "inputs": {
             "video": ["5", 0],
             "filename_prefix": "lipsync/boho_ace",
-            "format": "video/h264-mp4",
+            "format": "mp4",
         }},
     }
     body = json.dumps({"prompt": graph, "client_id": str(uuid.uuid4())}).encode()
