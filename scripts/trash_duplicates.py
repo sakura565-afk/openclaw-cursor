@@ -67,11 +67,16 @@ def main() -> int:
     ap.add_argument("--manifest", required=True)
     ap.add_argument("--limit", type=int, default=0, help="0 = all")
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--verify-hash", action="store_true",
-                    help="compare SHA-256 of both copies before moving")
+    ap.add_argument("--verify-hash", action=argparse.BooleanOptionalAction, default=True,
+                    help="compare SHA-256 of both copies before moving (default: on). "
+                         "Name plus size is NOT proof of identity: on this archive 28 "
+                         "camera raw files shared a name and a size with the keeper "
+                         "while holding different pixels, and they were removed "
+                         "before the full verification pass caught them.")
     ap.add_argument("--hash-sample", type=int, default=0,
-                    help="SHA-256 check on a random sample of N entries (0 = none, "
-                         "separate from --verify-hash which checks every entry)")
+                    help="only SHA-256 check this many entries instead of all of "
+                         "them (0 = all). Sampling is for dry runs only: an "
+                         "unchecked entry is removed on name and size alone.")
     ap.add_argument("--skip", type=int, default=0,
                     help="skip the first N entries (for resuming a run)")
     ap.add_argument("--report", default="")
@@ -93,13 +98,19 @@ def main() -> int:
         rng = random.Random(1234)
         idx = rng.sample(range(len(entries)), min(a.hash_sample, len(entries)))
         hash_set = set(idx)
+        print(f"ВНИМАНИЕ: SHA-256 проверяется только у {len(hash_set)} записей из "
+              f"{len(entries)}; остальные удаляются по имени и размеру. Это не "
+              f"доказательство идентичности - используйте только для пробного прогона.",
+              file=sys.stderr, flush=True)
 
     rows = []
     freed = 0
     hashed = 0
     started = time.time()
     for i, entry in enumerate(entries, 1):
-        verify = a.verify_hash or (i in hash_set)
+        # a sample limits the hash check to the sampled entries; without one,
+        # every entry is hashed
+        verify = a.verify_hash and (not a.hash_sample or i in hash_set)
         ok, reason = check_entry(entry, verify)
         if verify and ok:
             hashed += 1

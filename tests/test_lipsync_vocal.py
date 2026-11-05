@@ -237,6 +237,51 @@ def test_restore_binned_unique_has_no_absolute_paths():
         assert frag not in text
 
 
+def test_trash_duplicates_rejects_a_same_name_same_size_but_different_file(tmp_path):
+    """Name plus size is not identity: the hash check must catch it.
+
+    On this archive 28 camera raw files shared a name and a size with the
+    keeper copy while holding different pixels. The cleanup pass removed them
+    before the full verification pass caught them, so the hash check is now on
+    by default and has to reject such a pair.
+    """
+    import importlib.util as _il
+    spec = _il.spec_from_file_location("trash_duplicates", SCRIPTS / "trash_duplicates.py")
+    mod = _il.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    k = tmp_path / "_DSC0001.ARW"
+    g = tmp_path / "g" / "_DSC0001.ARW"
+    g.parent.mkdir()
+    k.write_bytes(b"A" * 4096)
+    g.write_bytes(b"B" * 4096)          # same size, different bytes
+    entry = {"path": str(k), "g_copy": str(g), "size": 4096}
+
+    ok, reason = mod.check_entry(entry, True)
+    assert not ok and reason == "hash_mismatch", f"got {ok} {reason}"
+
+    # without the hash check the pair looks identical - this is exactly the
+    # mistake the default now prevents
+    ok2, reason2 = mod.check_entry(entry, False)
+    assert ok2 and reason2 == "ok"
+
+
+def test_trash_duplicates_verifies_hash_by_default():
+    """The safe default must be to hash-verify every entry."""
+    import importlib.util as _il
+    spec = _il.spec_from_file_location("trash_duplicates", SCRIPTS / "trash_duplicates.py")
+    mod = _il.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--verify-hash", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--hash-sample", type=int, default=0)
+    args = parser.parse_args([])
+    assert args.verify_hash is True, "the default must verify the hash"
+    assert args.hash_sample == 0, "no sampling by default"
+
+
 def test_music3_reports_the_frame_count_not_the_channel_count():
     """The duration print must use the frame axis, not the channel axis.
 
