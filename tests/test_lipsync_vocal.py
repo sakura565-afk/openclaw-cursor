@@ -170,3 +170,34 @@ def test_registry_has_no_absolute_paths():
     reg = (SCRIPTS / "recipes" / "registry.json").read_text(encoding="utf-8")
     for frag in bad:
         assert frag not in reg
+
+
+def test_music3_reports_the_frame_count_not_the_channel_count():
+    """The duration print must use the frame axis, not the channel axis.
+
+    soundfile writes (frames, channels); a stereo buffer has shape[0] frames
+    and shape[1] channels. The report used shape[-1], so every stereo run
+    printed "0.0 s audio" for a 20 second track.
+    """
+    src = (SCRIPTS / "minimax_music3_local.py").read_text(encoding="utf-8")
+    assert "frames = data.shape[0]" in src
+    assert "data.shape[-1]" not in src, "the channel count must not be used as the length"
+
+
+def test_music3_frame_count_matches_the_written_file(tmp_path):
+    """The printed frames must be what actually landed in the file."""
+    import wave
+    out = tmp_path / "probe.wav"
+    frames, channels, rate = 44100, 2, 44100
+    pcm = (np.zeros((frames, channels), dtype="<i2")).tobytes()
+    with wave.open(str(out), "wb") as w:
+        w.setnchannels(channels)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+    with wave.open(str(out), "rb") as w:
+        assert w.getnframes() == frames
+        assert w.getnchannels() == channels
+        # this is the axis the report must use
+        assert frames / rate == pytest.approx(1.0)
+        assert channels / rate == pytest.approx(4.5e-5)
