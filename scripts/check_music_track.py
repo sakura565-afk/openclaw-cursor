@@ -56,6 +56,9 @@ def audio_qa(path: str) -> str:
     node = shutil.which("node")
     if not env or not node:
         return ""
+    tools = MCODE_TOOLS or os.path.join(
+        os.environ.get("LOCALAPPDATA", ""),
+        "Programs", "MiniMax Code", "resources", "resources", "mcode-tools")
     cli = os.path.join(tools, "cli.mjs")
     tmp = os.path.join(os.path.dirname(path) or ".", "_qa_upload.wav")
     shutil.copy2(path, tmp)
