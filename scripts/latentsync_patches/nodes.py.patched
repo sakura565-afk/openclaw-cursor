@@ -680,16 +680,17 @@ class LatentSyncNode:
             # Read the processed video - ensure it's loaded as CPU tensor
             # torchvision dropped read_video in recent releases, so fall back
             # to the wrapper's own decoder (cv2/decord) when it is missing.
+            # ComfyUI's IMAGE type is f h w c, which is also what the wrapper's
+            # read_video returns, so no axis shuffle is needed here.
             if hasattr(io, "read_video"):
                 processed_frames = io.read_video(output_video_path, pts_unit='sec')[0]
+                processed_frames = processed_frames.permute(0, 2, 3, 1)  # t c h w -> t h w c
             else:
                 from latentsync.utils.util import read_video as _read_video
-                _frames = _read_video(output_video_path, change_fps=False)
-                processed_frames = torch.from_numpy(np.asarray(_frames))
-                if processed_frames.ndim == 3:
-                    processed_frames = processed_frames.unsqueeze(0)
-                # read_video returns f h w c; the pipeline wants f c h w
-                processed_frames = processed_frames.permute(0, 3, 1, 2)
+                _frames = np.asarray(_read_video(output_video_path, change_fps=False))
+                if _frames.ndim == 3:
+                    _frames = _frames[None, ...]
+                processed_frames = torch.from_numpy(_frames)  # f h w c
             processed_frames = processed_frames.float() / 255.0
 
             # Ensure audio is on CPU before returning
