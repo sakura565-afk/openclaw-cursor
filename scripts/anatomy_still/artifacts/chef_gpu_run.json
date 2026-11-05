@@ -1,0 +1,118 @@
+{
+  "scene": "chef",
+  "status": "failed",
+  "still": "C:\\Users\\user\\AppData\\Local\\hermes\\cache\\scratch\\anatomy_run_chef2\\anatomy_chef_02.png",
+  "mask": "C:\\Users\\user\\AppData\\Local\\hermes\\cache\\scratch\\anatomy_run_chef2\\anatomy_anatomy_chef_02_mask.png",
+  "visibility": 0.0,
+  "metrics": {
+    "texture_energy": 0.256287,
+    "texture_score": 0.0,
+    "uniform_fraction": 0.902854,
+    "non_skin_uniform_fraction": 0.275511,
+    "edge_energy": 0.00441,
+    "structural_edge_energy": 0.0,
+    "cloth_score": 0.192858,
+    "uncovered_score": 0.807142,
+    "visibility": 0.0,
+    "passed": false
+  },
+  "passes": [
+    {
+      "pass": {
+        "kind": "edit",
+        "denoise": 0.38,
+        "steps": 28,
+        "seed": 42031,
+        "loras": [
+          {
+            "name": "qwen_image_edit_plus_nsfw_lora_safetensors.safetensors",
+            "strength": 0.55
+          },
+          {
+            "name": "qwen_image_jp_anatomy_nsfw_safetensors.safetensors",
+            "strength": 0.85
+          }
+        ]
+      },
+      "still": "C:\\Users\\user\\AppData\\Local\\hermes\\cache\\scratch\\qe_anatomy_chef_00.png",
+      "mask": "C:\\Users\\user\\AppData\\Local\\hermes\\cache\\scratch\\anatomy_qe_anatomy_chef_00_mask.png",
+      "metrics": {
+        "texture_energy": 3.170862,
+        "texture_score": 1.0,
+        "uniform_fraction": 0.035623,
+        "non_skin_uniform_fraction": 0.03026,
+        "edge_energy": 0.153473,
+        "structural_edge_energy": 0.929662,
+        "cloth_score": 0.526217,
+        "uncovered_score": 0.473783,
+        "visibility": 0.473783,
+        "passed": false
+      }
+    },
+    {
+      "pass": {
+        "kind": "masked_refine",
+        "iteration": 1,
+        "denoise": 0.3,
+        "steps": 28,
+        "seed": 42132,
+        "anatomy_lora_strength": 0.35,
+        "backend": "qwen21_masked_refine",
+        "mask": {
+          "center_shift": 0.16,
+          "width_scale": 1.2,
+          "height_scale": 0.34,
+          "grow": 6,
+          "min_visibility": 0.5
+        }
+      },
+      "still": "C:\\Users\\user\\AppData\\Local\\hermes\\cache\\scratch\\anatomy_chef_01.png",
+      "mask": "C:\\Users\\user\\AppData\\Local\\hermes\\cache\\scratch\\anatomy_anatomy_chef_01_mask.png",
+      "metrics": {
+        "texture_energy": 0.43556,
+        "texture_score": 0.0,
+        "uniform_fraction": 0.766028,
+        "non_skin_uniform_fraction": 0.764186,
+        "edge_energy": 0.029845,
+        "structural_edge_energy": 0.597385,
+        "cloth_score": 0.671884,
+        "uncovered_score": 0.328116,
+        "visibility": 0.0,
+        "passed": false
+      }
+    },
+    {
+      "pass": {
+        "kind": "masked_refine",
+        "iteration": 2,
+        "denoise": 0.36,
+        "steps": 32,
+        "seed": 42233,
+        "anatomy_lora_strength": 0.45,
+        "backend": "qwen_masked_fix",
+        "mask": {
+          "center_shift": 0.16,
+          "width_scale": 1.2,
+          "height_scale": 0.34,
+          "grow": 6,
+          "min_visibility": 0.5
+        }
+      },
+      "still": "C:\\Users\\user\\AppData\\Local\\hermes\\cache\\scratch\\anatomy_chef_02.png",
+      "mask": "C:\\Users\\user\\AppData\\Local\\hermes\\cache\\scratch\\anatomy_anatomy_chef_02_mask.png",
+      "metrics": {
+        "texture_energy": 0.256287,
+        "texture_score": 0.0,
+        "uniform_fraction": 0.902854,
+        "non_skin_uniform_fraction": 0.275511,
+        "edge_energy": 0.00441,
+        "structural_edge_energy": 0.0,
+        "cloth_score": 0.192858,
+        "uncovered_score": 0.807142,
+        "visibility": 0.0,
+        "passed": false
+      }
+    }
+  ],
+  "h3_prompt_suffix": "Preserve the exact visible anatomy and uncovered state of the reference still; keep natural skin detail and do not restore any clothing coverage."
+}

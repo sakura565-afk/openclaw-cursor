@@ -133,6 +133,39 @@ def test_validator_accepts_textured_non_fabric_region() -> None:
     assert result.passed
 
 
+def test_validator_rejects_lace_fabric_that_only_looks_like_texture() -> None:
+    """Satin and lace carry high-frequency detail but are not skin.
+
+    The chef run showed this: a Qwen edit left the apron on, and the texture
+    score alone reported visibility 0.47 for a fully covered pelvis. The
+    skin-colour fraction has to veto that.
+    """
+    image = _smooth_skin().astype(np.float32)
+    mask = _ellipse_mask(240, 320)
+    yy, xx = np.mgrid[:320, :240]
+    rng = np.random.default_rng(7)
+    lace = 6.0 * np.sin(xx / 1.7) + 5.0 * np.sin(yy / 2.3) + rng.normal(0, 4.0, (320, 240))
+    apron = np.abs(xx - 120) < 46
+    selected = apron & (mask > 0)
+    # bright satin with lace detail: textured, but not skin
+    image[selected, 0] = 235 + lace[selected]
+    image[selected, 1] = 235 + lace[selected]
+    image[selected, 2] = 232 + lace[selected]
+    result = validate_anatomy(np.clip(image, 0, 255).astype(np.uint8), mask)
+    assert result.texture_score > 0.30, "lace must still register as texture"
+    assert result.skin_fraction < 0.55
+    assert result.visibility < 0.45
+    assert not result.passed
+
+
+def test_validator_requires_skin_fraction_to_pass() -> None:
+    image = _smooth_skin()
+    result = validate_anatomy(image, _ellipse_mask(240, 320))
+    assert 0.0 <= result.skin_fraction <= 1.0
+    if result.passed:
+        assert result.skin_fraction >= 0.55
+
+
 @pytest.mark.parametrize("color", [(238, 238, 232), (24, 22, 25)])
 def test_validator_detects_uniform_fabric_with_structural_edges(color: tuple[int, int, int]) -> None:
     image = _smooth_skin()
@@ -194,4 +227,11 @@ def test_recipe_library_has_three_complete_scenes_without_h3_anatomy_description
         assert suffix.strip()
         assert "vulva" not in suffix
         assert "labia" not in suffix
-        assert recipe["status"] == "dry_run_unverified"
+        # The status has to record what was actually measured. "dry_run_unverified"
+        # was the original state; once a scene has been through a GPU run the
+        # recipe must say so instead of silently claiming to be unverified.
+        assert recipe["status"] in {
+            "dry_run_unverified",
+            "measured_qwen_path_failed",
+            "measured",
+        }

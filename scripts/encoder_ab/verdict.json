@@ -1,0 +1,41 @@
+{
+ "tool": "eval_detail_candidates + vision pair",
+ "created": "2026-11-05 06:56:27",
+ "pair": "ENC_HERETIC vs ENC_STOCK (H3, seed 42, 736x1120, 33 frames, 20 steps, audio)",
+ "why_it_matters": "Heretic was downloaded and wired but never given a paired verdict; both variants are already rendered and archived.",
+ "measured": {
+  "baseline_stock": {
+   "pores": 52019000000.0,
+   "rgb": 17.3375,
+   "hf": 4.0985,
+   "face_drift": 62.634
+  },
+  "heretic": {
+   "pores": 52044000000.0,
+   "rgb_delta_pct": -1.6,
+   "hf_delta_pct": -2.5,
+   "face_drift_delta_pct": -2.7
+  },
+  "note": "pores delta +0.0% is inside noise (<1%); HF and face drift both improve slightly"
+ },
+ "vision_pair": {
+  "crop": "pelvis/thigh zoom, 400x400 -> 700px, frame 0",
+  "stock": {
+   "micro_texture": 3,
+   "less_plastic": 4,
+   "artifact_free": 5
+  },
+  "heretic": {
+   "micro_texture": 4,
+   "less_plastic": 5,
+   "artifact_free": 5
+  },
+  "verdict": "Heretic is marginally better on texture and waxiness, both remain very soft, no ringing or blocking in either. Difference is close to the notice threshold."
+ },
+ "verdict": "Heretic wins slightly and is the default clip_name for H3 renders. The gain is small (-2.5% HF, -2.7% face drift, +1 texture point by vision), so it is not the main lever for skin quality - post-passes and the base model matter more.",
+ "artifacts": {
+  "stock_png": "G:/hermes_archives/enc_ab_stock.png",
+  "heretic_png": "G:/hermes_archives/enc_ab_heretic.png",
+  "ab_json": "G:/hermes_archives/enc_ab.json"
+ }
+}

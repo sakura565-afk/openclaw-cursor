@@ -609,6 +609,136 @@
       "analysis": "Instrumental variant of the boho scene. Two failures fixed: (1) ref2va re-drew the face (face correlation -0.32 even on frame 0) - switched to fl2va so frame 0 IS the reference (corr 0.998); (2) the singing prompt with a foreign vocal track desynced the lips - removed singing entirely, added singing/talking/open mouth to the negative, lips stay closed. Face lock: BFS Character Swap 0.85 + Polyhedron Perfect Eyes 0.35 + guide-frame pinned at frame 87 + TST tau 0.2. Measured face correlation across frames 0/45/90/130/174: 0.684 -> 0.833 mean, 0.642 -> 0.976 at frame 90. Audio: MiniMax-generated solo nylon-string fingerpicked guitar, no voice (verified by audio QA). Scene-integrity gate: accept, 0 events.",
       "unrecorded": [],
       "prompt": "She sways gently from side to side in time with a slow acoustic guitar song, her shoulders and upper body moving softly and slowly, one hand resting lightly on her hip.\nA close-up fashion portrait of the same adult woman in a bohemian editorial style. She has long wavy dark brown hair with warm copper ends, a thin braided headband across her forehead, dramatic dark smoky eye makeup with black winged eyeliner and long lashes, and soft pink lips. She wears an off-the-shoulder dark green dress with a ruffled edge and a dense floral print of burnt orange, cream, light blue, teal, purple and magenta flowers, her right shoulder bare, and a thin gold chain necklace.\nThe camera stays at exactly the same close framing for the whole clip, from the top of her hair down to her upper torso, with the dark softly blurred background behind her in every frame. There is no cut, no scene change, no zoom and no camera move.\nHer face stays absolutely identical to the reference image in every single frame: the same nose, the same eyes with the same shape and the same eyeliner, the same eyebrows, the same closed relaxed lips, the same makeup, the same braided headband and the same hair parting. She holds her head perfectly still, her chin level, looking straight into the camera the whole time. Only her shoulders and upper torso sway slowly with the music. Her lips stay closed, she is listening to the guitar, not singing.\nWarm soft light from the front and slightly above, gentle shadows under the brow and chin, dark olive and blurred brick background, bohemian fashion editorial colour grade, realistic natural skin with visible pores and fine hair detail.\nHer face, body proportions, dress, headband and the background stay exactly the same as in the reference image from the first frame to the last.\n"
+    },
+    {
+      "id": "BOHO_MUSIC3",
+      "clip": "BOHO_MUSIC3.mp4",
+      "approval": "Pending user review (local MiniMax Music3 vocal track)",
+      "source_section": "New: bohemian portrait + local MiniMax Music3 song (no API key)",
+      "checkpoint": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "text_encoder": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+      "width": 736,
+      "height": 1120,
+      "fps": 24,
+      "length": 175,
+      "duration_seconds": 7.3,
+      "steps": 20,
+      "cfg": 1.0,
+      "seed": 424245,
+      "sampler": "euler",
+      "scheduler": "simple",
+      "image_env": "H3_BOHO_SRC_IMAGE",
+      "first_frame": "Boho portrait photo 853x1280 scaled to 736x1120; source AR 0.666 versus render AR 0.657 (1.4% error).",
+      "loras": [
+        {
+          "name": "BFS - Best Face Swap Character Swap v1.1 - MinimaxH3.safetensors",
+          "source_name": "BFS",
+          "filename_status": "exact filename used in the render",
+          "strength_model": 0.85,
+          "strength_clip": 0.6
+        },
+        {
+          "name": "Polyhedron Perfect Eyes - MinimaxH3.safetensors",
+          "source_name": "Polyhedron Perfect Eyes",
+          "filename_status": "exact filename used in the render",
+          "strength_model": 0.35,
+          "strength_clip": 0.35
+        }
+      ],
+      "prompt_file": "scripts/recipes/prompts/BOHO_MUSIC3.txt",
+      "prompt_status": "verbatim prompt used for the render",
+      "negative": "blurry, deformed, watermark, text, singing, talking, open mouth, head turn, big smile, teeth",
+      "negative_status": "verbatim negative in the source",
+      "reference_description": "A close-up glamour portrait of an adult woman with long wavy brown hair and a thin braided headband, dramatic dark eye makeup, wearing an off-the-shoulder dark green ruffled dress with a dense floral print (orange, blue, purple, white), one bare shoulder, warm lighting against a dark softly blurred background; bohemian fashion-editorial look.",
+      "analysis": "Instrumental variant of the boho scene. Two failures fixed: (1) ref2va re-drew the face (face correlation -0.32 even on frame 0) - switched to fl2va so frame 0 IS the reference (corr 0.998); (2) the singing prompt with a foreign vocal track desynced the lips - removed singing entirely, added singing/talking/open mouth to the negative, lips stay closed. Face lock: BFS Character Swap 0.85 + Polyhedron Perfect Eyes 0.35 + guide-frame pinned at frame 87 + TST tau 0.2. Measured face correlation across frames 0/45/90/130/174: 0.684 -> 0.833 mean, 0.642 -> 0.976 at frame 90. Audio: MiniMax-generated solo nylon-string fingerpicked guitar, no voice (verified by audio QA). Scene-integrity gate: accept, 0 events.",
+      "unrecorded": [],
+      "prompt": "She sways gently from side to side in time with a slow acoustic guitar song, her shoulders and upper body moving softly and slowly, one hand resting lightly on her hip.\nA close-up fashion portrait of the same adult woman in a bohemian editorial style. She has long wavy dark brown hair with warm copper ends, a thin braided headband across her forehead, dramatic dark smoky eye makeup with black winged eyeliner and long lashes, and soft pink lips. She wears an off-the-shoulder dark green dress with a ruffled edge and a dense floral print of burnt orange, cream, light blue, teal, purple and magenta flowers, her right shoulder bare, and a thin gold chain necklace.\nThe camera stays at exactly the same close framing for the whole clip, from the top of her hair down to her upper torso, with the dark softly blurred background behind her in every frame. There is no cut, no scene change, no zoom and no camera move.\nHer face stays absolutely identical to the reference image in every single frame: the same nose, the same eyes with the same shape and the same eyeliner, the same eyebrows, the same closed relaxed lips, the same makeup, the same braided headband and the same hair parting. She holds her head perfectly still, her chin level, looking straight into the camera the whole time. Only her shoulders and upper torso sway slowly with the music. Her lips stay closed, she is listening to the guitar, not singing.\nWarm soft light from the front and slightly above, gentle shadows under the brow and chin, dark olive and blurred brick background, bohemian fashion editorial colour grade, realistic natural skin with visible pores and fine hair detail.\nHer face, body proportions, dress, headband and the background stay exactly the same as in the reference image from the first frame to the last.\n",
+      "music": {
+        "provider": "MiniMax Music 3 (local, open weights)",
+        "model_dir": "G:/hermes_archives/models/MiniMax-Music3",
+        "runner": "scripts/minimax_music3_local.py",
+        "model_env": "MINIMAX_MUSIC3_DIR",
+        "track": "BOHO_MUSIC3_track.wav",
+        "clip_cut": "BOHO_MUSIC3_7s.wav",
+        "prompt": "Genre: intimate acoustic love song. Warm fingerpicked nylon-string guitar, soft female vocals, slow tempo, gentle and peaceful, close-mic, minimal reverb.",
+        "lyrics": "[Verse]\nWarm light falling on your shoulder\nEvening breeze through the open window\nSlow guitar, quiet room\nYour shadow dancing close to mine\n",
+        "seconds": 20,
+        "seed": 7,
+        "measured": {
+          "vocals": "YES - female voice sings the supplied lyrics",
+          "instruments": "acoustic guitar, arpeggiated, slow gentle tempo",
+          "bpm": "55-58",
+          "mood": "intimate and peaceful",
+          "lyrics_start_s": 8
+        },
+        "qa_report": "G:/hermes_archives/music3_qa.json"
+      }
+    },
+    {
+      "id": "BOHO_FACEREFINE",
+      "clip": "BOHO_FACEREFINE.mp4",
+      "approval": "Pending user review (H3 face-refine pass)",
+      "source_section": "New: boho portrait with the H3 face-refine graph (crop -> per-frame denoise -> stitch)",
+      "checkpoint": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "text_encoder": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+      "width": 736,
+      "height": 1120,
+      "fps": 24,
+      "length": 175,
+      "duration_seconds": 7.3,
+      "steps": 20,
+      "cfg": 1.0,
+      "seed": 424245,
+      "sampler": "euler",
+      "scheduler": "simple",
+      "image_env": "H3_BOHO_SRC_IMAGE",
+      "first_frame": "Boho portrait photo 853x1280 scaled to 736x1120; source AR 0.666 versus render AR 0.657 (1.4% error).",
+      "loras": [
+        {
+          "name": "BFS - Best Face Swap Character Swap v1.1 - MinimaxH3.safetensors",
+          "source_name": "BFS",
+          "filename_status": "exact filename used in the render",
+          "strength_model": 0.85,
+          "strength_clip": 0.6
+        },
+        {
+          "name": "Polyhedron Perfect Eyes - MinimaxH3.safetensors",
+          "source_name": "Polyhedron Perfect Eyes",
+          "filename_status": "exact filename used in the render",
+          "strength_model": 0.35,
+          "strength_clip": 0.35
+        }
+      ],
+      "prompt_file": "scripts/recipes/prompts/BOHO_FACEREFINE.txt",
+      "prompt_status": "verbatim prompt used for the render",
+      "negative": "blurry, deformed, watermark, text, singing, talking, open mouth, head turn, big smile, teeth",
+      "negative_status": "verbatim negative in the source",
+      "reference_description": "A close-up glamour portrait of an adult woman with long wavy brown hair and a thin braided headband, dramatic dark eye makeup, wearing an off-the-shoulder dark green ruffled dress with a dense floral print (orange, blue, purple, white), one bare shoulder, warm lighting against a dark softly blurred background; bohemian fashion-editorial look.",
+      "analysis": "Instrumental variant of the boho scene. Two failures fixed: (1) ref2va re-drew the face (face correlation -0.32 even on frame 0) - switched to fl2va so frame 0 IS the reference (corr 0.998); (2) the singing prompt with a foreign vocal track desynced the lips - removed singing entirely, added singing/talking/open mouth to the negative, lips stay closed. Face lock: BFS Character Swap 0.85 + Polyhedron Perfect Eyes 0.35 + guide-frame pinned at frame 87 + TST tau 0.2. Measured face correlation across frames 0/45/90/130/174: 0.684 -> 0.833 mean, 0.642 -> 0.976 at frame 90. Audio: MiniMax-generated solo nylon-string fingerpicked guitar, no voice (verified by audio QA). Scene-integrity gate: accept, 0 events.",
+      "unrecorded": [],
+      "prompt": "She sways gently from side to side in time with a slow acoustic guitar song, her shoulders and upper body moving softly and slowly, one hand resting lightly on her hip.\nA close-up fashion portrait of the same adult woman in a bohemian editorial style. She has long wavy dark brown hair with warm copper ends, a thin braided headband across her forehead, dramatic dark smoky eye makeup with black winged eyeliner and long lashes, and soft pink lips. She wears an off-the-shoulder dark green dress with a ruffled edge and a dense floral print of burnt orange, cream, light blue, teal, purple and magenta flowers, her right shoulder bare, and a thin gold chain necklace.\nThe camera stays at exactly the same close framing for the whole clip, from the top of her hair down to her upper torso, with the dark softly blurred background behind her in every frame. There is no cut, no scene change, no zoom and no camera move.\nHer face stays absolutely identical to the reference image in every single frame: the same nose, the same eyes with the same shape and the same eyeliner, the same eyebrows, the same closed relaxed lips, the same makeup, the same braided headband and the same hair parting. She holds her head perfectly still, her chin level, looking straight into the camera the whole time. Only her shoulders and upper torso sway slowly with the music. Her lips stay closed, she is listening to the guitar, not singing.\nWarm soft light from the front and slightly above, gentle shadows under the brow and chin, dark olive and blurred brick background, bohemian fashion editorial colour grade, realistic natural skin with visible pores and fine hair detail.\nHer face, body proportions, dress, headband and the background stay exactly the same as in the reference image from the first frame to the last.\n",
+      "face_refine": {
+        "workflow": "ComfyUI-H3-FaceRefine H3_Face_Refine_Auto_Select.json",
+        "converter": "scripts/comfy_ui_to_api.py",
+        "requires": [
+          "ComfyUI-H3-NativeAudioLock",
+          "ComfyUI-H3-Multishot",
+          "ComfyUI-Spectrum-MiniMax-H3"
+        ],
+        "canvas_mode": "manual 736x1120",
+        "h3_width_height": "taken from the crop canvas outputs (4,5), length from (6)",
+        "measured": {
+          "face_drift_delta_pct": 0.4,
+          "pores_delta_pct": -2.3,
+          "hf_delta_pct": -1.9,
+          "vision_texture": "6 -> 8",
+          "vision_naturalness": "7 -> 8",
+          "vision_identity": 9,
+          "vision_artifacts": 9,
+          "frames": 175,
+          "duration_s": 7.29
+        }
+      }
     }
   ]
 }
