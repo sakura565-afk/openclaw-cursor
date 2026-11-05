@@ -80,6 +80,14 @@ def main() -> int:
         print("CUDA недоступна", file=sys.stderr)
         return 2
 
+    # A local snapshot is complete: never let diffusers reach for the network.
+    # Without this it tries to resolve a couple of files against the Hub on
+    # every run, and the fetch can fail or hang even though the weights are
+    # all present on disk.
+    if os.path.isdir(a.model_dir):
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
     t0 = time.time()
     if a.no_offload:
         pipe = ModularPipeline.from_pretrained(a.model_dir)
@@ -128,7 +136,9 @@ def main() -> int:
     else:
         data = data.T
     sf.write(a.out, data, pipe.sampling_rate)
-    print(f"готово: {a.out} ({data.shape[-1] / pipe.sampling_rate:.1f} с аудио, "
+    # soundfile expects (frames, channels); for a mono buffer data is (N,).
+    frames = data.shape[0]
+    print(f"готово: {a.out} ({frames / pipe.sampling_rate:.1f} с аудио, "
           f"генерация {dt:.0f} с)", flush=True)
     return 0
 
