@@ -29,26 +29,20 @@ import subprocess
 import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
 
 BASE = os.environ.get("COMFYUI_URL", "http://127.0.0.1:8188")
 def _comfy_root() -> str:
-    """Locate the ComfyUI install the running server belongs to.
+    """Optional local ComfyUI root.
 
-    COMFY_ROOT wins; otherwise the wrapper's own location is used, since the
-    custom node lives inside the ComfyUI tree.
+    Not needed for the graph: the video and the audio are uploaded over HTTP
+    and the result is fetched back over HTTP as well. The path is only used
+    to locate the ComfyUI python when a local check is wanted.
     """
-    env = os.environ.get("COMFY_ROOT", "").strip()
-    if env:
-        return env
-    here = os.path.dirname(os.path.abspath(__file__))
-    # scripts/ -> repo root -> ... the wrapper sits in <comfy>/custom_nodes/
-    node = os.path.join(here, os.pardir, "custom_nodes", "ComfyUI-LatentSyncWrapper")
-    if os.path.isdir(node):
-        return os.path.dirname(os.path.dirname(node))
-    return ""
+    return os.environ.get("COMFY_ROOT", "").strip()
 
 
 def _comfy_python(root: str) -> str:
@@ -109,25 +103,30 @@ def _upload(path: Path, folder: str = "input") -> str:
     ]
     body = b"".join(parts)
     req = urllib.request.Request(
-        f"{BASE}/upload/{folder}", data=body,
+        f"{BASE}/upload/image", data=body,
         headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
     with urllib.request.urlopen(req, timeout=600) as r:
         out = json.loads(r.read().decode())
     return out.get("name", name)
 
 
-def _upload_dir(frames: list[Path], folder: str = "input") -> list[str]:
-    """Upload a list of frames with stable zero-padded names."""
-    names = []
-    for f in frames:
-        target = Path(folder) / f.name
-        p = target.parent / f.name
-        p.parent.mkdir(parents=True, exist_ok=True)
-        # keep the original bytes but with the name ComfyUI will see
-        import shutil
-        shutil.copy2(f, p)
-        names.append(_upload(p, folder))
-    return names
+def _fetch_output(rel: Path, out: Path) -> Path:
+    """Download a file ComfyUI wrote under its output folder.
+
+    The API exposes output files at /view?filename=...&subfolder=...&type=output,
+    so the script never needs to know where the ComfyUI install lives.
+    """
+    q = urllib.parse.urlencode({
+        "filename": rel.name,
+        "subfolder": str(rel.parent.as_posix()),
+        "type": "output",
+    })
+    req = urllib.request.Request(f"{BASE}/view?{q}")
+    with urllib.request.urlopen(req, timeout=1800) as r:
+        data = r.read()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(data)
+    return out
 
 
 def main() -> int:
@@ -149,29 +148,19 @@ def main() -> int:
     info = _load_video_node_info()
     if "LatentSyncNode" not in info:
         raise SystemExit("ComfyUI не видит LatentSyncNode - перезапусти PROD")
-    if not _comfy_python(COMFY_ROOT):
-        raise SystemExit("не найден python ComfyUI: задай COMFY_PYTHON или COMFY_ROOT")
-
-    comfy_input = Path(os.environ.get("COMFY_INPUT") or os.path.join(COMFY_ROOT, "input"))
-    comfy_input.mkdir(parents=True, exist_ok=True)
-
     # LatentSync works at 25 fps internally, so the clip is resampled going in.
-    # ffmpeg writes it next to the ComfyUI input folder so LoadVideo sees it.
-    staged = comfy_input / f"lipsync_src_{a.fps:g}fps.mp4"
-    _run(["ffmpeg", "-y", "-v", "error", "-i", str(a.video),
-          "-vf", f"fps={a.fps}", "-an", "-c:v", "libx264", "-crf", "16",
-          "-pix_fmt", "yuv420p", str(staged)])
-
-    # audio goes to the input folder too, LoadAudio reads it from there
-    staged_audio = comfy_input / f"lipsync_audio_{a.audio.stem}.wav"
-    if staged_audio.exists():
-        staged_audio.unlink()
-    staged_audio.write_bytes(a.audio.read_bytes())
+    with tempfile.TemporaryDirectory(prefix="lipsync_src_") as td:
+        staged = Path(td) / f"lipsync_src_{a.fps:g}fps.mp4"
+        _run(["ffmpeg", "-y", "-v", "error", "-i", str(a.video),
+              "-vf", f"fps={a.fps}", "-an", "-c:v", "libx264", "-crf", "16",
+              "-pix_fmt", "yuv420p", str(staged)])
+        video_name = _upload(staged)
+    audio_name = _upload(a.audio)
 
     graph = {
-        "1": {"class_type": "LoadVideo", "inputs": {"file": staged.name}},
+        "1": {"class_type": "LoadVideo", "inputs": {"file": video_name}},
         "2": {"class_type": "GetVideoComponents", "inputs": {"video": ["1", 0]}},
-        "3": {"class_type": "LoadAudio", "inputs": {"audio": staged_audio.name}},
+        "3": {"class_type": "LoadAudio", "inputs": {"audio": audio_name}},
         "4": {"class_type": "LatentSyncNode", "inputs": {
             "images": ["2", 0],
             "audio": ["3", 0],
@@ -220,11 +209,7 @@ def main() -> int:
     if out_video is None:
         raise SystemExit("LatentSync не завершился")
 
-    comfy_output = Path(os.environ.get("COMFY_OUTPUT") or os.path.join(COMFY_ROOT, "output"))
-    produced = comfy_output / out_video
-    if not produced.exists():
-        raise SystemExit(f"нет результата: {produced}")
-
+    produced = _fetch_output(out_video)
     a.out.parent.mkdir(parents=True, exist_ok=True)
     silent = a.out.with_name(a.out.stem + "_silent.mp4")
     out_fps = a.out_fps or a.fps
