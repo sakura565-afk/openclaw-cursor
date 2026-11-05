@@ -76,7 +76,10 @@ def test_pipeline_dry_run_never_calls_gpu_runners(tmp_path: Path) -> None:
     assert not calls
     assert report["status"] == "dry_run_unverified"
     assert report["passes"][0]["kind"] == "edit"
-    assert len(report["passes"]) >= 3
+    # the chef scene renders with H3 and stops there: a Qwen refine after an
+    # H3 edit can only censor what H3 produced, so the plan has one pass
+    assert report["passes"][0]["backend"] == "h3_still"
+    assert len(report["passes"]) == 1
     assert report["passes"][0]["denoise"] < 0.55
     assert not (tmp_path / "out" / "render_started").exists()
 
@@ -110,7 +113,9 @@ def test_pipeline_stops_after_validator_accepts_masked_refinement(tmp_path: Path
 
     validations = iter([Result(0.20, False), Result(0.72, True)])
     pipeline = AnatomyStillPipeline(
-        "chef",
+        # chef_qwen keeps the masked refine passes; the chef scene renders
+        # with H3 and stops after the edit
+        "chef_qwen",
         edit_runner=edit,
         refine_runner=refine,
         mask_builder=lambda image, recipe: mask_path,
