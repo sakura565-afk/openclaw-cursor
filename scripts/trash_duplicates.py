@@ -18,6 +18,7 @@ import argparse
 import hashlib
 import json
 import os
+import random
 import sys
 import time
 from pathlib import Path
@@ -68,6 +69,11 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--verify-hash", action="store_true",
                     help="compare SHA-256 of both copies before moving")
+    ap.add_argument("--hash-sample", type=int, default=0,
+                    help="SHA-256 check on a random sample of N entries (0 = none, "
+                         "separate from --verify-hash which checks every entry)")
+    ap.add_argument("--skip", type=int, default=0,
+                    help="skip the first N entries (for resuming a run)")
     ap.add_argument("--report", default="")
     a = ap.parse_args()
 
@@ -76,16 +82,29 @@ def main() -> int:
 
     manifest = json.load(open(a.manifest, encoding="utf-8"))
     entries = manifest.get("duplicate_files_on_k") or []
+    if a.skip:
+        entries = entries[a.skip:]
     if a.limit:
         entries = entries[:a.limit]
 
+    # entries to hash-check
+    hash_set: set[int] = set()
+    if a.hash_sample:
+        rng = random.Random(1234)
+        idx = rng.sample(range(len(entries)), min(a.hash_sample, len(entries)))
+        hash_set = set(idx)
+
     rows = []
     freed = 0
+    hashed = 0
     started = time.time()
     for i, entry in enumerate(entries, 1):
-        ok, reason = check_entry(entry, a.verify_hash)
+        verify = a.verify_hash or (i in hash_set)
+        ok, reason = check_entry(entry, verify)
+        if verify and ok:
+            hashed += 1
         row = {"path": entry["path"], "g_copy": entry["g_copy"], "size": entry["size"],
-               "checked": reason, "trashed": False}
+               "checked": reason, "hashed": verify, "trashed": False}
         if not ok:
             row["skipped"] = reason
             rows.append(row)
@@ -101,14 +120,18 @@ def main() -> int:
         except Exception as exc:  # pragma: no cover - depends on the OS.
             row["skipped"] = f"{type(exc).__name__}: {str(exc)[:120]}"
         rows.append(row)
-        if i % 25 == 0:
-            print(f"  ... {i}/{len(entries)}", flush=True)
+        if i % 200 == 0:
+            print(f"  ... {i}/{len(entries)} freed={freed/1024**3:.1f} GiB "
+                  f"({time.time()-started:.0f}s)", flush=True)
 
     report = {
         "manifest": a.manifest,
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "dry_run": a.dry_run,
         "verify_hash": a.verify_hash,
+        "hash_sample": a.hash_sample,
+        "hash_verified_count": hashed,
+        "skip": a.skip,
         "candidates": len(entries),
         "trashed": sum(1 for r in rows if r["trashed"]),
         "skipped": sum(1 for r in rows if not r["trashed"]),
