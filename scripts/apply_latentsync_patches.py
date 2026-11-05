@@ -52,9 +52,20 @@ def _markers() -> list[tuple[str, str]]:
     """(relative path, marker that must be present for the patch to be applied)."""
     return [
         ("nodes.py", "except (TypeError, AttributeError) as e:"),
-        ("nodes.py", 'from latentsync.utils.util import read_video as _read_video'),
+        ("nodes.py", "from latentsync.utils.util import read_video as _read_video"),
         ("latentsync/pipelines/lipsync_pipeline.py", "torch.cuda.empty_cache()"),
     ]
+
+
+def _rel_of(patched_file: Path) -> str:
+    """The patched copies keep the wrapper's relative path in their name."""
+    name = patched_file.name
+    # latentsync_pipelines.lipsync_pipeline.py.patched -> latentsync/pipelines/lipsync_pipeline.py
+    if name.startswith("latentsync_"):
+        rest = name[len("latentsync_"):].replace(".patched", "")
+        head, _, tail = rest.partition(".")
+        return f"latentsync/{head}/{tail}"
+    return name.replace(".patched", "")
 
 
 def main() -> int:
@@ -73,7 +84,7 @@ def main() -> int:
 
     changed = []
     for pf in patched_files:
-        rel = pf.name.replace(".patched", "")
+        rel = _rel_of(pf)
         target = wrapper / rel
         if not target.exists():
             print(f"  пропуск {rel}: нет файла в обёртке")
