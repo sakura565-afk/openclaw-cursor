@@ -1,0 +1,33 @@
+{
+  "baseline": {
+    "path": "G:\\hermes_archives\\comfyui_output\\ENC_STOCK_00001_.mp4",
+    "width": 736,
+    "height": 1120,
+    "frames": 16,
+    "fps": 24.0,
+    "pore": 52018897920.0,
+    "laplacian": 2.706567879766226,
+    "rgb_delta": 17.33749737739563,
+    "hf_delta": 4.098470687866211,
+    "face_drift": 62.634057172139485,
+    "face_drift_max": 111.79051971435547
+  },
+  "candidates": {
+    "heretic": {
+      "path": "G:\\hermes_archives\\comfyui_output\\ENC_HERETIC_00001_.mp4",
+      "width": 736,
+      "height": 1120,
+      "frames": 16,
+      "fps": 24.0,
+      "pore": 52044003840.0,
+      "laplacian": 2.6725144386291504,
+      "rgb_delta": 17.05577509403229,
+      "hf_delta": 3.9951371351877847,
+      "face_drift": 60.94373065630595,
+      "face_drift_max": 106.7745361328125,
+      "pore_delta_pct": 0.04826307554344211,
+      "significant": false,
+      "flicker_comparable": true
+    }
+  }
+}

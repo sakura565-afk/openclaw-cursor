@@ -29,6 +29,10 @@ EXPECTED_SCENES = {
     "PEARL_KISS",
     # New: bohemian fashion portrait with face lock and an instrumental track.
     "BOHO_FACE_LOCK",
+    # New: same portrait with a locally generated MiniMax Music3 song (no API key).
+    "BOHO_MUSIC3",
+    # New: boho portrait with the H3 face-refine pass.
+    "BOHO_FACEREFINE",
 }
 
 
