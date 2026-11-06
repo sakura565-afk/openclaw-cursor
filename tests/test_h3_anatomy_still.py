@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import wave
 from pathlib import Path
 
+import pytest
+
 from scripts import h3_i2v_run as h3
+from scripts.anatomy_still.h3_still import FPS, _silent_audio
 from scripts.anatomy_still.pipeline import AnatomyStillPipeline
 
 
@@ -126,3 +130,22 @@ def test_pipeline_stops_after_validator_accepts_masked_refinement(tmp_path: Path
     assert report["visibility"] == 0.72
     assert [name for name, _ in calls] == ["edit", "refine"]
     assert report["still"].endswith("refined.png")
+
+
+def test_silent_placeholder_audio_is_as_long_as_the_requested_clip(
+    tmp_path: Path,
+) -> None:
+    """H3 takes the clip length from the audio.
+
+    A one-second placeholder produced a 21-frame render regardless of the
+    length that was asked for, so the placeholder has to match the clip.
+    """
+    wav = _silent_audio(tmp_path / "silent.wav", seconds=175 / float(FPS))
+    with wave.open(str(wav), "rb") as handle:
+        frames = handle.getnframes()
+        rate = handle.getframerate()
+    assert frames / rate == pytest.approx(175 / float(FPS), abs=0.01)
+
+    src = (Path(__file__).resolve().parents[1] / "scripts" / "anatomy_still"
+           / "h3_still.py").read_text(encoding="utf-8")
+    assert "seconds=length / float(FPS)" in src
