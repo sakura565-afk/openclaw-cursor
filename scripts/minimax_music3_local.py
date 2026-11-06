@@ -118,8 +118,15 @@ def main() -> int:
         generator=torch.Generator("cuda").manual_seed(a.seed),
         output="audios",
     )
-    if lyrics:
-        kwargs["lyrics"] = lyrics
+    if not lyrics:
+        # The pipeline has no instrumental mode: the lyrics input is
+        # required, and without it the run dies deep inside the text
+        # encoder with "Required input 'lyrics' is missing".
+        raise SystemExit(
+            "нужен текст: передай --lyrics или --lyrics-file "
+            "(в репозитории уже есть пример: scratch/music3_lyrics.txt)"
+        )
+    kwargs["lyrics"] = lyrics
     if a.steps:
         kwargs["num_inference_steps"] = a.steps
 
