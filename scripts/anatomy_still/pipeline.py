@@ -98,7 +98,7 @@ class AnatomyStillPipeline:
         the mask is scaled instead of rebuilt - rebuilding it on a picked
         macro frame would place it somewhere else entirely.
         """
-        from scripts.anatomy_still.pick_still import load_mask, load_rgb
+        from scripts.anatomy_still.pick_still import fit_mask_to_image, load_mask, load_rgb
 
         try:
             m = load_mask(Path(mask))
@@ -108,8 +108,7 @@ class AnatomyStillPipeline:
         if m.shape[:2] == img.shape[:2]:
             return mask
         import cv2
-        scaled = cv2.resize(m, (img.shape[1], img.shape[0]),
-                            interpolation=cv2.INTER_NEAREST)
+        scaled = fit_mask_to_image(m, img)
         out = Path(mask).with_name(f"{Path(mask).stem}_fit{Path(mask).suffix}")
         cv2.imwrite(str(out), scaled)
         return out

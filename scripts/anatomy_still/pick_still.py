@@ -52,6 +52,22 @@ def load_mask(path: Path) -> np.ndarray:
     return np.frombuffer(raw, dtype=np.uint8)[:w * h].reshape(h, w)
 
 
+def fit_mask_to_image(mask: "np.ndarray", image: "np.ndarray") -> "np.ndarray":
+    """Scale a pose mask to the size of the image it is compared against.
+
+    The mask for the H3 path comes from the source photo and the frames come
+    from the render, so the sizes differ. The validator rejects a mismatch
+    with "mask and image dimensions differ", so the mask is scaled - never
+    rebuilt, because rebuilding it on a picked frame would place it
+    somewhere else entirely.
+    """
+    if mask.shape[:2] == image.shape[:2]:
+        return mask
+    import cv2
+    return cv2.resize(mask, (image.shape[1], image.shape[0]),
+                      interpolation=cv2.INTER_NEAREST)
+
+
 def _dims(path: Path) -> tuple[int, int]:
     r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height",
                         "-of", "csv=p=0", str(path)], capture_output=True, text=True,
@@ -91,12 +107,7 @@ def main() -> int:
         frame = extract(str(clip), idx, work / f"f{idx:05d}.png")
         image = load_rgb(frame)
         # the mask may come from a differently sized source photo
-        if mask.shape[:2] != image.shape[:2]:
-            import cv2
-            scaled = cv2.resize(mask, (image.shape[1], image.shape[0]),
-                                interpolation=cv2.INTER_NEAREST)
-        else:
-            scaled = mask
+        scaled = fit_mask_to_image(mask, image)
         m = validate_anatomy(image, scaled)
         rows.append({"frame": idx, "visibility": m.visibility,
                      "texture_score": m.texture_score, "skin_fraction": m.skin_fraction,

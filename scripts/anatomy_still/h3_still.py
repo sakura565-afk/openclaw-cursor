@@ -86,7 +86,12 @@ def _pick_best_frame(video: Path, out_png: Path, mask_png: Path | None,
                         "-frames:v", "1", str(out_png)], capture_output=True, timeout=300)
         return {"frame": 0, "visibility": float("nan")}
 
-    from scripts.anatomy_still.pick_still import extract, load_mask, load_rgb
+    from scripts.anatomy_still.pick_still import (
+        extract,
+        fit_mask_to_image,
+        load_mask,
+        load_rgb,
+    )
     from scripts.anatomy_still.metrics import validate_anatomy
 
     mask = load_mask(Path(mask_png))
