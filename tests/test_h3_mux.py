@@ -132,4 +132,14 @@ def test_runner_reports_mux_failure_as_error_code() -> None:
     assert "mux.returncode != 0" in src, "ffmpeg return code must be checked"
     assert "аудио не найдено" in src, "missing audio must be reported"
     assert '"-stream_loop"' not in src, "video stream_loop must not be used"
-    assert '"-t",' not in src, "-t truncates the last frames"
+    # -t is allowed, but only as an output option that trims the muxed file
+    # to the length of the picture. As an input option it would cut frames
+    # off the render, which is what this guard is really about.
+    block = src[src.index("cmd = [FFMPEG"):src.index("mux = subprocess.run")]
+    assert '"-t"' not in block or block.index('"-t"') > block.rindex('"-i"'), (
+        "-t must be an output option, not an input option"
+    )
+    assert '"-shortest"' not in block, (
+        "-shortest takes the length from the audio stream and cuts the last "
+        "frames off the render"
+    )
