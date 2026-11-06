@@ -256,7 +256,14 @@ def main() -> int:
         pick_best_frame=a.pick_best_frame,
         mask_png=Path(a.mask) if a.mask else None,
     )
-    print(f"still: {out} ({out.stat().st_size} байт)")
+    if a.pick_best_frame:
+        print(f"still: {out} ({out.stat().st_size} байт) - лучший кадр по маске "
+              f"(взгляни сам: anatomy_still/pipeline.py делает это по умолчанию)")
+    else:
+        print(f"still: {out} ({out.stat().st_size} байт) - это КАДР 0, а не "
+              f"лучший: анатомия в первом кадре ещё не раскрылась. "
+              f"Для кадра с анатомией используй pipeline.py или "
+              f"--pick-best-frame --mask <маска>")
     return 0
 
 
