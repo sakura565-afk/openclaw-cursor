@@ -69,10 +69,14 @@ def main() -> int:
         metrics["temporal_delta_ratio"] = round(metrics["temporal_delta"] / base["temporal_delta"], 4)
         metrics["hf_temporal_delta_ratio"] = round(metrics["hf_temporal_delta"] / base["hf_temporal_delta"], 4)
         video = args.out_dir / f"{args.video.stem}_{stem}.mp4"
+        # The frame count is pinned: with -shortest the length came from the
+        # audio stream, and an AAC stream is never exactly as long as the
+        # picture, so the last frames were cut off.
         subprocess.run([
             "ffmpeg", "-y", "-v", "error", "-framerate", "24", "-i", str(out_dir / "f_%04d.png"),
             "-i", str(args.video), "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "libx264",
-            "-crf", "16", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest", str(video),
+            "-crf", "16", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
+            "-frames:v", str(len(outputs)), str(video),
         ], check=True, timeout=300)
         metrics["video"] = str(video)
         report["results"][model] = metrics
