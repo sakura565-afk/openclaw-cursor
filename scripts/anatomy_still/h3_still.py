@@ -190,6 +190,14 @@ def render_still(
             stream.close()
     if r is not None and r.returncode != 0:
         tail = (r.stderr or r.stdout or "")[-1500:]
+        if not tail and log is not None:
+            # The runner wrote everything to its log file, so stderr is
+            # empty and the failure came out as "h3_i2v_run failed (1): "
+            # with nothing behind it.
+            try:
+                tail = Path(log).read_text(encoding="utf-8", errors="replace")[-1500:]
+            except OSError:
+                tail = ""
         raise RuntimeError(f"h3_i2v_run failed ({r.returncode}): {tail}")
     if not video.exists():
         raise RuntimeError("h3 render produced no video")

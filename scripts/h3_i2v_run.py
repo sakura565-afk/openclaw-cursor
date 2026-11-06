@@ -405,7 +405,12 @@ def main():
                             return 4
                     cmd = [FFMPEG, "-y", "-i", src, "-i", audio_path,
                            "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
-                           "-map", "0:v:0", "-map", "1:a:0", "-shortest", a.output]
+                           "-map", "0:v:0", "-map", "1:a:0",
+                           # Trim the output to the picture instead of using
+                           # -shortest: the AAC stream is never exactly as
+                           # long as the video, and -shortest then cut the
+                           # last frames off the render.
+                           "-t", f"{dur:.6f}", a.output]
                     mux = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
                     if mux.returncode != 0 or not os.path.exists(a.output):
                         print("ВНИМАНИЕ: mux не удался:", (mux.stderr or "")[-400:], flush=True)
