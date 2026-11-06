@@ -86,18 +86,23 @@
         }
       },
       "measured": {
-        "pipeline": "H3 fl2va, 175 frames, seed 505050, euler/simple, 20 steps, Panties Off! 0.55 + HMPussyV2 1.0, then the frame picker",
+        "pipeline": "H3 fl2va, seed 505050, euler/simple, 20 steps, Panties Off! 0.55 + HMPussyV2 1.0, then the frame picker against the source pose mask",
+        "render_frames": 171,
+        "render_seconds": 7.29,
         "best_frame": 88,
         "visibility": 1.0,
         "skin_fraction": 1.0,
         "texture_score": 1.0,
+        "cloth_score": 0.0,
         "validator_passed": true,
+        "pipeline_status": "passed",
         "view": "front",
-        "vision_anatomy_plausibility": "6/10",
-        "vision_notes": "outer labial volume, vertical midline cleft, an asymmetric inner fold, clitoral hood not clearly resolved, no convincing pubic hair - stippling instead; no grey censor patch",
-        "caveat": "the validator scored 1.000 while vision scored 6/10 - visibility and skin coverage do not measure anatomical correctness",
+        "vision_anatomy_plausibility": "4/10",
+        "vision_notes": "front view, main vertical cleft visible, labial folds only partly resolved, no distinct clitoral hood, no pubic hair, cleft curved and oblique rather than one straight line, edges read as pasted on, skin blotchy and partly waxy, no grey censor patch",
+        "caveat_1": "the validator scores 1.000 while vision scores 4/10 - visibility, skin_fraction and cloth_score are measured inside the pose mask only, so they say nothing about anatomical correctness, prompt compliance or whole-scene coherence",
+        "caveat_2": "the picked frame is a macro close-up: no face, no kitchen, no pose. The approved reference clip is a macro frame too, so a still from it is a macro frame as well",
         "reference_frame": "frame 108 of the user-approved CHEF_PHOTO.mp4, visibility 0.806, front view",
-        "macro_transition": "inherent to the scene - the approved clip does it too, so the anatomy still is a macro frame"
+        "bug_fixed": "the silent placeholder audio was 1 s, and H3 takes the clip length from the audio - every pipeline render came back as 21 frames instead of 175"
       },
       "h3_anatomy_still": {
         "still": "scripts/anatomy_still/examples/chef3_final.png",
