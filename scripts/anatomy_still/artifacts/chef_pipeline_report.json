@@ -1,0 +1,57 @@
+{
+  "scene": "chef",
+  "status": "passed",
+  "still": "C:\\Users\\user\\AppData\\Local\\hermes\\cache\\scratch\\anatomy_run_chef_final3\\anatomy_chef_00_h3.png",
+  "mask": "C:\\Users\\user\\AppData\\Local\\hermes\\cache\\scratch\\anatomy_run_chef_final3\\anatomy_chef_src_mask_fit.png",
+  "visibility": 1.0,
+  "metrics": {
+    "texture_energy": 1.803852,
+    "texture_score": 1.0,
+    "uniform_fraction": 0.080594,
+    "non_skin_uniform_fraction": 0.0,
+    "skin_fraction": 1.0,
+    "edge_energy": 0.007108,
+    "structural_edge_energy": 0.0,
+    "cloth_score": 0.0,
+    "uncovered_score": 1.0,
+    "visibility": 1.0,
+    "passed": true
+  },
+  "passes": [
+    {
+      "pass": {
+        "kind": "edit",
+        "backend": "h3_still",
+        "denoise": 0.38,
+        "steps": 28,
+        "seed": 42031,
+        "loras": [
+          {
+            "name": "qwen_image_edit_plus_nsfw_lora_safetensors.safetensors",
+            "strength": 0.55
+          },
+          {
+            "name": "qwen_image_jp_anatomy_nsfw_safetensors.safetensors",
+            "strength": 0.85
+          }
+        ]
+      },
+      "still": "C:\\Users\\user\\AppData\\Local\\hermes\\cache\\scratch\\anatomy_chef_00_h3.png",
+      "mask": "C:\\Users\\user\\AppData\\Local\\hermes\\cache\\scratch\\anatomy_chef_src_mask_fit.png",
+      "metrics": {
+        "texture_energy": 1.803852,
+        "texture_score": 1.0,
+        "uniform_fraction": 0.080594,
+        "non_skin_uniform_fraction": 0.0,
+        "skin_fraction": 1.0,
+        "edge_energy": 0.007108,
+        "structural_edge_energy": 0.0,
+        "cloth_score": 0.0,
+        "uncovered_score": 1.0,
+        "visibility": 1.0,
+        "passed": true
+      }
+    }
+  ],
+  "h3_prompt_suffix": "Preserve the exact visible anatomy and uncovered state of the reference still; keep natural skin detail and do not restore any clothing coverage."
+}
