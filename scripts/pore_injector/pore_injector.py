@@ -114,7 +114,11 @@ def _write_video(
         command += ["-map", "0:v:0"]
     command += ["-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p"]
     if source is not None:
-        command += ["-c:a", "aac", "-b:a", "192k", "-shortest"]
+        # No -shortest: the length came from the audio stream, and an AAC
+        # stream is never exactly as long as the video, so the picture was cut
+        # a frame short and finished before the music did. The audio is copied
+        # so it stays bit-identical to the source.
+        command += ["-c:a", "copy"]
     command += [str(out_path)]
 
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.PIPE)

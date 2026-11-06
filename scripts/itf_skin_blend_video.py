@@ -143,7 +143,11 @@ def main() -> int:
                     "-i", str(out_dir / "f_%05d.png"), "-i", args.video,
                     "-map", "0:v:0", "-map", "1:a:0?",
                     "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p",
-                    "-c:a", "aac", "-b:a", "192k", "-shortest", args.out],
+    # The frame count is pinned: with -shortest the length came from the
+    # audio stream, and an AAC stream is never exactly as long as the video -
+    # the 7.29 s clip came out one frame short and the picture finished
+    # before the music did. The audio is copied, not re-encoded.
+                    "-c:a", "copy", "-frames:v", str(len(frames)), args.out],
                    check=True, timeout=1800)
     print(f"готово: {args.out} ({os.path.getsize(args.out) // 1024} КБ, "
           f"бленд на {ok}/{len(frames)} кадрах)", flush=True)
