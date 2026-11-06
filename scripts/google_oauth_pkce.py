@@ -29,7 +29,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-CLIENT_ID = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from google_oauth_loopback import _load_client_credentials  # noqa: E402
+
+CLIENT_ID = ""  # resolved at runtime by _load_client_credentials()
 REDIRECT_URI = "https://codeassist.google.com/authcode"
 SCOPE = " ".join([
     "https://www.googleapis.com/auth/cloud-platform",
@@ -102,6 +105,8 @@ def save_creds(tok: dict) -> str:
 
 
 def main() -> int:
+    global CLIENT_ID
+    CLIENT_ID, _ = _load_client_credentials()
     ap = argparse.ArgumentParser()
     ap.add_argument("--code", default="")
     ap.add_argument("--url-only", action="store_true")

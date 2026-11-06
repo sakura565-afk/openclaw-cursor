@@ -26,7 +26,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-CLIENT_ID = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
+CLIENT_ID = ""
+CLIENT_SECRET = ""
 SCOPE = " ".join([
     "https://www.googleapis.com/auth/cloud-platform",
     "https://www.googleapis.com/auth/userinfo.email",
@@ -37,6 +38,49 @@ AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 
 STATE_FILE = os.path.join(os.path.expanduser("~"), ".gemini", "pkce_loopback.json")
 CRED_DIR = os.path.join(os.path.expanduser("~"), ".hermes", "oauth")
+
+# The OAuth client id and secret are NOT stored in this repository: GitHub
+# push protection blocks any commit that contains them. They are read at
+# runtime instead - from the environment, or from the installed Gemini CLI,
+# which is where they come from in the first place.
+GEMINI_CLI_GLOBS = [
+    os.path.join(os.path.expanduser("~"), "AppData", "Roaming", "npm",
+                 "node_modules", "@google", "gemini-cli", "bundle", "*.js"),
+    "/usr/lib/node_modules/@google/gemini-cli/bundle/*.js",
+    "/usr/local/lib/node_modules/@google/gemini-cli/bundle/*.js",
+]
+
+
+def _load_client_credentials() -> tuple[str, str]:
+    """Return (client_id, client_secret) from env or the installed Gemini CLI."""
+    cid = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+    csec = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
+    if cid and csec:
+        return cid, csec
+
+    import glob
+    import re
+
+    for pattern in GEMINI_CLI_GLOBS:
+        for path in glob.glob(pattern):
+            try:
+                text = open(path, encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            if not cid:
+                m = re.search(r'OAUTH_CLIENT_ID\s*=\s*"([^"]+)"', text)
+                if m:
+                    cid = m.group(1)
+            if not csec:
+                m = re.search(r'OAUTH_CLIENT_SECRET\s*=\s*"([^"]+)"', text)
+                if m:
+                    csec = m.group(1)
+            if cid and csec:
+                return cid, csec
+    raise SystemExit(
+        "не найдены OAuth-данные клиента. Задай GOOGLE_OAUTH_CLIENT_ID и "
+        "GOOGLE_OAUTH_CLIENT_SECRET или установи @google/gemini-cli."
+    )
 
 
 def _pkce() -> tuple[str, str]:
@@ -65,6 +109,7 @@ def exchange(code: str, verifier: str, redirect: str) -> dict:
     body = urllib.parse.urlencode({
         "code": code,
         "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
         "code_verifier": verifier,
         "grant_type": "authorization_code",
         "redirect_uri": redirect,
@@ -108,16 +153,31 @@ def _free_port(preferred: int) -> int:
     raise SystemExit("не удалось занять порт")
 
 
-def serve(port: int, redirect: str, timeout_s: int) -> str:
+def serve(port: int, redirect: str, timeout_s: int, expect_state: str = "") -> str:
+    """Wait for the OAuth redirect and return the authorization code.
+
+    Only a request that carries BOTH a code and the matching state counts.
+    Anything else - a stray browser hit, a health check, a favicon request -
+    must not end the wait, and must not make the process exit.
+    """
     got = {}
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-            got.update({k: v[0] for k, v in qs.items()})
-            body = ("<html><body style='font-family:sans-serif;padding:40px'>"
-                    "<h2>Готово</h2><p>Авторизация выполнена. Можно закрыть вкладку.</p>"
-                    "</body></html>").encode()
+            code = (qs.get("code") or [""])[0]
+            state = (qs.get("state") or [""])[0]
+            if code and (not expect_state or state == expect_state):
+                got["code"] = code
+                body = ("<html><body style='font-family:sans-serif;padding:40px'>"
+                        "<h2>Готово</h2><p>Авторизация выполнена. Можно закрыть вкладку.</p>"
+                        "</body></html>").encode()
+            else:
+                # Not the callback (or a stale state): answer, but keep waiting.
+                body = ("<html><body style='font-family:sans-serif;padding:40px'>"
+                        "<h2>Ожидание авторизации</h2>"
+                        "<p>Этот запрос не содержит кода авторизации. "
+                        "Откройте ссылку из консоли.</p></body></html>").encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -137,6 +197,7 @@ def serve(port: int, redirect: str, timeout_s: int) -> str:
 
 
 def main() -> int:
+    global CLIENT_ID, CLIENT_SECRET
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--code", default="")
@@ -146,6 +207,7 @@ def main() -> int:
 
     if a.code:
         st = json.load(open(STATE_FILE, encoding="utf-8"))
+        CLIENT_ID, CLIENT_SECRET = _load_client_credentials()
         code = a.code.strip()
         if "code=" in code:
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(code).query)
@@ -160,6 +222,7 @@ def main() -> int:
     redirect = f"http://127.0.0.1:{port}"
     verifier, challenge = _pkce()
     state = secrets.token_hex(16)
+    CLIENT_ID, CLIENT_SECRET = _load_client_credentials()
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump({"verifier": verifier, "challenge": challenge, "state": state,
@@ -171,12 +234,19 @@ def main() -> int:
         return 0
 
     print("Жду редирект с кодом...", flush=True)
-    code = serve(port, redirect, a.timeout)
+    code = serve(port, redirect, a.timeout, expect_state=state)
     if not code:
         print("код не получен (таймаут)", flush=True)
         return 1
     print("код получен, обмениваю...", flush=True)
-    tok = exchange(code, verifier, redirect)
+    try:
+        tok = exchange(code, verifier, redirect)
+    except SystemExit as e:
+        # A failed exchange must not be fatal: the state file keeps the
+        # verifier, so the user can retry with --code without a new flow.
+        print(f"обмен не удался: {e}", flush=True)
+        print("Можно повторить: python scripts/google_oauth_loopback.py --code <КОД>", flush=True)
+        return 1
     path = save_creds(tok)
     print(f"OK: токен получен, refresh_token={'да' if tok.get('refresh_token') else 'нет'}")
     print(f"сохранено: {path}")
