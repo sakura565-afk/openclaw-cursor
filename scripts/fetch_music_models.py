@@ -124,7 +124,10 @@ def main() -> int:
 
     root = a.root or _model_root()
     if not root:
-        raise SystemExit("не найден каталог моделей: задай COMFY_MODELS_ROOT")
+        raise SystemExit(
+            "не найден каталог моделей: задай COMFY_MODELS_ROOT, "
+            "COMFY_MODELS_CONFIG (путь к extra_model_paths.yaml) или --root"
+        )
     items = [(rel, dst) for rel, dst in plan(root) if not a.only or a.only in rel]
     for rel, dst in items:
         size = 0
