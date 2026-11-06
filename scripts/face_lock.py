@@ -118,18 +118,30 @@ def build_encode_command(
     video: str | Path,
     output: str | Path,
     fps: float,
+    frames: int | None = None,
 ) -> list[str]:
-    """Build the H.264 assembly command and stream-copy the original audio."""
-    return [
+    """Build the H.264 assembly command and stream-copy the original audio.
+
+    The frame count is pinned with -frames:v. With -shortest the length came
+    from the audio stream instead, and an AAC stream is never exactly as long
+    as the video: the 7.29 s clip lost four frames at the end and the video
+    finished before the music did.
+    """
+    command = [
         "ffmpeg", "-y", "-v", "error",
         "-framerate", format(fps, ".12g"), "-start_number", "0",
         "-i", str(Path(frame_dir) / FRAME_PATTERN),
         "-i", str(video),
         "-map", "0:v:0", "-map", "1:a:0?",
+    ]
+    if frames is not None:
+        command.extend(["-frames:v", str(int(frames))])
+    command += [
         "-c:v", "libx264", "-preset", "medium", "-crf", "17",
-        "-pix_fmt", "yuv420p", "-c:a", "copy", "-shortest",
+        "-pix_fmt", "yuv420p", "-c:a", "copy",
         "-movflags", "+faststart", str(output),
     ]
+    return command
 
 
 def process_frames(
@@ -254,12 +266,16 @@ def probe_fps(video: str | Path) -> float:
 
 
 def encode_video(
-    frame_dir: str | Path, video: str | Path, output: str | Path, fps: float
+    frame_dir: str | Path,
+    video: str | Path,
+    output: str | Path,
+    fps: float,
+    frames: int | None = None,
 ) -> None:
     """Encode all processed frames and retain audio without recompression."""
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    _run(build_encode_command(frame_dir, video, output, fps), timeout=1200)
+    _run(build_encode_command(frame_dir, video, output, fps, frames), timeout=1200)
     if not output.is_file() or output.stat().st_size == 0:
         raise FaceLockError("ffmpeg did not create a non-empty output video")
 
@@ -312,7 +328,7 @@ def run_face_lock(
             frame_timeout=frame_timeout,
             progress_every=progress_every,
         )
-        encode_video(work / "output", video, output, actual_fps)
+        encode_video(work / "output", video, output, actual_fps, len(frames))
     LOGGER.info("created %s: %s", output, stats)
     return stats
 
