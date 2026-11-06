@@ -204,9 +204,17 @@ def main() -> int:
         if entry:
             st = entry.get("status", {})
             if st.get("completed"):
+                # ComfyUI 0.44 reports a video output under "images" with
+                # animated=true, not under "videos". The input clip is listed
+                # the same way, so only an entry of type "output" is the render.
                 for node_out in (entry.get("outputs") or {}).values():
-                    for vid in (node_out.get("videos") or []):
-                        out_video = Path(vid.get("filename", ""))
+                    for vid in (node_out.get("videos") or []) + (node_out.get("images") or []):
+                        if vid.get("type") != "output":
+                            continue
+                        name = vid.get("filename", "")
+                        if not name:
+                            continue
+                        out_video = Path(vid.get("subfolder") or "") / name
                 break
             if st.get("status_str") == "error":
                 raise SystemExit(f"ComfyUI ошибка: {str(st)[:800]}")
