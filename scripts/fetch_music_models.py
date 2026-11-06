@@ -92,12 +92,25 @@ def plan(root: str) -> list[tuple[str, Path]]:
     return out
 
 
+def _repo_layout_dir(local_dir: Path, rel: str) -> Path:
+    """Where huggingface_hub will put the file inside ``local_dir``.
+
+    The hub keeps the repository layout under ``local_dir``, so the file lands
+    in ``split_files/<kind>/<name>``. The hub creates that directory itself
+    only for the flat layout - with ``local_dir`` it expects the parent to
+    exist, and the copy then fails with FileNotFoundError.
+    """
+    return Path(local_dir) / Path(rel).parent
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ace-step", action="store_true")
     ap.add_argument("--root", default="")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--only", default="", help="substring filter on the file name")
+    ap.add_argument("--force", action="store_true",
+                    help="download again even if the file is already there")
     a = ap.parse_args()
 
     try:
@@ -115,10 +128,22 @@ def main() -> int:
     items = [(rel, dst) for rel, dst in plan(root) if not a.only or a.only in rel]
     for rel, dst in items:
         size = 0
+        flat = dst.parent / Path(rel).name
         print(f"  {rel} -> {dst}")
         if a.dry_run:
             continue
+        if flat.exists() and not a.force:
+            # The file is already in place. Downloading it again would burn
+            # gigabytes to produce the same bytes.
+            size = os.path.getsize(flat)
+            print(f"    уже на месте: {size/1024**3:.2f} ГБ - пропускаю")
+            print(f"    итог: {flat} ({size/1024**3:.2f} ГБ)")
+            continue
         dst.parent.mkdir(parents=True, exist_ok=True)
+        # huggingface_hub keeps the repository layout under local_dir and
+        # expects the nested directory to be there already.
+        layout_dir = _repo_layout_dir(dst.parent, rel)
+        layout_dir.mkdir(parents=True, exist_ok=True)
         started = time.time()
         got = hf_hub_download(
             repo_id=REPO,
@@ -132,12 +157,12 @@ def main() -> int:
         # hf_hub_download keeps the repo layout under local_dir, so the file
         # lands in split_files/<kind>/<name>; move it next to its siblings
         # where ComfyUI scans for models.
-        flat = dst.parent / Path(rel).name
-        if os.path.exists(got) and os.path.abspath(got) != os.path.abspath(str(flat)):
+        got_path = Path(got)
+        if got_path.exists() and os.path.abspath(got_path) != os.path.abspath(str(flat)):
             if flat.exists():
                 os.remove(flat)
-            shutil.move(got, str(flat))
-            for folder in (got.parent, got.parent.parent):
+            shutil.move(str(got_path), str(flat))
+            for folder in (got_path.parent, got_path.parent.parent):
                 try:
                     if folder.is_dir() and not any(folder.iterdir()):
                         folder.rmdir()
