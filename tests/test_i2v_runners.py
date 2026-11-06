@@ -60,6 +60,8 @@ def _h3_args(**overrides):
         # used to read - so the broken flag was green in CI.
         ref_image=[],
         ref_image_size="match",
+        # empty = the mode default (fl2va for i2v, ref2va for reference mode)
+        unet_name="",
         turbo=False,
         clip_name="qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
     )
@@ -211,6 +213,20 @@ class TestH3ReferenceMode:
         graph = h3.build_workflow(
             _h3_args(ref_images=["ref.jpg"], vae_name="minimax_h3_video_vae_fp16.safetensors"))
         assert graph["4"]["inputs"]["vae_name"] == "minimax_h3_video_vae_fp16.safetensors"
+
+    def test_unet_name_overrides_the_ref2va_diffusion_model(self) -> None:
+        # The FL2VA+REF2VA hybrid merge (smhfacct/Minimax-H3-fl2va-ref2va-hybrid-models)
+        # can only be A/B tested if the runner can swap the diffusion model.
+        graph = h3.build_workflow(
+            _h3_args(ref_images=["ref.jpg"],
+                     unet_name="minimax_h3_hybrid_fl2va_ref2va_b25-49-int8.safetensors"))
+        assert graph["2"]["inputs"]["unet_name"] == (
+            "minimax_h3_hybrid_fl2va_ref2va_b25-49-int8.safetensors")
+
+    def test_without_unet_name_the_ref2va_model_is_kept(self) -> None:
+        graph = h3.build_workflow(_h3_args(ref_images=["ref.jpg"]))
+        assert graph["2"]["inputs"]["unet_name"] == (
+            "minimax_h3_ref2va_pruned_int8_convrot.safetensors")
 
     def test_reference_mode_uses_the_reference_node(self) -> None:
         graph = h3.build_workflow(_h3_args(ref_images=["ref.jpg"]))
