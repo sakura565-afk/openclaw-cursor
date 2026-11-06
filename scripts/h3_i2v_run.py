@@ -99,7 +99,12 @@ def build_workflow(a):
     guide_video = getattr(a, "guide_video", "") or ""
     if ref_images or guide_video:
         # REF2VA mode: a reference image carries the subject, the prompt drives the action.
-        nodes["2"]["inputs"]["unet_name"] = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+        # --unet-name overrides the mode default, so the FL2VA+REF2VA hybrid
+        # (smhfacct/Minimax-H3-fl2va-ref2va-hybrid-models, b25-49) can be A/B
+        # tested against the plain ref2va weights on the same seed and prompt.
+        nodes["2"]["inputs"]["unet_name"] = (
+            getattr(a, "unet_name", "") or
+            "minimax_h3_ref2va_pruned_int8_convrot.safetensors")
         # The official R2V template decodes video with the int8 convrot VAE (2.6 GB
         # instead of 4.9 GB for fp16) - same pixels, much less VRAM.
         # --vae-name overrides it, so the VAE can be A/B tested on the same seed.
@@ -263,6 +268,10 @@ def main():
     p.add_argument("--vae-name", default="",
                    help="override the video VAE, e.g. minimax_h3_video_vae_fp16.safetensors "
                         "(ref2va default is int8_convrot; fl2va already uses fp16)")
+    p.add_argument("--unet-name", default="",
+                   help="override the diffusion model, e.g. "
+                        "minimax_h3_hybrid_fl2va_ref2va_b25-49-int8.safetensors (the FL2VA+REF2VA "
+                        "hybrid merge). Only takes effect in ref2va mode (--ref-image/--guide-video).")
     p.add_argument("--guide-video", default="",
                    help="clip in ComfyUI/input used as the ALIGNED guide: the whole clip is "
                         "fed back so its guide latents sit at the same temporal and spatial "
