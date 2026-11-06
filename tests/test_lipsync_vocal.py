@@ -15,6 +15,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+import wave
 from pathlib import Path
 
 import numpy as np
@@ -78,6 +79,53 @@ def test_lipsync_vocal_score_corr_handles_flat_signal():
                     np.arange(50, dtype=np.float32)) == pytest.approx(1.0, abs=1e-5)
 
 
+def _write_sine_wav(path: Path, seconds: float = 60.0, sr: int = 16000,
+                    freq: float = 220.0) -> None:
+    """Write a mono pcm16 sine WAV with numpy.
+
+    The CI runners have no ffmpeg, so the fixtures must not depend on it -
+    otherwise the whole test aborts with FileNotFoundError instead of
+    skipping like the other ffmpeg-dependent tests do.
+    """
+    n = int(round(seconds * sr))
+    t = np.arange(n, dtype=np.float64) / sr
+    pcm = (0.5 * np.sin(2.0 * np.pi * freq * t) * 32767.0).astype("<i2")
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(pcm.tobytes())
+
+
+def _slice_wav(src: Path, dst: Path, ss: float | None = None,
+               dur: float | None = None, ch: int = 1, sr: int = 16000) -> None:
+    """Stand-in for ffmpeg's `-ss`/`-t` slicing of a mono pcm16 WAV.
+
+    It mirrors what build_lipsync_driver._ff() asks ffmpeg for: cut the
+    source at `ss`, keep `dur` seconds, resample to `sr` and write `ch`
+    channels.
+    """
+    with wave.open(str(src), "rb") as w:
+        pcm = np.frombuffer(w.readframes(w.getnframes()),
+                            dtype="<i2").astype(np.float64)
+        src_sr = w.getframerate()
+    start = 0 if ss is None else int(round(ss * src_sr))
+    end = pcm.size if dur is None else min(pcm.size,
+                                           start + int(round(dur * src_sr)))
+    seg = pcm[start:end]
+    if seg.size and sr != src_sr:
+        idx = np.linspace(0, seg.size - 1, int(round(seg.size * sr / src_sr)))
+        seg = np.interp(idx, np.arange(seg.size), seg)
+    out = np.clip(seg, -32768, 32767).astype("<i2")
+    if ch > 1:
+        out = np.repeat(out, ch)
+    with wave.open(str(dst), "wb") as w:
+        w.setnchannels(ch)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(out.tobytes())
+
+
 def test_build_driver_window_math(tmp_path):
     """The driver must start `lead` earlier than the delivered window.
 
@@ -94,14 +142,22 @@ def test_build_driver_window_math(tmp_path):
     # LatentSync pads (loops) the video and re-runs the inference
     track = tmp_path / "track.wav"
     vocal = tmp_path / "vocal.wav"
-    for p in (track, vocal):
-        subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
-                        "-i", "sine=frequency=220:duration=60", "-ac", "1",
-                        "-ar", "16000", str(p)], check=True, capture_output=True)
+    _write_sine_wav(track)
+    _write_sine_wav(vocal)
 
     drv = tmp_path / "driver.wav"
     aud = tmp_path / "audio.wav"
-    mod.main.__wrapped__ if False else None
+
+    # record what the tool asks the cutter for, and cut with numpy instead
+    # of ffmpeg so the test runs everywhere
+    calls: list[dict] = []
+
+    def _ff(src, dst, ss=None, dur=None, ch=1, sr=16000):
+        calls.append({"src": Path(src), "ss": ss, "dur": dur,
+                      "ch": ch, "sr": sr})
+        _slice_wav(Path(src), Path(dst), ss=ss, dur=dur, ch=ch, sr=sr)
+
+    mod._ff = _ff
     argv = ["build_lipsync_driver.py",
             "--track", str(track), "--vocal", str(vocal),
             "--start", "38.0", "--duration", "7.3",
@@ -113,13 +169,23 @@ def test_build_driver_window_math(tmp_path):
     finally:
         sys.argv = old
 
-    import wave
     with wave.open(str(drv), "rb") as w:
         d_frames = w.getnframes() / w.getframerate()
     with wave.open(str(aud), "rb") as w:
         a_frames = w.getnframes() / w.getframerate()
     assert d_frames == pytest.approx(7.3, abs=0.05)
     assert a_frames == pytest.approx(7.3, abs=0.05)
+
+    # the delivered audio keeps the original timing, the driver starts
+    # `lead` earlier - that offset is the whole point of the tool
+    assert len(calls) == 2, calls
+    delivered, driver = calls
+    assert delivered["src"] == track
+    assert delivered["ss"] == pytest.approx(38.0)
+    assert driver["src"] == vocal
+    assert driver["ss"] == pytest.approx(38.0 - mod.LEAD_FRAMES / mod.DRIVER_FPS)
+    assert driver["dur"] == pytest.approx(7.3)
+    assert driver["sr"] == 16000
 
 
 def test_align_audio_scans_instead_of_guessing_the_direction():
