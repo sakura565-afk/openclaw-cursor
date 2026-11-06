@@ -382,13 +382,21 @@ def main():
                             continue
                         src = os.path.join(COMFYUI_OUTPUT_DIR, sub, cand[0])
                     print("видео:", src, flush=True)
+                    # probe() returns a DICT (width/height/duration/fps/has_audio),
+                    # not a (video, audio, format) triple. Unpacking it as a
+                    # triple raised ValueError, the except swallowed it, dur
+                    # stayed 0.0 and the mux wrote "-t 0.000000" - which kept
+                    # 2 frames of a 175-frame render.
                     dur = 0.0
                     try:
                         from video_pipeline.assembler import probe as _probe
-                        _v, _a, _d = _probe(Path(src))
-                        dur = float(_d["format"]["duration"])
+                        _info = _probe(Path(src))
+                        dur = float(_info.get("duration", 0.0) or 0.0)
                     except Exception:
                         dur = 0.0
+                    if dur <= 0:
+                        print("ВНИМАНИЕ: не удалось определить длительность исходника "
+                              "- mux будет ограничен числом кадров", flush=True)
                     # Resolve the audio track: a bare name means "a file in the
                     # ComfyUI input dir" (that is how --audio is normally
                     # passed), otherwise treat it as a local path. Without this
@@ -405,12 +413,18 @@ def main():
                             return 4
                     cmd = [FFMPEG, "-y", "-i", src, "-i", audio_path,
                            "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
-                           "-map", "0:v:0", "-map", "1:a:0",
-                           # Trim the output to the picture instead of using
-                           # -shortest: the AAC stream is never exactly as
-                           # long as the video, and -shortest then cut the
-                           # last frames off the render.
-                           "-t", f"{dur:.6f}", a.output]
+                           "-map", "0:v:0", "-map", "1:a:0"]
+                    # Trim the output to the picture instead of using
+                    # -shortest: the AAC stream is never exactly as
+                    # long as the video, and -shortest then cut the
+                    # last frames off the render.
+                    if dur > 0:
+                        cmd += ["-t", f"{dur:.6f}"]
+                    else:
+                        # Without a known duration, cut by frame count - never
+                        # write "-t 0", that would keep a couple of frames.
+                        cmd += ["-frames:v", str(int(a.length))]
+                    cmd.append(a.output)
                     mux = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
                     if mux.returncode != 0 or not os.path.exists(a.output):
                         print("ВНИМАНИЕ: mux не удался:", (mux.stderr or "")[-400:], flush=True)
@@ -430,8 +444,9 @@ def main():
                     # The frame count must survive the mux: -stream_loop on the
                     # video used to drop the last frames, so 175 became 171.
                     try:
-                        _v, _a, _d = _probe(Path(a.output))
-                        nframes = int((_d.get("streams") or [{}])[0].get("nb_frames", 0) or 0)
+                        _out = _probe(Path(a.output))
+                        nframes = int(round(float(_out.get("fps", 0.0) or 0.0)
+                                           * float(_out.get("duration", 0.0) or 0.0)))
                         if nframes and nframes != int(a.length):
                             print(f"ВНИМАНИЕ: после mux {nframes} кадров вместо {a.length}", flush=True)
                     except Exception:
