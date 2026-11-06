@@ -28,11 +28,19 @@ import wave
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+# H3 renders at 24 fps; the clip length in frames follows the audio length.
+FPS = 24
 sys.path.insert(0, str(REPO))
 
 
 def _silent_audio(path: Path, seconds: float = 1.0, rate: int = 44100) -> Path:
-    """A silent wav. H3 generates its own sound; this only satisfies the mux."""
+    """A silent wav. H3 generates its own sound; this only satisfies the mux.
+
+    The length of this file decides the length of the render: H3 follows the
+    audio, so a one-second placeholder produced a one-second clip (21 frames)
+    no matter what length was requested. The caller therefore passes the
+    duration the clip should have.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     with wave.open(str(path), "wb") as w:
         w.setnchannels(1)
@@ -139,7 +147,10 @@ def render_still(
 
     prompt_file = work / "prompt.txt"
     prompt_file.write_text(prompt, encoding="utf-8")
-    audio = _silent_audio(work / "silent.wav")
+    # H3 takes the clip length from the audio, so the placeholder has to be as
+    # long as the requested clip - a one-second placeholder gave a 21-frame
+    # render regardless of the length that was asked for.
+    audio = _silent_audio(work / "silent.wav", seconds=length / float(FPS))
     video = work / "render.mp4"
 
     runner = REPO / "scripts" / "h3_i2v_run.py"
