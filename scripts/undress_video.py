@@ -210,10 +210,14 @@ def main() -> int:
                         "-i", os.path.join(out_dir, "f_%05d.png"),
                         "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p", tmp],
                        check=True, timeout=1800)
-        # mux the ORIGINAL audio so the timing is unchanged
+        # mux the ORIGINAL audio so the timing is unchanged.  The frame count
+        # is pinned: with -shortest the length came from the audio stream,
+        # and an AAC stream is never exactly as long as the picture, so the
+        # last frames were cut off.
         subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", tmp, "-i", args.video,
                         "-map", "0:v:0", "-map", "1:a:0?",
-                        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest",
+                        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                        "-frames:v", str(len(edited)),
                         args.out], check=True, timeout=900)
         print(json.dumps({"out": args.out,
                           "frames": len(edited),

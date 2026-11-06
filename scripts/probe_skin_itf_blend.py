@@ -46,10 +46,14 @@ def main() -> int:
     blend["temporal_delta_ratio"] = round(blend["temporal_delta"] / base["temporal_delta"], 4)
     blend["hf_temporal_delta_ratio"] = round(blend["hf_temporal_delta"] / base["hf_temporal_delta"], 4)
     video = args.out_dir / f"itf_blend_{int(round(args.alpha * 100)):02d}.mp4"
+    # The frame count is pinned: with -shortest the length came from the
+    # audio stream, and an AAC stream is never exactly as long as the
+    # picture, so the last frames were cut off.
     subprocess.run([
         "ffmpeg", "-y", "-v", "error", "-framerate", "24", "-i", str(frame_dir / "f_%04d.png"),
         "-i", str(args.source_video), "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "libx264",
-        "-crf", "16", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest", str(video),
+        "-crf", "16", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
+        "-frames:v", str(len(outputs)), str(video),
     ], check=True, timeout=300)
     report = {"alpha": args.alpha, "frames": len(outputs), "box": box, "source": base, "itf_full": full, "blend": blend, "video": str(video)}
     path = args.out_dir / "metrics.json"

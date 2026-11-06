@@ -129,6 +129,15 @@ def _fetch_output(rel: Path, out: Path) -> Path:
     return out
 
 
+def _count_frames(video: Path) -> int:
+    """Number of video frames in a file."""
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
+         "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", str(video)],
+        capture_output=True, text=True, timeout=600, check=True)
+    return int(out.stdout.strip().splitlines()[0])
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--video", type=Path, required=True)
@@ -222,7 +231,7 @@ def main() -> int:
     if out_video is None:
         raise SystemExit("LatentSync не завершился")
 
-    produced = _fetch_output(out_video)
+    produced = _fetch_output(out_video, a.out.with_name(a.out.stem + "_raw.mp4"))
     a.out.parent.mkdir(parents=True, exist_ok=True)
     silent = a.out.with_name(a.out.stem + "_silent.mp4")
     out_fps = a.out_fps or a.fps
@@ -234,13 +243,20 @@ def main() -> int:
         _run(["ffmpeg", "-y", "-v", "error", "-i", str(produced),
               "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p", str(silent)])
 
+    # The frame count is pinned to the source clip: with -shortest the length
+    # came from the audio stream, and an AAC stream is never exactly as long
+    # as the picture, so the last frames were cut off.  The resample round
+    # trip (24 -> 25 -> 24) adds a frame or two, so the source's own frame
+    # count is what the result must have.
+    n_frames = _count_frames(a.video)
     _run(["ffmpeg", "-y", "-v", "error", "-i", str(silent), "-i", str(a.audio),
           "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
           "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
-          "-shortest", str(a.out)])
-    print(f"готово: {a.out}", flush=True)
+          "-frames:v", str(n_frames), str(a.out)])
+    print(f"готово: {a.out} ({n_frames} кадров)", flush=True)
     if not a.keep_video:
         silent.unlink(missing_ok=True)
+        produced.unlink(missing_ok=True)
     return 0
 
 

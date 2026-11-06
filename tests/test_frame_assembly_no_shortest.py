@@ -28,6 +28,16 @@ FRAME_ASSEMBLERS = [
     "scripts/pore_injector/pore_injector.py",
 ]
 
+# The lip-sync pass muxes the source audio next to the rendered clip and had
+# the same problem: -shortest cut the last frames off.  The three probe
+# scripts below assemble a PNG sequence and mux the source audio the same way.
+MUXERS = [
+    "scripts/lipsync_clip.py",
+    "scripts/probe_skin_itf_blend.py",
+    "scripts/probe_skin_temporal.py",
+    "scripts/undress_video.py",
+]
+
 
 def test_frame_assemblers_do_not_use_shortest() -> None:
     offenders = []
@@ -57,3 +67,16 @@ def test_the_frame_count_is_pinned_where_frames_are_files() -> None:
         text = (REPO / rel).read_text(encoding="utf-8")
         if 'f_%05d.png' in text or "start_number" in text:
             assert '"-frames:v"' in text, rel
+
+
+def test_muxers_pin_the_frame_count() -> None:
+    """-shortest cut the last frames off the lip-sync clip: the length came
+    from the AAC audio stream, which is never exactly as long as the picture.
+    """
+    for rel in MUXERS:
+        text = (REPO / rel).read_text(encoding="utf-8")
+        for number, line in enumerate(text.splitlines(), start=1):
+            if '"-shortest"' in line and not line.lstrip().startswith("#"):
+                raise AssertionError(
+                    f"{rel}:{number}: -shortest cuts the last frames off:\n{line.strip()}")
+        assert '"-frames:v"' in text, rel
