@@ -1,5 +1,7 @@
 # Scripts
 
+Ручные измерители ComfyUI (не pytest): см. [MANUAL_MEASUREMENTS.md](MANUAL_MEASUREMENTS.md).
+
 ## Iskra → Kara shared memory (`kara_poll_iskra_results.py`)
 
 Iskra (tasks bot) appends structured JSON objects to a locked queue file under the OpenClaw workspace; Kara’s cron drains that file and clears it. Default path:
