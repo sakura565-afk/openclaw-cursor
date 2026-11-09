@@ -9,6 +9,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "google_oauth_loopback.py"
 
@@ -64,11 +66,28 @@ def test_credentials_are_not_stored_in_the_repository():
     )
 
 
-def test_credentials_load_from_the_environment():
+def test_credentials_load_from_the_environment(monkeypatch):
+    """The credentials are read from the environment."""
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "123456789-abc.apps.googleusercontent.com")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "GOCSPX-test-secret-value")
     cid, csec = glo._load_client_credentials()
     assert cid and csec, "the client credentials must resolve to a pair"
     assert "@" in cid or "apps.googleusercontent.com" in cid
     assert len(csec) > 8
+
+
+def test_missing_credentials_stop_the_flow(monkeypatch):
+    """Without any credentials the script must fail loudly, not half-start.
+
+    On a CI runner there is neither the env pair nor an installed Gemini CLI,
+    so the loader raises SystemExit. That is the documented behaviour - the
+    test must not demand that a secret exists on the machine.
+    """
+    monkeypatch.delenv("GOOGLE_OAUTH_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_OAUTH_CLIENT_SECRET", raising=False)
+    monkeypatch.setattr(glo, "GEMINI_CLI_GLOBS", [])
+    with pytest.raises(SystemExit):
+        glo._load_client_credentials()
 
 
 def test_server_ignores_requests_without_a_code():
