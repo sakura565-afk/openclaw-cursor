@@ -1,33 +1,24 @@
 {
   "tool": "scripts/skin_metric_groundtruth/calibration.py",
-  "created_utc": "2026-11-04T13:04:36+00:00",
+  "created_utc": "2026-11-09T08:24:47+00:00",
   "manifest": "synthetic_manifest.json",
   "summary": {
     "total": 20,
-    "truth_matches": 16,
-    "truth_mismatches": [
-      "fine_pores_diagnostic_0",
-      "fine_pores_diagnostic_1",
-      "fine_pores_diagnostic_2",
-      "fine_pores_diagnostic_3"
-    ],
+    "truth_matches": 20,
+    "truth_mismatches": [],
     "core_total": 4,
     "core_truth_matches": 4,
     "visual_total": 20,
-    "visual_metric_matches": 14,
+    "visual_metric_matches": 18,
     "visual_metric_mismatches": [
       "mixed_core",
-      "mixed_2",
-      "fine_pores_diagnostic_0",
-      "fine_pores_diagnostic_1",
-      "fine_pores_diagnostic_2",
-      "fine_pores_diagnostic_3"
+      "mixed_2"
     ],
     "visual_truth_matches": 18,
     "by_family": {
       "fine_pores": {
         "total": 4,
-        "truth_matches": 0
+        "truth_matches": 4
       },
       "mixed": {
         "total": 4,
@@ -62,7 +53,8 @@
         "survival": 0.0,
         "structure_score": 0.0,
         "lap": 0.0,
-        "classification": "plastic"
+        "classification": "plastic",
+        "shape_component_density_per_10k": 0.0
       },
       "metric_class": "plastic",
       "truth_match": true,
@@ -96,7 +88,8 @@
         "survival": 0.0,
         "structure_score": 0.0,
         "lap": 0.0,
-        "classification": "plastic"
+        "classification": "plastic",
+        "shape_component_density_per_10k": 0.0
       },
       "metric_class": "plastic",
       "truth_match": true,
@@ -130,7 +123,8 @@
         "survival": 0.0,
         "structure_score": 0.0,
         "lap": 0.0,
-        "classification": "plastic"
+        "classification": "plastic",
+        "shape_component_density_per_10k": 0.0
       },
       "metric_class": "plastic",
       "truth_match": true,
@@ -164,7 +158,8 @@
         "survival": 0.0,
         "structure_score": 0.0,
         "lap": 0.0,
-        "classification": "plastic"
+        "classification": "plastic",
+        "shape_component_density_per_10k": 0.0
       },
       "metric_class": "plastic",
       "truth_match": true,
@@ -190,15 +185,16 @@
       "core": true,
       "constructive_label": "pores",
       "metrics": {
-        "pore": 45894580880.727325,
-        "pore_blur": 28491239814.138504,
+        "pore": 45894580880.72729,
+        "pore_blur": 28491239814.138496,
         "spec": 16015528497309.701,
-        "pore_ratio": 0.0028656301219430083,
-        "pore_rms": 5.8113662473322,
-        "survival": 0.6207974725421871,
-        "structure_score": 0.34210780572438987,
+        "pore_ratio": 0.002865630121943006,
+        "pore_rms": 5.811366247332197,
+        "survival": 0.6207974725421874,
+        "structure_score": 0.34210780572438954,
         "lap": 1.751953125,
-        "classification": "pores"
+        "classification": "pores",
+        "shape_component_density_per_10k": 50.998263888888886
       },
       "metric_class": "pores",
       "truth_match": true,
@@ -249,15 +245,16 @@
       "core": false,
       "constructive_label": "pores",
       "metrics": {
-        "pore": 44907283020.34148,
-        "pore_blur": 27845916863.322006,
+        "pore": 44907283020.34145,
+        "pore_blur": 27845916863.322,
         "spec": 16305417282194.137,
-        "pore_ratio": 0.0027541327059063484,
-        "pore_rms": 5.7485184911122165,
-        "survival": 0.6200757425183961,
-        "structure_score": 0.3171701371791193,
+        "pore_ratio": 0.002754132705906347,
+        "pore_rms": 5.748518491112215,
+        "survival": 0.6200757425183964,
+        "structure_score": 0.317170137179119,
         "lap": 1.7092013888888888,
-        "classification": "pores"
+        "classification": "pores",
+        "shape_component_density_per_10k": 46.115451388888886
       },
       "metric_class": "pores",
       "truth_match": true,
@@ -308,15 +305,16 @@
       "core": false,
       "constructive_label": "pores",
       "metrics": {
-        "pore": 55196736897.917755,
-        "pore_blur": 34260652654.88839,
+        "pore": 55196736897.91773,
+        "pore_blur": 34260652654.88838,
         "spec": 15976813858726.078,
-        "pore_ratio": 0.0034548025273368806,
-        "pore_rms": 6.373151531152051,
+        "pore_ratio": 0.0034548025273368793,
+        "pore_rms": 6.37315153115205,
         "survival": 0.620700689576105,
         "structure_score": 0.48771625593172857,
         "lap": 1.7909071180555556,
-        "classification": "pores"
+        "classification": "pores",
+        "shape_component_density_per_10k": 52.083333333333336
       },
       "metric_class": "pores",
       "truth_match": true,
@@ -367,15 +365,16 @@
       "core": false,
       "constructive_label": "pores",
       "metrics": {
-        "pore": 65003753836.44887,
+        "pore": 65003753836.44885,
         "pore_blur": 40160106986.433754,
         "spec": 15439684636160.24,
-        "pore_ratio": 0.004210173677006846,
-        "pore_rms": 6.916187539396584,
-        "survival": 0.6178121203196607,
-        "structure_score": 0.47946320091331623,
+        "pore_ratio": 0.004210173677006845,
+        "pore_rms": 6.916187539396583,
+        "survival": 0.6178121203196608,
+        "structure_score": 0.47946320091331657,
         "lap": 1.9818250868055556,
-        "classification": "pores"
+        "classification": "pores",
+        "shape_component_density_per_10k": 47.74305555555556
       },
       "metric_class": "pores",
       "truth_match": true,
@@ -426,15 +425,16 @@
       "core": true,
       "constructive_label": "digital_sand",
       "metrics": {
-        "pore": 63571415365.066376,
-        "pore_blur": 7386222762.163439,
+        "pore": 63571415365.066345,
+        "pore_blur": 7386222762.163436,
         "spec": 22261621156099.93,
-        "pore_ratio": 0.0028556507596324407,
-        "pore_rms": 6.839565027234753,
-        "survival": 0.1161877979237552,
+        "pore_ratio": 0.0028556507596324394,
+        "pore_rms": 6.839565027234752,
+        "survival": 0.11618779792375522,
         "structure_score": 0.0,
         "lap": 42.499186197916664,
-        "classification": "digital_sand"
+        "classification": "digital_sand",
+        "shape_component_density_per_10k": 1552.1918402777778
       },
       "metric_class": "digital_sand",
       "truth_match": true,
@@ -461,15 +461,16 @@
       "core": false,
       "constructive_label": "digital_sand",
       "metrics": {
-        "pore": 112877001459.92384,
-        "pore_blur": 12880293417.75668,
+        "pore": 112877001459.9238,
+        "pore_blur": 12880293417.756676,
         "spec": 22197781993077.652,
-        "pore_ratio": 0.005085057664550647,
-        "pore_rms": 9.11381638382891,
-        "survival": 0.11410910328203336,
+        "pore_ratio": 0.005085057664550644,
+        "pore_rms": 9.113816383828908,
+        "survival": 0.11410910328203337,
         "structure_score": 0.0,
         "lap": 56.688151041666664,
-        "classification": "digital_sand"
+        "classification": "digital_sand",
+        "shape_component_density_per_10k": 1567.654079861111
       },
       "metric_class": "digital_sand",
       "truth_match": true,
@@ -496,15 +497,16 @@
       "core": false,
       "constructive_label": "digital_sand",
       "metrics": {
-        "pore": 179926075769.19724,
-        "pore_blur": 21220595539.3351,
+        "pore": 179926075769.19717,
+        "pore_blur": 21220595539.335094,
         "spec": 22261562261238.453,
-        "pore_ratio": 0.008082365184337588,
-        "pore_rms": 11.50653589474047,
-        "survival": 0.11794063450011616,
+        "pore_ratio": 0.008082365184337586,
+        "pore_rms": 11.506535894740468,
+        "survival": 0.11794063450011619,
         "structure_score": 0.0,
         "lap": 70.87489149305556,
-        "classification": "digital_sand"
+        "classification": "digital_sand",
+        "shape_component_density_per_10k": 1535.1019965277778
       },
       "metric_class": "digital_sand",
       "truth_match": true,
@@ -531,15 +533,16 @@
       "core": false,
       "constructive_label": "digital_sand",
       "metrics": {
-        "pore": 259019057507.40875,
-        "pore_blur": 29728396090.575066,
+        "pore": 259019057507.4087,
+        "pore_blur": 29728396090.575058,
         "spec": 22276332561878.746,
-        "pore_ratio": 0.011627544919609673,
-        "pore_rms": 13.805857994802837,
+        "pore_ratio": 0.01162754491960967,
+        "pore_rms": 13.805857994802835,
         "survival": 0.11477300696194812,
         "structure_score": 0.0,
         "lap": 85.07671440972223,
-        "classification": "digital_sand"
+        "classification": "digital_sand",
+        "shape_component_density_per_10k": 1540.798611111111
       },
       "metric_class": "digital_sand",
       "truth_match": true,
@@ -566,15 +569,16 @@
       "core": true,
       "constructive_label": "digital_sand",
       "metrics": {
-        "pore": 107231241951.16452,
-        "pore_blur": 34287487392.364525,
+        "pore": 107231241951.16449,
+        "pore_blur": 34287487392.364517,
         "spec": 16041507682582.805,
-        "pore_ratio": 0.006684611201950282,
-        "pore_rms": 8.882970311061447,
+        "pore_ratio": 0.0066846112019502794,
+        "pore_rms": 8.882970311061445,
         "survival": 0.3197527769750145,
         "structure_score": 0.0,
         "lap": 42.92534722222222,
-        "classification": "digital_sand"
+        "classification": "digital_sand",
+        "shape_component_density_per_10k": 1099.4466145833333
       },
       "metric_class": "digital_sand",
       "truth_match": true,
@@ -626,15 +630,16 @@
       "core": false,
       "constructive_label": "digital_sand",
       "metrics": {
-        "pore": 157370578658.13873,
-        "pore_blur": 40483427942.066055,
+        "pore": 157370578658.13867,
+        "pore_blur": 40483427942.06604,
         "spec": 16307571730670.26,
-        "pore_ratio": 0.009650154005587845,
-        "pore_rms": 10.761165570341191,
+        "pore_ratio": 0.009650154005587842,
+        "pore_rms": 10.761165570341188,
         "survival": 0.2572490251180275,
         "structure_score": 0.0,
         "lap": 56.711642795138886,
-        "classification": "digital_sand"
+        "classification": "digital_sand",
+        "shape_component_density_per_10k": 1201.7144097222222
       },
       "metric_class": "digital_sand",
       "truth_match": true,
@@ -686,15 +691,16 @@
       "core": false,
       "constructive_label": "digital_sand",
       "metrics": {
-        "pore": 232861108501.00604,
-        "pore_blur": 53200572934.74434,
+        "pore": 232861108501.00595,
+        "pore_blur": 53200572934.74431,
         "spec": 15979500960195.1,
-        "pore_ratio": 0.014572489408840898,
-        "pore_rms": 13.090192188558936,
-        "survival": 0.22846482728357576,
+        "pore_ratio": 0.014572489408840893,
+        "pore_rms": 13.090192188558934,
+        "survival": 0.2284648272835757,
         "structure_score": 0.0,
         "lap": 71.35281032986111,
-        "classification": "digital_sand"
+        "classification": "digital_sand",
+        "shape_component_density_per_10k": 1315.3754340277778
       },
       "metric_class": "digital_sand",
       "truth_match": true,
@@ -746,15 +752,16 @@
       "core": false,
       "constructive_label": "digital_sand",
       "metrics": {
-        "pore": 309032543387.4636,
-        "pore_blur": 65571571343.49342,
+        "pore": 309032543387.46344,
+        "pore_blur": 65571571343.4934,
         "spec": 15741988686782.84,
-        "pore_ratio": 0.019631099318914578,
-        "pore_rms": 15.0799412894055,
-        "survival": 0.2121833856872481,
+        "pore_ratio": 0.019631099318914567,
+        "pore_rms": 15.079941289405493,
+        "survival": 0.21218338568724815,
         "structure_score": 0.0,
         "lap": 85.49153645833333,
-        "classification": "digital_sand"
+        "classification": "digital_sand",
+        "shape_component_density_per_10k": 1346.8424479166667
       },
       "metric_class": "digital_sand",
       "truth_match": true,
@@ -806,18 +813,19 @@
       "core": false,
       "constructive_label": "pores",
       "metrics": {
-        "pore": 34791002193.127266,
-        "pore_blur": 8897322378.244003,
+        "pore": 34791002193.12726,
+        "pore_blur": 8897322378.243998,
         "spec": 22147884658533.14,
-        "pore_ratio": 0.0015708498906112456,
+        "pore_ratio": 0.0015708498906112452,
         "pore_rms": 5.059772755231459,
-        "survival": 0.2557363058659348,
+        "survival": 0.2557363058659347,
         "structure_score": 0.0,
         "lap": 5.650661892361111,
-        "classification": "digital_sand"
+        "classification": "pores",
+        "shape_component_density_per_10k": 259.87413194444446
       },
-      "metric_class": "digital_sand",
-      "truth_match": false,
+      "metric_class": "pores",
+      "truth_match": true,
       "parameters": {
         "base_level": 128.0,
         "noise_seed": null,
@@ -856,7 +864,7 @@
         "confidence": "medium",
         "reason": "Sparse, faint discrete pits on an otherwise smooth gray surface; low contrast reduces certainty."
       },
-      "metric_matches_visual": false,
+      "metric_matches_visual": true,
       "visual_matches_constructive_truth": true
     },
     {
@@ -865,18 +873,19 @@
       "core": false,
       "constructive_label": "pores",
       "metrics": {
-        "pore": 16194232669.964897,
-        "pore_blur": 4068816492.0502768,
+        "pore": 16194232669.964893,
+        "pore_blur": 4068816492.0502744,
         "spec": 22189267412696.598,
-        "pore_ratio": 0.000729822772819378,
-        "pore_rms": 3.4520551862162505,
-        "survival": 0.25125095921319107,
+        "pore_ratio": 0.0007298227728193778,
+        "pore_rms": 3.45205518621625,
+        "survival": 0.25125095921319096,
         "structure_score": 0.0,
         "lap": 4.044596354166667,
-        "classification": "plastic"
+        "classification": "pores",
+        "shape_component_density_per_10k": 277.77777777777777
       },
-      "metric_class": "plastic",
-      "truth_match": false,
+      "metric_class": "pores",
+      "truth_match": true,
       "parameters": {
         "base_level": 128.0,
         "noise_seed": null,
@@ -915,7 +924,7 @@
         "confidence": "medium",
         "reason": "Very faint sparse pits are visible on an otherwise smooth gray surface."
       },
-      "metric_matches_visual": false,
+      "metric_matches_visual": true,
       "visual_matches_constructive_truth": true
     },
     {
@@ -924,18 +933,19 @@
       "core": false,
       "constructive_label": "pores",
       "metrics": {
-        "pore": 59637007494.039345,
-        "pore_blur": 16129887938.8535,
+        "pore": 59637007494.03932,
+        "pore_blur": 16129887938.853502,
         "spec": 22117410363293.094,
-        "pore_ratio": 0.002696382918002698,
-        "pore_rms": 6.624535993207582,
-        "survival": 0.27046776182499876,
+        "pore_ratio": 0.002696382918002697,
+        "pore_rms": 6.624535993207581,
+        "survival": 0.27046776182499893,
         "structure_score": 0.0,
         "lap": 7.174587673611111,
-        "classification": "digital_sand"
+        "classification": "pores",
+        "shape_component_density_per_10k": 250.37977430555554
       },
-      "metric_class": "digital_sand",
-      "truth_match": false,
+      "metric_class": "pores",
+      "truth_match": true,
       "parameters": {
         "base_level": 128.0,
         "noise_seed": null,
@@ -974,7 +984,7 @@
         "confidence": "medium",
         "reason": "Scattered small discrete pits on a mostly smooth background, with modest contrast."
       },
-      "metric_matches_visual": false,
+      "metric_matches_visual": true,
       "visual_matches_constructive_truth": true
     },
     {
@@ -983,18 +993,19 @@
       "core": false,
       "constructive_label": "pores",
       "metrics": {
-        "pore": 38650825954.647995,
+        "pore": 38650825954.64799,
         "pore_blur": 10398634001.808876,
         "spec": 22180031874238.36,
-        "pore_ratio": 0.001742595600123556,
-        "pore_rms": 5.333065677661386,
-        "survival": 0.2690404084510483,
+        "pore_ratio": 0.0017425956001235557,
+        "pore_rms": 5.333065677661385,
+        "survival": 0.2690404084510484,
         "structure_score": 0.0,
         "lap": 4.352647569444445,
-        "classification": "digital_sand"
+        "classification": "pores",
+        "shape_component_density_per_10k": 134.00607638888889
       },
-      "metric_class": "digital_sand",
-      "truth_match": false,
+      "metric_class": "pores",
+      "truth_match": true,
       "parameters": {
         "base_level": 128.0,
         "noise_seed": null,
@@ -1033,7 +1044,7 @@
         "confidence": "medium",
         "reason": "Small isolated pit-like marks are scattered across a mostly smooth background."
       },
-      "metric_matches_visual": false,
+      "metric_matches_visual": true,
       "visual_matches_constructive_truth": true
     }
   ],
@@ -1048,29 +1059,45 @@
     "status": "provisional_pending_human_review",
     "plastic_max_pore_rms": 4.9,
     "sand_max_survival": 0.6,
-    "action": "retain existing values provisionally; do not auto-fit or claim validation",
+    "shape_max_component_density": 575.2224392361111,
+    "shape_min_component_density": 25.499131944444443,
+    "shape_min_pore_rms": 2.9056831236661,
+    "selected_shape_feature": "shape_component_density_per_10k",
+    "action": "retain legacy FFT/survival bounds; apply sparse signed high-pass component density when shape fields are present",
     "basis": {
       "core_plastic_pore_rms_max": 0.0,
-      "core_pores_pore_rms_min": 5.8113662473322,
+      "core_pores_pore_rms_min": 5.811366247332197,
       "core_sand_survival_max": 0.3197527769750145,
-      "core_pores_survival_min": 0.6207974725421871,
+      "core_pores_survival_min": 0.6207974725421874,
+      "core_pore_component_density_max": 50.998263888888886,
+      "core_sand_component_density_min": 1099.4466145833333,
+      "pore_component_density_range": [
+        46.115451388888886,
+        277.77777777777777
+      ],
+      "sand_component_density_range": [
+        1099.4466145833333,
+        1567.654079861111
+      ],
+      "component_density_separation_ratio": 3.9580078125,
       "fine_pore_survival_range": [
-        0.25125095921319107,
-        0.27046776182499876
+        0.25125095921319096,
+        0.27046776182499893
       ],
       "mixed_survival_range": [
-        0.2121833856872481,
+        0.21218338568724815,
         0.3197527769750145
       ],
       "fine_pore_and_mixed_survival_ranges_overlap": true,
-      "fine_pore_truth_mismatches": [
+      "legacy_fine_pore_truth_mismatches": [
         "fine_pores_diagnostic_0",
         "fine_pores_diagnostic_1",
         "fine_pores_diagnostic_2",
         "fine_pores_diagnostic_3"
-      ]
+      ],
+      "fine_pore_truth_mismatches": []
     },
-    "justification": "The retained thresholds separate the four constructive core controls. The normal fine-pore diagnostics test a different spatial scale and expose whether energy plus blur survival is sufficient; failures are reported, not used to move a threshold until a blind human labels the same sheets.",
+    "justification": "Legacy plastic max pore RMS and digital-sand max survival still separate the four constructive core controls. Fine pores and pore+noise mixtures overlap on survival alone, so classification also requires shape_component_density_per_10k (signed 8-connected high-pass components per 10k pixels). Its upper bound is the midpoint of the core pore maximum and core sand minimum densities; minimum density and pore RMS guards come from the same four core controls only, not from the former fine-pore misses.",
     "caveat": "Final visual judgement remains with a human. Synthetic labels establish what was constructed, not what a human sees; AI visual labels are only a pre-check."
   }
 }

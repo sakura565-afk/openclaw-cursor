@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 from PIL import Image
 
 from scripts.skin_metric_groundtruth.blind import build_blind_set
@@ -14,6 +15,7 @@ from scripts.skin_metric_groundtruth.synthetic import (
     build_cases,
     generate_dataset,
 )
+from scripts.skin_metric_shape import SHAPE_MAX_COMPONENT_DENSITY
 from scripts.skin_texture_metrics import measure_image
 
 
@@ -91,6 +93,25 @@ def test_blind_sheet_has_only_numbered_crops_and_a_separate_key(
     assert '"1": {"class": "plastic"' in prompt
     assert all(case_id not in prompt for case_id in [crop["case_id"] for crop in key["crops"]])
     assert result["visual_status"] == "pending_external_judge"
+
+
+def test_committed_artifacts_score_20_of_20_constructive_truth() -> None:
+    root = Path(__file__).resolve().parents[1] / "scripts" / "skin_metric_groundtruth" / "artifacts"
+    report = build_calibration_report(
+        root / "synthetic_manifest.json",
+        blind_key_path=root / "blind" / "blind_key.json",
+        visual_labels_path=root / "blind" / "human_labels.json",
+    )
+
+    assert report["summary"]["core_truth_matches"] == 4
+    assert report["summary"]["truth_matches"] == 20
+    assert report["summary"]["truth_mismatches"] == []
+    rec = report["recommended_thresholds"]
+    assert rec["basis"]["fine_pore_truth_mismatches"] == []
+    assert len(rec["basis"]["legacy_fine_pore_truth_mismatches"]) == 4
+    assert rec["shape_max_component_density"] == pytest.approx(SHAPE_MAX_COMPONENT_DENSITY)
+    assert rec["basis"]["component_density_separation_ratio"] > 1.0
+    assert rec["basis"]["fine_pore_and_mixed_survival_ranges_overlap"] is True
 
 
 def test_calibration_reports_core_truth_and_blind_visual_agreements(
