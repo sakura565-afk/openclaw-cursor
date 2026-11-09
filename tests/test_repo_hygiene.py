@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -21,7 +22,6 @@ from scripts.repo_hygiene import (
     execute_plan,
     git_cherry_counts,
     git_paths_missing_on_main,
-    repository_root,
 )
 
 
@@ -203,23 +203,130 @@ def test_stale_superseded_branch_closes_when_main_caught_up() -> None:
     assert "superseded" in decision.reason
 
 
-@pytest.mark.skipif(repository_root() is None, reason="requires a git checkout")
-def test_git_cherry_detects_patch_equivalence_for_video_pipeline_runner() -> None:
-    """Integration probe on the real repo recognizes PR #271 as patch-present."""
-    root = repository_root()
-    assert root is not None
-    counts = git_cherry_counts("feat/video-pipeline-runner", cwd=root)
+def _git_in(repo: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _init_squash_cherry_repo(tmp_path: Path) -> Path:
+    """Feature branch with one commit whose patch already exists on main (squash/cherry)."""
+    repo = tmp_path / "squash-cherry"
+    repo.mkdir()
+    _git_in(repo, "init", "-b", "main")
+    _git_in(repo, "config", "user.email", "hygiene@example.com")
+    _git_in(repo, "config", "user.name", "hygiene")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    _git_in(repo, "add", "README.md")
+    _git_in(repo, "commit", "-m", "base on main")
+    _git_in(repo, "branch", "feat/video-pipeline-runner")
+    _git_in(repo, "checkout", "feat/video-pipeline-runner")
+    (repo / "video_pipeline").mkdir()
+    (repo / "video_pipeline" / "runner.py").write_text("print('pipeline')\n", encoding="utf-8")
+    _git_in(repo, "add", "video_pipeline/runner.py")
+    _git_in(repo, "commit", "-m", "feat: declarative video pipeline runner")
+    _git_in(repo, "checkout", "main")
+    _git_in(repo, "merge", "--squash", "feat/video-pipeline-runner")
+    _git_in(repo, "commit", "-m", "squash on main")
+    return repo
+
+
+def _init_daily_brief_repo(tmp_path: Path) -> Path:
+    """Branch introduces new paths that main never received."""
+    repo = tmp_path / "daily-brief"
+    repo.mkdir()
+    _git_in(repo, "init", "-b", "main")
+    _git_in(repo, "config", "user.email", "hygiene@example.com")
+    _git_in(repo, "config", "user.name", "hygiene")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    _git_in(repo, "add", "README.md")
+    _git_in(repo, "commit", "-m", "base on main")
+    branch = "daily-brief-gcal-gmail-telegram"
+    _git_in(repo, "checkout", "-b", branch)
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "daily_brief.py").write_text("# brief\n", encoding="utf-8")
+    (repo / "scripts" / "health_sheets.py").write_text("# health\n", encoding="utf-8")
+    (repo / "tasks").mkdir()
+    (repo / "tasks" / "daily_brief.yaml").write_text("task: brief\n", encoding="utf-8")
+    (repo / "tasks" / "health_sheets.yaml").write_text("task: health\n", encoding="utf-8")
+    _git_in(repo, "add", ".")
+    _git_in(repo, "commit", "-m", "daily_brief integration")
+    _git_in(repo, "checkout", "main")
+    return repo
+
+
+def test_git_cherry_counts_sees_patch_equivalent_commit(tmp_path: Path) -> None:
+    """Squash/cherry integration: branch commit is patch-present on main (git cherry -)."""
+    repo = _init_squash_cherry_repo(tmp_path)
+    counts = git_cherry_counts(
+        "feat/video-pipeline-runner",
+        cwd=repo,
+        main_ref="main",
+        head_ref="feat/video-pipeline-runner",
+    )
     assert counts == (1, 0)
 
 
-@pytest.mark.skipif(repository_root() is None, reason="requires a git checkout")
-def test_git_paths_missing_on_main_for_daily_brief_branch() -> None:
-    """Daily brief branch still lacks all four new paths on main."""
-    root = repository_root()
-    assert root is not None
-    missing = git_paths_missing_on_main("daily-brief-gcal-gmail-telegram", cwd=root)
+def test_git_cherry_counts_sees_unique_commit(tmp_path: Path) -> None:
+    """Unique branch work shows as git cherry + when main lacks the patch."""
+    repo = _init_daily_brief_repo(tmp_path)
+    counts = git_cherry_counts(
+        "daily-brief-gcal-gmail-telegram",
+        cwd=repo,
+        main_ref="main",
+        head_ref="daily-brief-gcal-gmail-telegram",
+    )
+    assert counts == (0, 1)
+
+
+def test_git_paths_missing_on_main_lists_daily_brief_paths(tmp_path: Path) -> None:
+    """All paths newly added on the branch are absent from main."""
+    repo = _init_daily_brief_repo(tmp_path)
+    missing = git_paths_missing_on_main(
+        "daily-brief-gcal-gmail-telegram",
+        cwd=repo,
+        main_ref="main",
+        head_ref="daily-brief-gcal-gmail-telegram",
+    )
     assert "scripts/daily_brief.py" in missing
+    assert "scripts/health_sheets.py" in missing
+    assert "tasks/daily_brief.yaml" in missing
+    assert "tasks/health_sheets.yaml" in missing
     assert len(missing) == 4
+
+
+def test_git_paths_missing_on_main_skips_paths_present_on_main(tmp_path: Path) -> None:
+    """Paths that already exist on main are not treated as missing."""
+    repo = tmp_path / "partial-land"
+    repo.mkdir()
+    _git_in(repo, "init", "-b", "main")
+    _git_in(repo, "config", "user.email", "hygiene@example.com")
+    _git_in(repo, "config", "user.name", "hygiene")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    _git_in(repo, "add", "README.md")
+    _git_in(repo, "commit", "-m", "base on main")
+    _git_in(repo, "checkout", "-b", "feature")
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "daily_brief.py").write_text("# brief\n", encoding="utf-8")
+    (repo / "scripts" / "only_on_branch.py").write_text("# unique\n", encoding="utf-8")
+    _git_in(repo, "add", ".")
+    _git_in(repo, "commit", "-m", "feature branch")
+    _git_in(repo, "checkout", "main")
+    (repo / "scripts").mkdir(exist_ok=True)
+    (repo / "scripts" / "daily_brief.py").write_text("# brief\n", encoding="utf-8")
+    _git_in(repo, "add", "scripts/daily_brief.py")
+    _git_in(repo, "commit", "-m", "land daily_brief on main")
+    missing = git_paths_missing_on_main(
+        "feature",
+        cwd=repo,
+        main_ref="main",
+        head_ref="feature",
+    )
+    assert missing == ["scripts/only_on_branch.py"]
 
 
 class RecordingClient(GitHubClient):

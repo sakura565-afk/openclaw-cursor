@@ -370,19 +370,25 @@ def _run_git(args: Sequence[str], *, cwd: Path) -> subprocess.CompletedProcess[s
     )
 
 
+def _head_ref_for_branch(branch: str, head_ref: str | None) -> str:
+    """Resolve a local or remote ref for a PR head branch name."""
+    return head_ref if head_ref is not None else f"origin/{branch}"
+
+
 def git_cherry_counts(
     branch: str,
     *,
     cwd: Path,
     main_ref: str = f"origin/{DEFAULT_MAIN_REF}",
+    head_ref: str | None = None,
 ) -> tuple[int, int] | None:
     """Count patch-equivalent (``-``) and unique (``+``) commits like ``git cherry``."""
-    head_ref = f"origin/{branch}"
-    if _run_git(["rev-parse", "--verify", head_ref], cwd=cwd).returncode != 0:
+    resolved_head = _head_ref_for_branch(branch, head_ref)
+    if _run_git(["rev-parse", "--verify", resolved_head], cwd=cwd).returncode != 0:
         return None
     if _run_git(["rev-parse", "--verify", main_ref], cwd=cwd).returncode != 0:
         return None
-    proc = _run_git(["cherry", main_ref, head_ref], cwd=cwd)
+    proc = _run_git(["cherry", main_ref, resolved_head], cwd=cwd)
     if proc.returncode != 0:
         return None
     equivalent = 0
@@ -400,15 +406,16 @@ def git_paths_missing_on_main(
     *,
     cwd: Path,
     main_ref: str = f"origin/{DEFAULT_MAIN_REF}",
+    head_ref: str | None = None,
 ) -> list[str]:
     """Return paths added on the branch relative to main that main still lacks."""
-    head_ref = f"origin/{branch}"
+    resolved_head = _head_ref_for_branch(branch, head_ref)
     proc = _run_git(
         [
             "diff",
             "--name-only",
             "--diff-filter=A",
-            f"{main_ref}...{head_ref}",
+            f"{main_ref}...{resolved_head}",
         ],
         cwd=cwd,
     )
