@@ -9,6 +9,7 @@ import pytest
 
 from scripts import repo_hygiene
 from scripts.repo_hygiene import (
+    BranchIntegration,
     BranchStatus,
     BranchDecision,
     GitHubClient,
@@ -16,7 +17,11 @@ from scripts.repo_hygiene import (
     PullRequest,
     build_plan,
     compare_ahead_by,
+    compare_behind_by,
     execute_plan,
+    git_cherry_counts,
+    git_paths_missing_on_main,
+    repository_root,
 )
 
 
@@ -28,6 +33,11 @@ def test_compare_ahead_by_zero_means_fully_merged() -> None:
 def test_compare_ahead_by_preserves_unmerged_commit_count() -> None:
     """A positive ahead_by value identifies a branch with unmerged work."""
     assert compare_ahead_by({"status": "ahead", "ahead_by": 3}) == 3
+
+
+def test_compare_behind_by_counts_main_only_commits() -> None:
+    """Behind count captures how stale a feature branch is."""
+    assert compare_behind_by({"status": "behind", "behind_by": 120}) == 120
 
 
 @pytest.mark.parametrize("payload", [{}, {"ahead_by": -1}, {"ahead_by": "0"}])
@@ -120,6 +130,98 @@ def test_dry_run_plan_closes_only_prs_whose_head_is_merged() -> None:
     assert plan.dry_run is True
 
 
+def test_patch_equivalent_via_git_cherry_closes_even_when_ahead_by_positive() -> None:
+    """Squash/cherry-pick merges keep ahead_by>0 but show no unique cherry commits."""
+    plan = build_plan(
+        repo="owner/repo",
+        pull_requests=[_pr(271, "feat/video-pipeline-runner")],
+        branches=[_branch("feat/video-pipeline-runner", 1)],
+        integration_by_pr={
+            271: BranchIntegration(
+                behind_by=320,
+                cherry_equivalent=1,
+                cherry_unique=0,
+                main_integration_commit="abfe2f0 feat: declarative video pipeline runner",
+            )
+        },
+    )
+    decision = plan.pull_requests[0]
+    assert decision.action == "close"
+    assert "cherry-pick" in decision.reason
+    assert "abfe2f0" in decision.comment_body
+
+
+def test_paths_missing_on_main_keep_pull_request_open() -> None:
+    """When unique files never landed on main, the PR must remain open."""
+    plan = build_plan(
+        repo="owner/repo",
+        pull_requests=[
+            PullRequest(
+                number=249,
+                title="daily_brief",
+                head_branch="daily-brief-gcal-gmail-telegram",
+                head_repo="owner/repo",
+                mergeable="CONFLICTING",
+                merge_state_status="UNKNOWN",
+            )
+        ],
+        branches=[_branch("daily-brief-gcal-gmail-telegram", 3)],
+        integration_by_pr={
+            249: BranchIntegration(
+                behind_by=341,
+                paths_missing_on_main=(
+                    "scripts/daily_brief.py",
+                    "tasks/daily_brief.yaml",
+                ),
+            )
+        },
+    )
+    decision = plan.pull_requests[0]
+    assert decision.action == "keep"
+    assert "scripts/daily_brief.py" in decision.reason
+    assert "оставляю открытым" in decision.comment_body
+
+
+def test_stale_superseded_branch_closes_when_main_caught_up() -> None:
+    """Old drafts with no missing paths and large behind counts are closed."""
+    plan = build_plan(
+        repo="owner/repo",
+        pull_requests=[_pr(120, "self-improvement/auto-reflection")],
+        branches=[_branch("self-improvement/auto-reflection", 1)],
+        integration_by_pr={
+            120: BranchIntegration(
+                behind_by=375,
+                cherry_equivalent=0,
+                cherry_unique=1,
+                paths_missing_on_main=(),
+                main_integration_commit="465e75e Enhance auto_reflection",
+            )
+        },
+    )
+    decision = plan.pull_requests[0]
+    assert decision.action == "close"
+    assert "superseded" in decision.reason
+
+
+@pytest.mark.skipif(repository_root() is None, reason="requires a git checkout")
+def test_git_cherry_detects_patch_equivalence_for_video_pipeline_runner() -> None:
+    """Integration probe on the real repo recognizes PR #271 as patch-present."""
+    root = repository_root()
+    assert root is not None
+    counts = git_cherry_counts("feat/video-pipeline-runner", cwd=root)
+    assert counts == (1, 0)
+
+
+@pytest.mark.skipif(repository_root() is None, reason="requires a git checkout")
+def test_git_paths_missing_on_main_for_daily_brief_branch() -> None:
+    """Daily brief branch still lacks all four new paths on main."""
+    root = repository_root()
+    assert root is not None
+    missing = git_paths_missing_on_main("daily-brief-gcal-gmail-telegram", cwd=root)
+    assert "scripts/daily_brief.py" in missing
+    assert len(missing) == 4
+
+
 class RecordingClient(GitHubClient):
     """A GitHub client double that records requests instead of using the network."""
 
@@ -154,6 +256,11 @@ def test_apply_uses_expected_patch_and_delete_paths() -> None:
 
     assert client.calls == [
         (
+            "POST",
+            "/repos/owner/repo/issues/7/comments",
+            {"body": "Закрываю PR #7: head-ветка полностью достижима из `main` (ahead_by=0)."},
+        ),
+        (
             "PATCH",
             "/repos/owner/repo/pulls/7",
             {"state": "closed"},
@@ -176,10 +283,11 @@ def test_apply_max_limits_mutating_operations() -> None:
         include_merged=True,
     )
 
-    execute_plan(client, plan, max_operations=1)
+    execute_plan(client, plan, max_operations=2)
 
-    assert len(client.calls) == 1
-    assert client.calls[0][0] == "PATCH"
+    assert len(client.calls) == 2
+    assert client.calls[0][0] == "POST"
+    assert client.calls[1][0] == "PATCH"
 
 
 def test_execute_plan_refuses_a_malformed_main_delete() -> None:
@@ -215,6 +323,9 @@ def test_github_client_lists_and_compares_without_embedding_credentials() -> Non
             {
                 "number": 7,
                 "title": "Merged change",
+                "draft": False,
+                "mergeable": True,
+                "merge_state_status": "CLEAN",
                 "head": {
                     "ref": "feature/old",
                     "repo": {"full_name": "owner/repo"},
@@ -222,7 +333,7 @@ def test_github_client_lists_and_compares_without_embedding_credentials() -> Non
             }
         ],
         [{"name": "main"}, {"name": "feature/old"}],
-        {"ahead_by": 0},
+        {"ahead_by": 0, "behind_by": 0},
     ]
 
     pull_requests = client.list_open_pull_requests()
@@ -265,6 +376,22 @@ class FakeClient(RecordingClient):
     def compare_with_main(self, branch: str) -> int:
         return self.branch_ahead[branch]
 
+    def compare_with_main_details(self, branch: str) -> BranchStatus:
+        ahead = self.branch_ahead[branch]
+        return BranchStatus(name=branch, ahead_by=ahead, behind_by=0)
+
+    def get_pull_request(self, number: int) -> PullRequest:
+        for pr in self.pull_requests:
+            if pr.number == number:
+                return pr
+        raise ValueError(f"missing pull request #{number}")
+
+    def paths_added_by_branch_missing_on_main(self, branch: str) -> list[str]:
+        return []
+
+    def file_exists_on_main(self, path: str) -> bool:
+        return True
+
 
 def _token_file(tmp_path: Path) -> Path:
     path = tmp_path / "github-token"
@@ -285,6 +412,11 @@ def test_cli_defaults_to_dry_run_and_never_prints_token(
     client = FakeClient(
         [_pr(7, "merged-pr")],
         {"main": 0, "merged-pr": 0, "feature/old": 0},
+    )
+    monkeypatch.setattr(
+        repo_hygiene,
+        "gather_branch_integration",
+        lambda *_args, **_kwargs: BranchIntegration(),
     )
     _install_client(monkeypatch, client)
 
@@ -319,6 +451,11 @@ def test_cli_apply_performs_only_planned_mutations(
         {"main": 0, "merged-pr": 0, "feature/old": 0},
     )
     _install_client(monkeypatch, client)
+    monkeypatch.setattr(
+        repo_hygiene,
+        "gather_branch_integration",
+        lambda *_args, **_kwargs: BranchIntegration(),
+    )
 
     exit_code = repo_hygiene.main(
         [
@@ -333,6 +470,7 @@ def test_cli_apply_performs_only_planned_mutations(
 
     assert exit_code == 0
     assert [call[:2] for call in client.calls] == [
+        ("POST", "/repos/owner/repo/issues/7/comments"),
         ("PATCH", "/repos/owner/repo/pulls/7"),
         ("DELETE", "/repos/owner/repo/git/refs/heads/feature/old"),
     ]
@@ -350,6 +488,11 @@ def test_cli_json_and_pr_filter_keep_unselected_prs_as_branch_protection(
         {"main": 0, "merged-pr": 0, "work": 0},
     )
     _install_client(monkeypatch, client)
+    monkeypatch.setattr(
+        repo_hygiene,
+        "gather_branch_integration",
+        lambda *_args, **_kwargs: BranchIntegration(),
+    )
 
     exit_code = repo_hygiene.main(
         [
