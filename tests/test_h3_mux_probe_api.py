@@ -7,6 +7,7 @@ which kept 2 frames out of a 175-frame render. The still then came from a
 black two-frame clip and every anatomy metric collapsed.
 """
 import ast
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -55,6 +56,7 @@ def test_runner_never_writes_a_zero_length_trim():
     )
 
 
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 def test_probe_returns_a_dict(tmp_path):
     from video_pipeline.assembler import probe
 
@@ -69,6 +71,8 @@ def test_probe_returns_a_dict(tmp_path):
     assert "duration" in info and "fps" in info
 
 
+@pytest.mark.skipif(shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+                    reason="ffmpeg/ffprobe not installed")
 def test_mux_keeps_every_frame(tmp_path):
     """End to end: a 175-frame source must mux to 175 frames, not 2."""
     ffmpeg = "ffmpeg"
