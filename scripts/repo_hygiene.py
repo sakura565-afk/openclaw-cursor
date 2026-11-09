@@ -9,6 +9,8 @@ from dataclasses import asdict, dataclass, replace
 import json
 import os
 from pathlib import Path
+import re
+import subprocess
 import sys
 from typing import Any, Literal
 import urllib.error
@@ -17,6 +19,8 @@ from urllib.parse import quote
 
 
 DEFAULT_REPO = "sakura565-afk/openclaw-cursor"
+DEFAULT_MAIN_REF = "main"
+STALE_BEHIND_THRESHOLD = 50
 
 
 def default_token_file() -> Path | None:
@@ -40,6 +44,9 @@ class PullRequest:
     title: str
     head_branch: str
     head_repo: str
+    draft: bool = False
+    mergeable: str | None = None
+    merge_state_status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -48,6 +55,18 @@ class BranchStatus:
 
     name: str
     ahead_by: int
+    behind_by: int = 0
+
+
+@dataclass(frozen=True)
+class BranchIntegration:
+    """Local git signals beyond GitHub ``ahead_by`` (cherry-pick / squash / gaps)."""
+
+    behind_by: int = 0
+    cherry_equivalent: int | None = None
+    cherry_unique: int | None = None
+    paths_missing_on_main: tuple[str, ...] = ()
+    main_integration_commit: str = ""
 
 
 @dataclass(frozen=True)
@@ -59,6 +78,7 @@ class PullRequestDecision:
     head_branch: str
     action: Action
     reason: str
+    comment_body: str = ""
 
 
 @dataclass(frozen=True)
@@ -155,15 +175,54 @@ class GitHubClient:
             branch = head.get("ref")
             if type(number) is not int or not isinstance(title, str) or not isinstance(branch, str):
                 raise ValueError("GitHub pull request is missing required fields")
+            draft = item.get("draft") is True
+            mergeable = item.get("mergeable")
+            merge_state = item.get("merge_state_status")
             pull_requests.append(
                 PullRequest(
                     number=number,
                     title=title,
                     head_branch=branch,
                     head_repo=repo_name,
+                    draft=draft,
+                    mergeable=str(mergeable) if mergeable is not None else None,
+                    merge_state_status=str(merge_state) if merge_state is not None else None,
                 )
             )
         return pull_requests
+
+    def get_pull_request(self, number: int) -> PullRequest:
+        """Fetch one pull request including mergeability fields."""
+        payload = self._request("GET", f"/repos/{self.repo}/pulls/{number}")
+        if not isinstance(payload, Mapping):
+            raise ValueError("GitHub pull response is not an object")
+        head = payload.get("head")
+        if not isinstance(head, Mapping):
+            raise ValueError("GitHub pull request has no valid head")
+        head_repo = head.get("repo")
+        repo_name = ""
+        if isinstance(head_repo, Mapping):
+            repo_name = str(head_repo.get("full_name") or "")
+        branch = head.get("ref")
+        title = payload.get("title")
+        number_value = payload.get("number")
+        if (
+            type(number_value) is not int
+            or not isinstance(title, str)
+            or not isinstance(branch, str)
+        ):
+            raise ValueError("GitHub pull request is missing required fields")
+        mergeable = payload.get("mergeable")
+        merge_state = payload.get("merge_state_status")
+        return PullRequest(
+            number=number_value,
+            title=title,
+            head_branch=branch,
+            head_repo=repo_name,
+            draft=payload.get("draft") is True,
+            mergeable=str(mergeable) if mergeable is not None else None,
+            merge_state_status=str(merge_state) if merge_state is not None else None,
+        )
 
     def list_remote_branches(self) -> list[str]:
         """Return all remote branch names."""
@@ -177,14 +236,75 @@ class GitHubClient:
 
     def compare_with_main(self, branch: str) -> int:
         """Return how many commits a branch has that are absent from main."""
+        return self.compare_with_main_details(branch).ahead_by
+
+    def compare_with_main_details(
+        self,
+        branch: str,
+        *,
+        main_ref: str = DEFAULT_MAIN_REF,
+    ) -> BranchStatus:
+        """Return ahead/behind counts from the GitHub three-dot compare."""
         encoded_branch = quote(branch, safe="/")
         payload = self._request(
             "GET",
-            f"/repos/{self.repo}/compare/main...{encoded_branch}",
+            f"/repos/{self.repo}/compare/{main_ref}...{encoded_branch}",
         )
         if not isinstance(payload, Mapping):
             raise ValueError("GitHub compare endpoint returned a non-object response")
-        return compare_ahead_by(payload)
+        ahead_by = compare_ahead_by(payload)
+        behind_by = compare_behind_by(payload)
+        return BranchStatus(name=branch, ahead_by=ahead_by, behind_by=behind_by)
+
+    def file_exists_on_main(self, path: str, *, main_ref: str = DEFAULT_MAIN_REF) -> bool:
+        """Return whether ``path`` exists at ``main_ref``."""
+        encoded = quote(path, safe="/")
+        request = urllib.request.Request(
+            f"{self.api_base}/repos/{self.repo}/contents/{encoded}?ref={quote(main_ref)}",
+            method="GET",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {self.token}",
+                "User-Agent": "openclaw-repo-hygiene",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                return 200 <= response.status < 300
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return False
+            raise
+
+    def paths_added_by_branch_missing_on_main(
+        self,
+        branch: str,
+        *,
+        main_ref: str = DEFAULT_MAIN_REF,
+    ) -> list[str]:
+        """Paths newly introduced on the branch that are still absent from main."""
+        encoded_branch = quote(branch, safe="/")
+        payload = self._request(
+            "GET",
+            f"/repos/{self.repo}/compare/{main_ref}...{encoded_branch}",
+        )
+        if not isinstance(payload, Mapping):
+            raise ValueError("GitHub compare endpoint returned a non-object response")
+        files = payload.get("files")
+        if not isinstance(files, list):
+            return []
+        missing: list[str] = []
+        for item in files:
+            if not isinstance(item, Mapping):
+                continue
+            status = str(item.get("status") or "")
+            filename = item.get("filename")
+            if status not in {"added", "renamed"} or not isinstance(filename, str):
+                continue
+            if not self.file_exists_on_main(filename, main_ref=main_ref):
+                missing.append(filename)
+        return missing
 
     def close_pull_request(self, number: int) -> None:
         """Close an open pull request."""
@@ -192,6 +312,14 @@ class GitHubClient:
             "PATCH",
             f"/repos/{self.repo}/pulls/{number}",
             {"state": "closed"},
+        )
+
+    def comment_on_pull_request(self, number: int, body: str) -> None:
+        """Post an issue comment on a pull request."""
+        self._request(
+            "POST",
+            f"/repos/{self.repo}/issues/{number}/comments",
+            {"body": body},
         )
 
     def delete_branch(self, branch: str) -> None:
@@ -209,6 +337,171 @@ def compare_ahead_by(payload: Mapping[str, Any]) -> int:
     if type(value) is not int or value < 0:
         raise ValueError("GitHub compare response has an invalid ahead_by value")
     return value
+
+
+def compare_behind_by(payload: Mapping[str, Any]) -> int:
+    """Return how many commits on main are absent from the branch."""
+    value = payload.get("behind_by")
+    if type(value) is not int or value < 0:
+        raise ValueError("GitHub compare response has an invalid behind_by value")
+    return value
+
+
+def repository_root() -> Path | None:
+    """Return the checkout root when this script runs inside a git clone."""
+    start = Path(__file__).resolve().parent.parent
+    candidate = start
+    for _ in range(4):
+        if (candidate / ".git").exists():
+            return candidate
+        if candidate.parent == candidate:
+            break
+        candidate = candidate.parent
+    return None
+
+
+def _run_git(args: Sequence[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _head_ref_for_branch(branch: str, head_ref: str | None) -> str:
+    """Resolve a local or remote ref for a PR head branch name."""
+    return head_ref if head_ref is not None else f"origin/{branch}"
+
+
+def git_cherry_counts(
+    branch: str,
+    *,
+    cwd: Path,
+    main_ref: str = f"origin/{DEFAULT_MAIN_REF}",
+    head_ref: str | None = None,
+) -> tuple[int, int] | None:
+    """Count patch-equivalent (``-``) and unique (``+``) commits like ``git cherry``."""
+    resolved_head = _head_ref_for_branch(branch, head_ref)
+    if _run_git(["rev-parse", "--verify", resolved_head], cwd=cwd).returncode != 0:
+        return None
+    if _run_git(["rev-parse", "--verify", main_ref], cwd=cwd).returncode != 0:
+        return None
+    proc = _run_git(["cherry", main_ref, resolved_head], cwd=cwd)
+    if proc.returncode != 0:
+        return None
+    equivalent = 0
+    unique = 0
+    for line in proc.stdout.splitlines():
+        if line.startswith("-"):
+            equivalent += 1
+        elif line.startswith("+"):
+            unique += 1
+    return equivalent, unique
+
+
+def git_paths_missing_on_main(
+    branch: str,
+    *,
+    cwd: Path,
+    main_ref: str = f"origin/{DEFAULT_MAIN_REF}",
+    head_ref: str | None = None,
+) -> list[str]:
+    """Return paths added on the branch relative to main that main still lacks."""
+    resolved_head = _head_ref_for_branch(branch, head_ref)
+    proc = _run_git(
+        [
+            "diff",
+            "--name-only",
+            "--diff-filter=A",
+            f"{main_ref}...{resolved_head}",
+        ],
+        cwd=cwd,
+    )
+    if proc.returncode != 0:
+        return []
+    missing: list[str] = []
+    for path in proc.stdout.splitlines():
+        path = path.strip()
+        if not path:
+            continue
+        exists = _run_git(["cat-file", "-e", f"{main_ref}:{path}"], cwd=cwd)
+        if exists.returncode != 0:
+            missing.append(path)
+    return missing
+
+
+def git_main_integration_commit(
+    pr_number: int,
+    *,
+    cwd: Path,
+    main_ref: str = f"origin/{DEFAULT_MAIN_REF}",
+) -> str:
+    """Find a short main commit message that references the pull request."""
+    proc = _run_git(
+        [
+            "log",
+            main_ref,
+            "--format=%h %s",
+            f"--grep=#{pr_number}",
+            "-i",
+            "-n",
+            "20",
+        ],
+        cwd=cwd,
+    )
+    if proc.returncode != 0 or not proc.stdout.strip():
+        proc = _run_git(
+            [
+                "log",
+                main_ref,
+                "--format=%h %s",
+                f"--grep=PR #{pr_number}",
+                "-i",
+                "-n",
+                "20",
+            ],
+            cwd=cwd,
+        )
+    if proc.returncode != 0:
+        return ""
+    for line in proc.stdout.splitlines():
+        if re.search(rf"#\s*{pr_number}\b", line, flags=re.IGNORECASE):
+            return line.strip()
+    return proc.stdout.splitlines()[0].strip() if proc.stdout.strip() else ""
+
+
+def gather_branch_integration(
+    client: GitHubClient,
+    branch: str,
+    *,
+    pr_number: int | None = None,
+    main_ref: str = DEFAULT_MAIN_REF,
+) -> BranchIntegration:
+    """Merge GitHub compare data with optional local git cherry signals."""
+    details = client.compare_with_main_details(branch, main_ref=main_ref)
+    missing_api = tuple(client.paths_added_by_branch_missing_on_main(branch, main_ref=main_ref))
+    root = repository_root()
+    cherry_equivalent: int | None = None
+    cherry_unique: int | None = None
+    missing_git: list[str] = []
+    landmark = ""
+    if root is not None:
+        cherry = git_cherry_counts(branch, cwd=root)
+        if cherry is not None:
+            cherry_equivalent, cherry_unique = cherry
+        missing_git = git_paths_missing_on_main(branch, cwd=root)
+        if pr_number is not None:
+            landmark = git_main_integration_commit(pr_number, cwd=root)
+    missing = tuple(dict.fromkeys([*missing_git, *missing_api]))
+    return BranchIntegration(
+        behind_by=details.behind_by,
+        cherry_equivalent=cherry_equivalent,
+        cherry_unique=cherry_unique,
+        paths_missing_on_main=missing,
+        main_integration_commit=landmark,
+    )
 
 
 def _classify_branch(
@@ -248,34 +541,122 @@ def _classify_branch(
     )
 
 
+def _format_missing_paths(paths: Sequence[str], *, limit: int = 6) -> str:
+    if not paths:
+        return ""
+    shown = ", ".join(paths[:limit])
+    if len(paths) > limit:
+        shown += f" (+{len(paths) - limit} ещё)"
+    return shown
+
+
 def _classify_pull_request(
     pull_request: PullRequest,
     branches: Mapping[str, BranchStatus],
     repo: str,
+    integration: BranchIntegration | None = None,
 ) -> PullRequestDecision:
-    """Close only pull requests whose same-repository head is fully merged."""
+    """Classify a pull request using merge refs, patch equivalence, and gaps on main."""
     branch = branches.get(pull_request.head_branch)
+    integration = integration or BranchIntegration(
+        behind_by=branch.behind_by if branch is not None else 0,
+    )
+    number = pull_request.number
+    landmark = integration.main_integration_commit
+    landmark_note = f" (main: {landmark})" if landmark else ""
+
+    def decision(action: Action, reason: str, comment_body: str = "") -> PullRequestDecision:
+        return PullRequestDecision(
+            number=number,
+            title=pull_request.title,
+            head_branch=pull_request.head_branch,
+            action=action,
+            reason=reason,
+            comment_body=comment_body,
+        )
+
     if pull_request.head_repo != repo:
-        action: Action = "keep"
-        reason = "head branch belongs to a fork"
-    elif pull_request.head_branch == "main":
-        action = "keep"
-        reason = "head branch is the protected default branch"
-    elif branch is None:
-        action = "keep"
-        reason = "head branch was not found among remote branches"
-    elif branch.ahead_by == 0:
-        action = "close"
-        reason = "head branch is fully merged with main (ahead_by=0)"
-    else:
-        action = "keep"
-        reason = f"head branch has {branch.ahead_by} commit(s) not in main"
-    return PullRequestDecision(
-        number=pull_request.number,
-        title=pull_request.title,
-        head_branch=pull_request.head_branch,
-        action=action,
-        reason=reason,
+        return decision("keep", "head branch belongs to a fork")
+    if pull_request.head_branch == DEFAULT_MAIN_REF:
+        return decision("keep", "head branch is the protected default branch")
+    if branch is None:
+        return decision("keep", "head branch was not found among remote branches")
+    if branch.ahead_by == 0:
+        comment = (
+            f"Закрываю PR #{number}: head-ветка полностью достижима из "
+            f"`{DEFAULT_MAIN_REF}` (ahead_by=0).{landmark_note}"
+        )
+        return decision(
+            "close",
+            f"head branch is fully merged with main (ahead_by=0){landmark_note}",
+            comment,
+        )
+
+    cherry_eq = integration.cherry_equivalent
+    cherry_uniq = integration.cherry_unique
+    if (
+        cherry_eq is not None
+        and cherry_uniq is not None
+        and cherry_eq > 0
+        and cherry_uniq == 0
+    ):
+        comment = (
+            f"Закрываю PR #{number}: патч ветки уже присутствует в `{DEFAULT_MAIN_REF}` "
+            f"(squash/cherry-pick; все {cherry_eq} commit(ов) эквивалентны через `git cherry`)."
+            f"{landmark_note}"
+        )
+        return decision(
+            "close",
+            (
+                "patch equivalent to main via squash/cherry-pick "
+                f"({cherry_eq} commit(s); git cherry -)"
+            )
+            + landmark_note,
+            comment,
+        )
+
+    missing = list(integration.paths_missing_on_main)
+    if missing:
+        paths = _format_missing_paths(missing)
+        conflict = ""
+        if pull_request.mergeable == "CONFLICTING":
+            conflict = f" GitHub mergeable=CONFLICTING ({pull_request.merge_state_status or 'n/a'})."
+        comment = (
+            f"PR #{number} оставляю открытым: в `{DEFAULT_MAIN_REF}` до сих пор нет "
+            f"файлов/путей из этой ветки: {paths}."
+            f"{conflict} "
+            f"Нужно либо влить оставшееся в main, либо осознанно отказаться от этих путей."
+        )
+        return decision(
+            "keep",
+            f"paths still absent on main: {paths}{conflict}",
+            comment,
+        )
+
+    behind = max(integration.behind_by, branch.behind_by)
+    stale = behind >= STALE_BEHIND_THRESHOLD and branch.ahead_by > 0
+    if stale:
+        comment = (
+            f"Закрываю PR #{number}: черновик устарел (behind `{DEFAULT_MAIN_REF}` "
+            f"на {behind} commit(ов), ahead {branch.ahead_by}). "
+            f"Содержимое по тем же путям уже эволюционировало в main; "
+            f"уникальных отсутствующих путей не осталось."
+            f"{landmark_note}"
+        )
+        return decision(
+            "close",
+            f"stale branch superseded by main (behind_by={behind}, ahead_by={branch.ahead_by})"
+            + landmark_note,
+            comment,
+        )
+
+    return decision(
+        "keep",
+        f"head branch has {branch.ahead_by} commit(s) not in main; no auto-close rule matched",
+        (
+            f"PR #{number} оставляю открытым: в ветке {branch.ahead_by} commit(ов) "
+            f"вне `{DEFAULT_MAIN_REF}`; behind={behind}. Требуется ручной merge/rebase."
+        ),
     )
 
 
@@ -286,11 +667,18 @@ def build_plan(
     branches: Sequence[BranchStatus],
     include_merged: bool = False,
     pr_numbers: set[int] | None = None,
+    integration_by_pr: Mapping[int, BranchIntegration] | None = None,
 ) -> HygienePlan:
     """Build a dry-run plan from open pull requests and compared branches."""
     branch_by_name = {branch.name: branch for branch in branches}
+    integrations = integration_by_pr or {}
     pr_decisions = [
-        _classify_pull_request(pr, branch_by_name, repo)
+        _classify_pull_request(
+            pr,
+            branch_by_name,
+            repo,
+            integrations.get(pr.number),
+        )
         for pr in sorted(pull_requests, key=lambda item: item.number)
         if pr_numbers is None or pr.number in pr_numbers
     ]
@@ -315,12 +703,19 @@ def execute_plan(
     plan: HygienePlan,
     *,
     max_operations: int | None = None,
+    annotate_remaining: bool = False,
 ) -> list[str]:
     """Apply the mutating actions in a plan and return a concise audit list."""
     if max_operations is not None and max_operations < 0:
         raise ValueError("max_operations must be non-negative")
     operations: list[str] = []
     for pr in plan.pull_requests:
+        wants_comment = pr.comment_body.strip()
+        if wants_comment and (pr.action == "close" or annotate_remaining):
+            if max_operations is not None and len(operations) >= max_operations:
+                return operations
+            client.comment_on_pull_request(pr.number, pr.comment_body.strip())
+            operations.append(f"commented on PR #{pr.number}")
         if pr.action != "close":
             continue
         if max_operations is not None and len(operations) >= max_operations:
@@ -368,6 +763,8 @@ def render_text(plan: HygienePlan, operations: Sequence[str]) -> str:
                 f"  {pr.action.upper()} #{pr.number} {pr.title} "
                 f"[{pr.head_branch}] — {pr.reason}"
             )
+            if pr.comment_body.strip():
+                lines.append(f"      comment: {pr.comment_body.strip()}")
     else:
         lines.append("  (none selected)")
     lines.extend(["", "Branches:"])
@@ -433,6 +830,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="include fully merged branches as deletion candidates",
     )
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    parser.add_argument(
+        "--annotate-remaining",
+        action="store_true",
+        help="when applying, also comment on PRs left open (default with --apply)",
+    )
+    parser.add_argument(
+        "--no-annotate-remaining",
+        action="store_true",
+        help="with --apply, do not comment on PRs that stay open",
+    )
     return parser
 
 
@@ -454,23 +861,53 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "or GITHUB_TOKEN"
             )
         client = GitHubClient(repo=args.repo, token=token)
-        pull_requests = client.list_open_pull_requests()
-        branch_statuses = [
-            BranchStatus(name=name, ahead_by=0)
-            if name == "main"
-            else BranchStatus(name=name, ahead_by=client.compare_with_main(name))
-            for name in client.list_remote_branches()
+        pull_requests = [
+            client.get_pull_request(pr.number)
+            for pr in client.list_open_pull_requests()
         ]
+        integration_by_pr: dict[int, BranchIntegration] = {}
+        branch_statuses: list[BranchStatus] = []
+        for name in client.list_remote_branches():
+            if name == DEFAULT_MAIN_REF:
+                branch_statuses.append(BranchStatus(name=name, ahead_by=0, behind_by=0))
+                continue
+            details = client.compare_with_main_details(name)
+            branch_statuses.append(
+                BranchStatus(
+                    name=name,
+                    ahead_by=details.ahead_by,
+                    behind_by=details.behind_by,
+                )
+            )
+        for pr in pull_requests:
+            if pr.head_repo != args.repo or pr.head_branch == DEFAULT_MAIN_REF:
+                continue
+            integration_by_pr[pr.number] = gather_branch_integration(
+                client,
+                pr.head_branch,
+                pr_number=pr.number,
+            )
         plan = build_plan(
             repo=args.repo,
             pull_requests=pull_requests,
             branches=branch_statuses,
             include_merged=args.include_merged,
             pr_numbers=set(args.pr) if args.pr is not None else None,
+            integration_by_pr=integration_by_pr,
         )
         plan = replace(plan, dry_run=not args.apply)
+        annotate_remaining = False
         if args.apply:
-            operations = execute_plan(client, plan, max_operations=args.max)
+            annotate_remaining = not args.no_annotate_remaining
+            if args.annotate_remaining:
+                annotate_remaining = True
+        if args.apply:
+            operations = execute_plan(
+                client,
+                plan,
+                max_operations=args.max,
+                annotate_remaining=annotate_remaining,
+            )
         else:
             operations = planned_operations(plan, max_operations=args.max)
     except (OSError, ValueError, urllib.error.URLError) as exc:
