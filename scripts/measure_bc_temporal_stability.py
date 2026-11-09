@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Temporal stability test for the BC pore pass applied per video frame.
+"""Manual measurement: temporal stability of the BC pore pass per video frame.
+
+Not a pytest module (run explicitly). Pytest does not collect scripts/ (testpaths = tests/).
 
 Two ways to call BC_SkinTexture on a video:
   A) one call per frame, SAME seed  -> the pore field is identical in screen space
