@@ -6,10 +6,16 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from scripts.skin_metric_shape import (
+    SHAPE_MAX_COMPONENT_DENSITY,
+    SHAPE_MIN_COMPONENT_DENSITY,
+    SHAPE_MIN_PORE_RMS,
+)
 from scripts.skin_texture_metrics import measure_image
 from scripts.skin_texture_metrics.metrics import (
     PLASTIC_MAX_PORE_RMS,
     SAND_MAX_SURVIVAL,
+    legacy_classify,
 )
 
 METRIC_KEYS = (
@@ -23,6 +29,7 @@ METRIC_KEYS = (
     "lap",
     "classification",
 )
+SHAPE_METRIC_KEYS = ("shape_component_density_per_10k",)
 VISUAL_CLASSES = {"plastic", "pores", "digital_sand", "uncertain"}
 
 
@@ -52,6 +59,12 @@ def _threshold_recommendation(rows: list[dict]) -> dict:
         for row in rows
         if row["family"] == "fine_pores" and not row["truth_match"]
     ]
+    legacy_fine_failures = [
+        row["case_id"]
+        for row in rows
+        if row["family"] == "fine_pores"
+        and legacy_classify(row["metrics"]) != row["constructive_label"]
+    ]
     core_pores = [float(row["metrics"]["pore_rms"]) for row in core if row["constructive_label"] == "pores"]
     core_plastic = [float(row["metrics"]["pore_rms"]) for row in core if row["constructive_label"] == "plastic"]
     core_sand_survival = [
@@ -59,6 +72,26 @@ def _threshold_recommendation(rows: list[dict]) -> dict:
     ]
     core_pore_survival = [
         float(row["metrics"]["survival"]) for row in core if row["constructive_label"] == "pores"
+    ]
+    core_pore_density = [
+        float(row["metrics"]["shape_component_density_per_10k"])
+        for row in core
+        if row["constructive_label"] == "pores"
+    ]
+    core_sand_density = [
+        float(row["metrics"]["shape_component_density_per_10k"])
+        for row in core
+        if row["constructive_label"] == "digital_sand"
+    ]
+    pore_density = [
+        float(row["metrics"]["shape_component_density_per_10k"])
+        for row in rows
+        if row["constructive_label"] == "pores"
+    ]
+    sand_density = [
+        float(row["metrics"]["shape_component_density_per_10k"])
+        for row in rows
+        if row["constructive_label"] == "digital_sand"
     ]
     fine_pore_survival = [
         float(row["metrics"]["survival"]) for row in rows if row["family"] == "fine_pores"
@@ -72,16 +105,37 @@ def _threshold_recommendation(rows: list[dict]) -> dict:
         and min(fine_pore_survival) <= max(mixed_survival)
         and min(mixed_survival) <= max(fine_pore_survival)
     )
+    density_separation_ratio = (
+        min(sand_density) / max(max(pore_density), 1e-9) if pore_density and sand_density else None
+    )
     return {
         "status": "provisional_pending_human_review",
         "plastic_max_pore_rms": float(PLASTIC_MAX_PORE_RMS),
         "sand_max_survival": float(SAND_MAX_SURVIVAL),
-        "action": "retain existing values provisionally; do not auto-fit or claim validation",
+        "shape_max_component_density": float(SHAPE_MAX_COMPONENT_DENSITY),
+        "shape_min_component_density": float(SHAPE_MIN_COMPONENT_DENSITY),
+        "shape_min_pore_rms": float(SHAPE_MIN_PORE_RMS),
+        "selected_shape_feature": "shape_component_density_per_10k",
+        "action": (
+            "retain legacy FFT/survival bounds; apply sparse signed high-pass "
+            "component density when shape fields are present"
+        ),
         "basis": {
             "core_plastic_pore_rms_max": max(core_plastic, default=None),
             "core_pores_pore_rms_min": min(core_pores, default=None),
             "core_sand_survival_max": max(core_sand_survival, default=None),
             "core_pores_survival_min": min(core_pore_survival, default=None),
+            "core_pore_component_density_max": max(core_pore_density, default=None),
+            "core_sand_component_density_min": min(core_sand_density, default=None),
+            "pore_component_density_range": [
+                min(pore_density, default=None),
+                max(pore_density, default=None),
+            ],
+            "sand_component_density_range": [
+                min(sand_density, default=None),
+                max(sand_density, default=None),
+            ],
+            "component_density_separation_ratio": density_separation_ratio,
             "fine_pore_survival_range": [
                 min(fine_pore_survival, default=None),
                 max(fine_pore_survival, default=None),
@@ -91,13 +145,17 @@ def _threshold_recommendation(rows: list[dict]) -> dict:
                 max(mixed_survival, default=None),
             ],
             "fine_pore_and_mixed_survival_ranges_overlap": survival_overlap,
+            "legacy_fine_pore_truth_mismatches": legacy_fine_failures,
             "fine_pore_truth_mismatches": fine_failures,
         },
         "justification": (
-            "The retained thresholds separate the four constructive core controls. "
-            "The normal fine-pore diagnostics test a different spatial scale and expose "
-            "whether energy plus blur survival is sufficient; failures are reported, not "
-            "used to move a threshold until a blind human labels the same sheets."
+            "Legacy plastic max pore RMS and digital-sand max survival still separate "
+            "the four constructive core controls. Fine pores and pore+noise mixtures "
+            "overlap on survival alone, so classification also requires "
+            "shape_component_density_per_10k (signed 8-connected high-pass components "
+            "per 10k pixels). Its upper bound is the midpoint of the core pore maximum "
+            "and core sand minimum densities; minimum density and pore RMS guards come "
+            "from the same four core controls only, not from the former fine-pore misses."
         ),
         "caveat": (
             "Final visual judgement remains with a human. Synthetic labels establish what "
@@ -135,7 +193,10 @@ def build_calibration_report(
             "family": case["family"],
             "core": bool(case["core"]),
             "constructive_label": case["expected_class"],
-            "metrics": {name: measured[name] for name in METRIC_KEYS},
+            "metrics": {
+                name: measured[name]
+                for name in METRIC_KEYS + SHAPE_METRIC_KEYS
+            },
             "metric_class": actual_class,
             "truth_match": actual_class == case["expected_class"],
             "parameters": case["parameters"],
@@ -219,15 +280,16 @@ def calibration_markdown(report: dict) -> str:
         "",
         "## Label -> metric -> class",
         "",
-        "| case | blind crop | constructive | visual | pore_rms | survival | metric | truth match |",
-        "|---|---:|---|---|---:|---:|---|---|",
+        "| case | blind crop | constructive | visual | pore_rms | survival | comp/10k | metric | truth match |",
+        "|---|---:|---|---|---:|---:|---:|---|---|",
     ]
     for row in report["rows"]:
         visual = row["visual_label"] or {}
+        density = float(row["metrics"]["shape_component_density_per_10k"])
         lines.append(
             f"| {row['case_id']} | {row['blind_crop'] or ''} | {row['constructive_label']} | "
             f"{visual.get('class', 'pending')} | {float(row['metrics']['pore_rms']):.4f} | "
-            f"{float(row['metrics']['survival']):.4f} | {row['metric_class']} | "
+            f"{float(row['metrics']['survival']):.4f} | {density:.3f} | {row['metric_class']} | "
             f"{row['truth_match']} |"
         )
     recommendation = report["recommended_thresholds"]
@@ -238,6 +300,12 @@ def calibration_markdown(report: dict) -> str:
             "",
             f"- plastic maximum pore RMS: **{recommendation['plastic_max_pore_rms']:.3f}**",
             f"- digital-sand maximum survival: **{recommendation['sand_max_survival']:.3f}**",
+            f"- shape maximum component density / 10k: "
+            f"**{recommendation['shape_max_component_density']:.3f}** "
+            f"({recommendation['selected_shape_feature']})",
+            f"- shape minimum component density / 10k: "
+            f"**{recommendation['shape_min_component_density']:.3f}**",
+            f"- shape minimum pore RMS: **{recommendation['shape_min_pore_rms']:.3f}**",
             f"- action: {recommendation['action']}",
             f"- rationale: {recommendation['justification']}",
             f"- caveat: {recommendation['caveat']}",

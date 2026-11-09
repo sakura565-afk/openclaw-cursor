@@ -5,40 +5,43 @@ Constructive truth is not human eye labelling. Disagreements are retained.
 ## Summary
 
 - Core constructive controls: 4/4 metric matches.
-- All synthetic cases: 16/20 constructive-label matches.
-- Blind visual labels loaded: 20; metric/visual matches: 14.
-- Constructive mismatches: fine_pores_diagnostic_0, fine_pores_diagnostic_1, fine_pores_diagnostic_2, fine_pores_diagnostic_3.
-- Visual/metric mismatches: mixed_core, mixed_2, fine_pores_diagnostic_0, fine_pores_diagnostic_1, fine_pores_diagnostic_2, fine_pores_diagnostic_3.
+- All synthetic cases: 20/20 constructive-label matches.
+- Blind visual labels loaded: 20; metric/visual matches: 18.
+- Constructive mismatches: none.
+- Visual/metric mismatches: mixed_core, mixed_2.
 
 ## Label -> metric -> class
 
-| case | blind crop | constructive | visual | pore_rms | survival | metric | truth match |
-|---|---:|---|---|---:|---:|---|---|
-| plastic_core | 12 | plastic | plastic | 0.0000 | 0.0000 | plastic | True |
-| plastic_level_96 | 19 | plastic | plastic | 0.0000 | 0.0000 | plastic | True |
-| plastic_level_160 | 13 | plastic | plastic | 0.0000 | 0.0000 | plastic | True |
-| plastic_level_192 | 1 | plastic | plastic | 0.0000 | 0.0000 | plastic | True |
-| pores_core | 14 | pores | pores | 5.8114 | 0.6208 | pores | True |
-| pores_coarse_1 | 3 | pores | pores | 5.7485 | 0.6201 | pores | True |
-| pores_coarse_2 | 17 | pores | pores | 6.3732 | 0.6207 | pores | True |
-| pores_coarse_3 | 6 | pores | pores | 6.9162 | 0.6178 | pores | True |
-| noise_core | 5 | digital_sand | digital_sand | 6.8396 | 0.1162 | digital_sand | True |
-| noise_sigma_16 | 7 | digital_sand | digital_sand | 9.1138 | 0.1141 | digital_sand | True |
-| noise_sigma_20 | 15 | digital_sand | digital_sand | 11.5065 | 0.1179 | digital_sand | True |
-| noise_sigma_24 | 9 | digital_sand | digital_sand | 13.8059 | 0.1148 | digital_sand | True |
-| mixed_core | 2 | digital_sand | pores | 8.8830 | 0.3198 | digital_sand | True |
-| mixed_1 | 8 | digital_sand | digital_sand | 10.7612 | 0.2572 | digital_sand | True |
-| mixed_2 | 4 | digital_sand | pores | 13.0902 | 0.2285 | digital_sand | True |
-| mixed_3 | 16 | digital_sand | digital_sand | 15.0799 | 0.2122 | digital_sand | True |
-| fine_pores_diagnostic_0 | 10 | pores | pores | 5.0598 | 0.2557 | digital_sand | False |
-| fine_pores_diagnostic_1 | 18 | pores | pores | 3.4521 | 0.2513 | plastic | False |
-| fine_pores_diagnostic_2 | 20 | pores | pores | 6.6245 | 0.2705 | digital_sand | False |
-| fine_pores_diagnostic_3 | 11 | pores | pores | 5.3331 | 0.2690 | digital_sand | False |
+| case | blind crop | constructive | visual | pore_rms | survival | comp/10k | metric | truth match |
+|---|---:|---|---|---:|---:|---:|---|---|
+| plastic_core | 12 | plastic | plastic | 0.0000 | 0.0000 | 0.000 | plastic | True |
+| plastic_level_96 | 19 | plastic | plastic | 0.0000 | 0.0000 | 0.000 | plastic | True |
+| plastic_level_160 | 13 | plastic | plastic | 0.0000 | 0.0000 | 0.000 | plastic | True |
+| plastic_level_192 | 1 | plastic | plastic | 0.0000 | 0.0000 | 0.000 | plastic | True |
+| pores_core | 14 | pores | pores | 5.8114 | 0.6208 | 50.998 | pores | True |
+| pores_coarse_1 | 3 | pores | pores | 5.7485 | 0.6201 | 46.115 | pores | True |
+| pores_coarse_2 | 17 | pores | pores | 6.3732 | 0.6207 | 52.083 | pores | True |
+| pores_coarse_3 | 6 | pores | pores | 6.9162 | 0.6178 | 47.743 | pores | True |
+| noise_core | 5 | digital_sand | digital_sand | 6.8396 | 0.1162 | 1552.192 | digital_sand | True |
+| noise_sigma_16 | 7 | digital_sand | digital_sand | 9.1138 | 0.1141 | 1567.654 | digital_sand | True |
+| noise_sigma_20 | 15 | digital_sand | digital_sand | 11.5065 | 0.1179 | 1535.102 | digital_sand | True |
+| noise_sigma_24 | 9 | digital_sand | digital_sand | 13.8059 | 0.1148 | 1540.799 | digital_sand | True |
+| mixed_core | 2 | digital_sand | pores | 8.8830 | 0.3198 | 1099.447 | digital_sand | True |
+| mixed_1 | 8 | digital_sand | digital_sand | 10.7612 | 0.2572 | 1201.714 | digital_sand | True |
+| mixed_2 | 4 | digital_sand | pores | 13.0902 | 0.2285 | 1315.375 | digital_sand | True |
+| mixed_3 | 16 | digital_sand | digital_sand | 15.0799 | 0.2122 | 1346.842 | digital_sand | True |
+| fine_pores_diagnostic_0 | 10 | pores | pores | 5.0598 | 0.2557 | 259.874 | pores | True |
+| fine_pores_diagnostic_1 | 18 | pores | pores | 3.4521 | 0.2513 | 277.778 | pores | True |
+| fine_pores_diagnostic_2 | 20 | pores | pores | 6.6245 | 0.2705 | 250.380 | pores | True |
+| fine_pores_diagnostic_3 | 11 | pores | pores | 5.3331 | 0.2690 | 134.006 | pores | True |
 
 ## Provisional thresholds
 
 - plastic maximum pore RMS: **4.900**
 - digital-sand maximum survival: **0.600**
-- action: retain existing values provisionally; do not auto-fit or claim validation
-- rationale: The retained thresholds separate the four constructive core controls. The normal fine-pore diagnostics test a different spatial scale and expose whether energy plus blur survival is sufficient; failures are reported, not used to move a threshold until a blind human labels the same sheets.
+- shape maximum component density / 10k: **575.222** (shape_component_density_per_10k)
+- shape minimum component density / 10k: **25.499**
+- shape minimum pore RMS: **2.906**
+- action: retain legacy FFT/survival bounds; apply sparse signed high-pass component density when shape fields are present
+- rationale: Legacy plastic max pore RMS and digital-sand max survival still separate the four constructive core controls. Fine pores and pore+noise mixtures overlap on survival alone, so classification also requires shape_component_density_per_10k (signed 8-connected high-pass components per 10k pixels). Its upper bound is the midpoint of the core pore maximum and core sand minimum densities; minimum density and pore RMS guards come from the same four core controls only, not from the former fine-pore misses.
 - caveat: Final visual judgement remains with a human. Synthetic labels establish what was constructed, not what a human sees; AI visual labels are only a pre-check.
