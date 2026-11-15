@@ -12,6 +12,10 @@ import urllib.request
 
 
 DYNAMIC_INPUT_TYPES = {"COMFY_AUTOGROW_V3", "COMBO", "COMFY_DYNAMICCOMBO_V3"}
+# Only AUTOGROW inputs are addressed through named slots ("images.image_1").
+# COMBO / COMFY_DYNAMICCOMBO_V3 take a plain string (or a dict) - demanding
+# "sampling_mode.off" style slots for them is a false positive.
+NAMED_SLOT_INPUT_TYPES = {"COMFY_AUTOGROW_V3"}
 PRIMITIVE_TYPES = {"INT", "FLOAT", "STRING", "BOOLEAN"}
 OBJECT_INFO_URL = "http://127.0.0.1:8188/object_info"
 OBJECT_INFO_CACHE = Path.home() / ".cache" / "comfy_graph_validate" / "object_info.json"
@@ -93,12 +97,15 @@ class ComfyGraphValidator:
                     continue
                 input_type = self._declared_type(declaration)
                 if input_type in PRIMITIVE_TYPES and self._is_link(value):
+                    # A link may legitimately carry the primitive (e.g. width
+                    # taken from GetImageSize), and /object_info does not
+                    # expose output types - report it, but do not block.
                     issues.append(Issue(
                         str(node_id), class_type, "type_mismatch",
                         f"input '{input_name}' expects {input_type}, not a link",
-                        "error",
+                        "warning",
                     ))
-                if self._is_dynamic(declaration) and (
+                if self._requires_named_slots(declaration) and (
                     "." not in input_name or self._is_link_list(value)
                 ):
                     issues.append(Issue(
@@ -109,7 +116,6 @@ class ComfyGraphValidator:
                     ))
                 elif (
                     input_type not in PRIMITIVE_TYPES
-                    and not self._is_dynamic(declaration)
                     and self._is_link_list(value)
                 ):
                     issues.append(Issue(
@@ -148,6 +154,12 @@ class ComfyGraphValidator:
     def _is_dynamic(declaration: Any) -> bool:
         raw_type = declaration[0] if isinstance(declaration, list) and declaration else declaration
         return isinstance(raw_type, str) and raw_type in DYNAMIC_INPUT_TYPES
+
+    @staticmethod
+    def _requires_named_slots(declaration: Any) -> bool:
+        """True only for AUTOGROW inputs, which are addressed as name.slot."""
+        raw_type = declaration[0] if isinstance(declaration, list) and declaration else declaration
+        return isinstance(raw_type, str) and raw_type in NAMED_SLOT_INPUT_TYPES
 
     @staticmethod
     def _valid_dynamic_slot(declaration: Any, slot: str) -> bool:
