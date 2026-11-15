@@ -10,7 +10,26 @@ import urllib.request
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Callable
 from urllib.parse import quote
+
+
+class _AlreadyReady(Exception):
+    """Another process finished the destination while we were waiting on the lock."""
+
+
+def _normalize_sha256(value: str) -> str:
+    digest = (value or "").strip()
+    if digest.lower().startswith("sha256:"):
+        digest = digest.split(":", 1)[1]
+    return digest.lower()
+
+
+def _hf_headers() -> dict[str, str]:
+    token = os.environ.get("HF_TOKEN")
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return {}
 
 
 @dataclass(frozen=True)
@@ -50,7 +69,8 @@ class Downloader:
         return [
             FileTask(
                 repo=item["repo"], path=item["path"], dest=item["dest"],
-                size=int(item["size"]), sha256=item.get("sha256", ""),
+                size=int(item["size"]),
+                sha256=_normalize_sha256(str(item.get("sha256", "") or "")),
             )
             for item in spec["files"]
         ]
@@ -64,25 +84,43 @@ class Downloader:
         dest = Path(task.dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with self._destination_lock(dest):
-                try:
-                    expected_sha256 = task.sha256 or self._fetch_sha256(task)
-                except (OSError, ValueError, KeyError, StopIteration):
-                    return DownloadResult(
-                        file=str(dest), status="metadata_failed", size=0, sha256="",
-                        sha256_match=False, seconds=time.monotonic() - started,
-                        segments=segments,
-                    )
-                if dest.exists():
-                    actual_size = dest.stat().st_size
-                    digest = self._sha256(dest)
-                    if actual_size == task.size and digest == expected_sha256:
+            try:
+                expected_sha256 = task.sha256 or self._fetch_sha256(task)
+            except (OSError, ValueError, KeyError, StopIteration):
+                return DownloadResult(
+                    file=str(dest), status="metadata_failed", size=0, sha256="",
+                    sha256_match=False, seconds=time.monotonic() - started,
+                    segments=segments,
+                )
+            expected_sha256 = _normalize_sha256(expected_sha256)
+
+            def _verified_ready() -> bool:
+                if not dest.exists():
+                    return False
+                actual_size = dest.stat().st_size
+                if actual_size != task.size:
+                    return False
+                return self._sha256(dest) == expected_sha256
+
+            try:
+                with self._destination_lock(dest, ready=_verified_ready):
+                    if _verified_ready():
+                        actual_size = dest.stat().st_size
+                        digest = self._sha256(dest)
                         return DownloadResult(
                             file=str(dest), status="ok", size=actual_size, sha256=digest,
                             sha256_match=True, seconds=time.monotonic() - started,
                             segments=segments,
                         )
-                return self._download_locked(task, segments, started, expected_sha256)
+                    return self._download_locked(task, segments, started, expected_sha256)
+            except _AlreadyReady:
+                actual_size = dest.stat().st_size
+                digest = self._sha256(dest)
+                return DownloadResult(
+                    file=str(dest), status="ok", size=actual_size, sha256=digest,
+                    sha256_match=True, seconds=time.monotonic() - started,
+                    segments=segments,
+                )
         except TimeoutError:
             return DownloadResult(
                 file=str(dest), status="lock_timeout", size=0, sha256="",
@@ -119,7 +157,7 @@ class Downloader:
                         output.write(chunk)
         actual_size = merged.stat().st_size
         digest = self._sha256(merged)
-        match = actual_size == task.size and digest == expected_sha256
+        match = actual_size == task.size and digest == _normalize_sha256(expected_sha256)
         if match:
             os.replace(merged, dest)
             shutil.rmtree(parts)
@@ -135,7 +173,8 @@ class Downloader:
         repo = quote(task.repo, safe="/")
         path = quote(task.path, safe="/")
         url = f"{self.base_url}/api/models/{repo}/tree/main/{path}?expand=true"
-        with urllib.request.urlopen(url, timeout=30) as response:
+        request = urllib.request.Request(url, headers=_hf_headers())
+        with urllib.request.urlopen(request, timeout=30) as response:
             metadata = json.load(response)
         if isinstance(metadata, list):
             metadata = next(
@@ -151,10 +190,13 @@ class Downloader:
         repo = quote(task.repo, safe="/")
         path = quote(task.path, safe="/")
         url = f"{self.base_url}/{repo}/resolve/main/{path}"
-        return urllib.request.Request(url, headers={"Range": f"bytes={start}-{end}"})
+        headers = {"Range": f"bytes={start}-{end}", **_hf_headers()}
+        return urllib.request.Request(url, headers=headers)
 
     @contextmanager
-    def _destination_lock(self, dest: Path):
+    def _destination_lock(
+        self, dest: Path, ready: Callable[[], bool] | None = None,
+    ):
         path = Path(f"{dest}.lock")
         deadline = time.monotonic() + self.lock_timeout
         while True:
@@ -162,6 +204,8 @@ class Downloader:
                 descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 break
             except FileExistsError:
+                if ready is not None and ready():
+                    raise _AlreadyReady
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f"timed out waiting for {path}")
                 time.sleep(0.05)

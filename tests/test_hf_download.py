@@ -114,6 +114,26 @@ def test_clean_download_has_exact_size_and_sha256(tmp_path, range_server):
     assert dest.read_bytes() == payload
 
 
+def test_wrong_size_on_disk_is_not_treated_as_complete(tmp_path, range_server):
+    payload = bytes(range(256)) * 32
+    server = range_server(payload)
+    dest = tmp_path / "model.bin"
+    dest.write_bytes(payload[:64])
+    task = FileTask(
+        repo="org/repo",
+        path="model.bin",
+        dest=str(dest),
+        size=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+    )
+
+    result = Downloader(base_url=server.url).download(task, segments=4)
+
+    assert result.status == "ok"
+    assert dest.stat().st_size == len(payload)
+    assert dest.read_bytes() == payload
+
+
 def test_interrupted_segment_resumes_on_second_run(tmp_path, range_server):
     payload = bytes(reversed(range(256))) * 32
     server = range_server(payload, fail_after=100)
