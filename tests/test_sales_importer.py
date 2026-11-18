@@ -194,3 +194,187 @@ def test_buyer_rollup_mismatch_blocks_apply(sample_db: Path) -> None:
     with pytest.raises(importer.SalesImportError, match="ПОКОНТРАГЕНТНАЯ"):
         importer.validate_parsed_data(parsed, leaves)
     con.close()
+
+
+FIXTURE_SALONS_NOV = ("Салон Запад", "Салон Север", "Салон Центр")
+NOV_ROW_COUNT = 112
+NOV_QTY = 268.0
+NOV_AMOUNT = 5_766_389.0
+
+# Фрагменты реальных имён — в исходнике importer их быть не должно (тест, не данные).
+_FORBIDDEN_IN_IMPORTER_SOURCE = (
+    "Марьино",
+    "Румер",
+    "Гранд",
+    "Михайлов",
+    "Тюменцева",
+)
+
+
+def test_salons_backfill_from_fixture(sample_db: Path) -> None:
+    con = sqlite3.connect(sample_db)
+    importer.ensure_schema(con)
+    names = {
+        r[0]
+        for r in con.execute(
+            "SELECT name FROM salons WHERE is_active=1"
+        ).fetchall()
+    }
+    con.close()
+    for salon in FIXTURE_SALONS_NOV:
+        assert salon in names
+
+
+def test_november_reimport_preserves_totals_and_types(sample_db: Path) -> None:
+    con = sqlite3.connect(sample_db)
+    parsed, leaves, source_file = _load_month_payload(con, MONTH)
+    importer.apply_import(con, parsed, leaves, source_file)
+
+    row_cnt, qty, amt = con.execute(
+        "SELECT COUNT(*), ROUND(SUM(quantity),2), ROUND(SUM(amount),2) FROM sales WHERE month=?",
+        (MONTH,),
+    ).fetchone()
+    by_type = dict(
+        con.execute(
+            "SELECT buyer_type, COUNT(*) FROM sales WHERE month=? GROUP BY buyer_type",
+            (MONTH,),
+        ).fetchall()
+    )
+    salon_buyers = [
+        r[0]
+        for r in con.execute(
+            "SELECT DISTINCT buyer FROM sales WHERE month=? AND buyer_type='salon'",
+            (MONTH,),
+        ).fetchall()
+    ]
+    split_sum = 0.0
+    for bt in ("ip", "salon", "unknown"):
+        part = con.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM sales WHERE month=? AND buyer_type=?",
+            (MONTH, bt),
+        ).fetchone()[0]
+        split_sum += float(part)
+    con.close()
+
+    assert row_cnt == NOV_ROW_COUNT
+    assert float(qty) == NOV_QTY
+    assert float(amt) == NOV_AMOUNT
+    assert by_type.get("salon") == 100
+    assert by_type.get("ip") == 12
+    assert by_type.get("unknown", 0) == 0
+    assert set(salon_buyers) == set(FIXTURE_SALONS_NOV)
+    assert abs(split_sum - float(amt)) < 0.01
+
+
+def test_classify_salon_from_registry() -> None:
+    registry = {"Салон Юг": {"channel_type": "mixed"}}
+    bt, salon, channel, note = importer.classify_buyer("Салон Юг", registry)
+    assert bt == "salon"
+    assert salon == "Салон Юг"
+    assert channel == "mixed"
+    assert note is None
+
+
+def test_unknown_buyer_not_classified_as_ip_or_salon() -> None:
+    registry: dict = {}
+    bt, salon, channel, note = importer.classify_buyer("Покупатель без справочника", registry)
+    assert bt == "unknown"
+    assert salon is None
+    assert channel is None
+    assert note == importer.ATTRIBUTION_NOTE
+    assert importer.unknown_buyers_in_slice(
+        [{"buyer": "Покупатель без справочника", "qty": 1.0, "amount": 1.0}],
+        registry,
+    ) == ["Покупатель без справочника"]
+
+
+def test_legal_counterparty_is_ip_not_salon() -> None:
+    bt, salon, channel, _ = importer.classify_buyer("ИП Псевдоним", {})
+    assert bt == "ip"
+    assert salon is None
+    assert channel == "b2b"
+
+
+def test_new_salon_in_registry_reclassifies_without_code_change(sample_db: Path) -> None:
+    con = sqlite3.connect(sample_db)
+    importer.ensure_schema(con)
+    con.execute(
+        "INSERT INTO salons (name, channel_type, is_active) VALUES (?,?,1)",
+        ("Салон Юг", "online"),
+    )
+    con.commit()
+    reg = importer.load_salon_registry(con.cursor())
+    bt, salon, channel, note = importer.classify_buyer("Салон Юг", reg)
+    con.close()
+    assert bt == "salon"
+    assert salon == "Салон Юг"
+    assert channel == "online"
+    assert note is None
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        'Общество с ограниченной ответственностью  "Прогресс"',
+        "ИНДИВИДУАЛЬНЫЙ ПРЕДПРИНИМАТЕЛЬ ПСЕВДОНИМ АННА СЕРГЕЕВНА",
+        'Акционерное общество "ЭНЕРГОПРОМ"',
+        'ЗАО "Ромашка"',
+        "Город ИП Контрагент М.С.",
+        "ИП Фаворит",
+        'ООО «Кремль»',
+    ],
+)
+def test_legal_name_forms_classify_as_ip(name: str) -> None:
+    bt, salon, channel, _ = importer.classify_buyer(name, {})
+    assert bt == "ip"
+    assert salon is None
+    assert channel == "b2b"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Салон Север",
+        "Торговый дом Альфа",
+        "ЭНЕРГОПРОМ",
+        "ООО",
+    ],
+)
+def test_non_legal_names_classify_as_unknown_without_registry(name: str) -> None:
+    bt, _, _, note = importer.classify_buyer(name, {})
+    assert bt == "unknown"
+    assert note == importer.ATTRIBUTION_NOTE
+
+
+def test_november_no_unknown_buyers_in_slice(sample_db: Path) -> None:
+    con = sqlite3.connect(sample_db)
+    importer.ensure_schema(con)
+    reg = importer.load_salon_registry(con.cursor())
+    _, leaves, _ = _load_month_payload(con, MONTH)
+    buyers = {x["buyer"] for x in leaves}
+    unknown = [b for b in buyers if importer.classify_buyer(b, reg)[0] == "unknown"]
+    con.close()
+    assert unknown == []
+
+
+def test_buyer_type_totals_cover_slice_amount(sample_db: Path) -> None:
+    con = sqlite3.connect(sample_db)
+    parsed, leaves, source_file = _load_month_payload(con, MONTH)
+    importer.apply_import(con, parsed, leaves, source_file)
+    totals = importer.buyer_type_totals(con.cursor(), MONTH)
+    slice_amt = con.execute(
+        "SELECT SUM(amount) FROM sales WHERE month=?", (MONTH,)
+    ).fetchone()[0]
+    assert totals.get("unknown", (0, 0.0))[0] == 0
+    assert sum(amt for _c, amt in totals.values()) == pytest.approx(float(slice_amt))
+    con.close()
+
+
+def test_sales_tools_sources_have_no_forbidden_real_names() -> None:
+    pkg = Path(importer.__file__).resolve().parent
+    for path in sorted(pkg.glob("*.py")):
+        lower = path.read_text(encoding="utf-8").lower()
+        for fragment in _FORBIDDEN_IN_IMPORTER_SOURCE:
+            assert fragment.lower() not in lower, (
+                f"forbidden fragment {fragment!r} in {path.name}"
+            )

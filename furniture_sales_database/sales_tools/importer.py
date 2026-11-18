@@ -43,17 +43,53 @@ MONTH_ROW_RE = re.compile(r"^[А-Яа-яЁё]+\s+\d{4}\s*г\.?$")
 DEFAULT_REPORT_FILTER = "buyer"
 QTY_AMOUNT_EPS = 0.01
 
-# Розничные салоны -> их собственная точка продаж (salon = buyer).
-KNOWN_SALONS = {
-    "Гранд  (Классика 1 этаж)": "Гранд  (Классика 1 этаж)",
-    "Салон Марьино": "Салон Марьино",
-    "Салон Румер": "Салон Румер",
-}
+# Юрлица/ИП в выгрузке 1С — сокращённые и полные наименования (без угадывания
+# «голого» бренда вроде «ЭНЕРГОПРОМ» без формы).
+_LEGAL_COUNTERPARTY_PREFIX_RES: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"^\s*(?:ИП|ООО|АО|ЗАО|ПАО|ОАО)(?:\s+.+|\s*[\"«»'].+)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*индивидуальный\s+предприниматель\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*общество\s+с\s+ограниченной\s+ответственностью\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^\s*акционерное\s+общество\b", re.IGNORECASE),
+    re.compile(r"^\s*закрытое\s+акционерное\s+общество\b", re.IGNORECASE),
+    re.compile(r"^\s*публичное\s+акционерное\s+общество\b", re.IGNORECASE),
+    re.compile(r"^\s*открытое\s+акционерное\s+общество\b", re.IGNORECASE),
+    re.compile(
+        r"^\s*государственное\s+унитарное\s+предприятие\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*муниципальное\s+унитарное\s+предприятие\b",
+        re.IGNORECASE,
+    ),
+)
+# ИП в середине строки («Город ИП Фамилия И.О.»), не только в начале.
+_EMBEDDED_IP_RE = re.compile(r"(?<![\wА-Яа-яЁё])ИП(?![\wА-Яа-яЁё])", re.IGNORECASE)
+
+ATTRIBUTION_NOTE = (
+    "Точка продажи и продавец не указаны в отчёте — атрибуция ожидается."
+)
 
 
 class SalesImportError(Exception):
     """Импорт отменён: проверки или запись в БД."""
 
+
+SALONS_DDL = """
+CREATE TABLE IF NOT EXISTS salons (
+    name TEXT PRIMARY KEY,
+    channel_type TEXT NOT NULL DEFAULT 'offline',
+    is_active INTEGER NOT NULL DEFAULT 1
+);
+"""
 
 SLICES_DDL = """
 CREATE TABLE IF NOT EXISTS slices (
@@ -223,14 +259,127 @@ def validate_parsed_data(p: dict[str, Any], leaves: list[dict[str, Any]]) -> dic
 
 
 def ensure_schema(con: sqlite3.Connection) -> None:
-    """Идемпотентная миграция: slices + report_filter в imports."""
+    """Идемпотентная миграция: salons, slices, report_filter в imports."""
     cur = con.cursor()
+    cur.execute(SALONS_DDL)
     cur.execute(SLICES_DDL)
     cols = [r[1] for r in cur.execute("PRAGMA table_info(imports)")]
     if "report_filter" not in cols:
         cur.execute("ALTER TABLE imports ADD COLUMN report_filter TEXT")
     con.commit()
+    backfill_salons_from_sales(con)
     backfill_slices_from_sales(con)
+
+
+def backfill_salons_from_sales(con: sqlite3.Connection) -> None:
+    """Переносит салоны из sales/buyers в справочник (идемпотентно)."""
+    cur = con.cursor()
+    rows = cur.execute(
+        """
+        SELECT DISTINCT s.buyer, COALESCE(NULLIF(b.channel_type, ''), 'offline')
+        FROM sales s
+        LEFT JOIN buyers b ON b.name = s.buyer AND b.buyer_type = 'salon'
+        WHERE s.buyer_type = 'salon'
+        """
+    ).fetchall()
+    for name, channel_type in rows:
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO salons (name, channel_type, is_active)
+            VALUES (?, ?, 1)
+            """,
+            (name, channel_type or "offline"),
+        )
+    con.commit()
+
+
+def is_legal_counterparty(buyer: str) -> bool:
+    """True, если в имени есть узнаваемая юридическая форма из выгрузки 1С."""
+    name = (buyer or "").strip()
+    if not name:
+        return False
+    if any(pat.match(name) for pat in _LEGAL_COUNTERPARTY_PREFIX_RES):
+        return True
+    return _EMBEDDED_IP_RE.search(name) is not None
+
+
+def load_salon_registry(cur: sqlite3.Cursor) -> dict[str, dict[str, Any]]:
+    """Активные салоны: channel_type и пр. — только из таблицы salons."""
+    return {
+        name: {"channel_type": channel_type}
+        for name, channel_type in cur.execute(
+            "SELECT name, channel_type FROM salons WHERE is_active=1"
+        ).fetchall()
+    }
+
+
+def classify_buyer(
+    buyer: str, salon_registry: dict[str, dict[str, Any]]
+) -> tuple[str, str | None, str | None, str | None]:
+    """Возвращает buyer_type, salon, channel_type, note."""
+    if buyer in salon_registry:
+        ch = salon_registry[buyer]["channel_type"]
+        return "salon", buyer, ch, None
+    if is_legal_counterparty(buyer):
+        return "ip", None, "b2b", ATTRIBUTION_NOTE
+    return "unknown", None, None, ATTRIBUTION_NOTE
+
+
+def unknown_buyers_in_slice(
+    leaves: list[dict[str, Any]], salon_registry: dict[str, dict[str, Any]]
+) -> list[str]:
+    seen: set[str] = set()
+    unknown: list[str] = []
+    for x in leaves:
+        buyer = x["buyer"] or ""
+        if buyer in seen:
+            continue
+        seen.add(buyer)
+        bt, _, _, _ = classify_buyer(buyer, salon_registry)
+        if bt == "unknown":
+            unknown.append(buyer)
+    return sorted(unknown)
+
+
+def print_attribution_warnings(unknown: list[str]) -> None:
+    if not unknown:
+        return
+    print("\nАТРИБУЦИЯ (buyer_type=unknown — не салон и не узнанный контрагент):")
+    for name in unknown:
+        print(f"  - {name}")
+
+
+def buyer_type_totals(
+    cur: sqlite3.Cursor,
+    month: str,
+    report_filter: str = DEFAULT_REPORT_FILTER,
+) -> dict[str, tuple[int, float]]:
+    """Число позиций (строк sales) и сумма amount по buyer_type."""
+    out: dict[str, tuple[int, float]] = {}
+    for bt, cnt, amt in cur.execute(
+        f"""
+        SELECT buyer_type, COUNT(*), COALESCE(SUM(amount), 0)
+        FROM sales WHERE {_month_filter_sql()}
+        GROUP BY buyer_type
+        """,
+        (month, report_filter),
+    ):
+        out[str(bt)] = (int(cnt), float(amt))
+    return out
+
+
+def print_buyer_type_summary(
+    cur: sqlite3.Cursor,
+    month: str,
+    report_filter: str = DEFAULT_REPORT_FILTER,
+) -> dict[str, tuple[int, float]]:
+    """Печатает сводку ip / salon / unknown и возвращает агрегаты."""
+    totals = buyer_type_totals(cur, month, report_filter)
+    print("\nПо buyer_type (позиции / сумма):")
+    for bt in ("ip", "salon", "unknown"):
+        cnt, amt = totals.get(bt, (0, 0.0))
+        print(f"    {bt:<7} {cnt:>4} позиций  {amt:>12,.0f} ₽")
+    return totals
 
 
 def backfill_slices_from_sales(con: sqlite3.Connection) -> None:
@@ -366,32 +515,18 @@ def check_coverage_against_db(
         )
 
 
-def _buyer_type_and_salon(buyer: str) -> tuple[str, str | None]:
-    salon = KNOWN_SALONS.get(buyer)
-    buyer_type = "salon" if salon else "ip"
-    return buyer_type, salon
-
-
 def _recompute_buyers(
-    cur: sqlite3.Cursor, per_buyer: dict[str, dict[str, Any]], now_iso: str
+    cur: sqlite3.Cursor,
+    per_buyer: dict[str, dict[str, Any]],
+    now_iso: str,
+    salon_registry: dict[str, dict[str, Any]],
 ) -> None:
     for b in per_buyer:
-        bt, salon = _buyer_type_and_salon(b)
+        bt, _salon, cht, note = classify_buyer(b, salon_registry)
         row = cur.execute(
             "SELECT id FROM buyers WHERE name=? AND buyer_type=?", (b, bt)
         ).fetchone()
         if not row:
-            if salon:
-                note, cht = None, (
-                    "online"
-                    if salon == "Салон Марьино"
-                    else "mixed"
-                    if salon == "Салон Румер"
-                    else "offline"
-                )
-            else:
-                note = "Точка продажи и продавец не указаны в отчёте — атрибуция ожидается."
-                cht = "b2b"
             cur.execute(
                 """
                 INSERT INTO buyers (
@@ -402,7 +537,7 @@ def _recompute_buyers(
                 (b, now_iso, 0, 0.0, bt, cht, None, note),
             )
     for b in per_buyer:
-        bt, _ = _buyer_type_and_salon(b)
+        bt, _, _, _ = classify_buyer(b, salon_registry)
         cnt, amt = cur.execute(
             "SELECT COUNT(*), COALESCE(SUM(amount),0) FROM sales WHERE buyer=? AND buyer_type=?",
             (b, bt),
@@ -491,8 +626,12 @@ def apply_import(
     report_filter: str = DEFAULT_REPORT_FILTER,
     now_iso: str | None = None,
     _fail_after_inserts: int | None = None,
-) -> int:
-    """Транзакционная запись среза. Возвращает число вставленных строк sales."""
+) -> tuple[int, list[str]]:
+    """Транзакционная запись среза.
+
+    Returns:
+        (inserted row count, buyer names classified as ``unknown``).
+    """
     per_buyer = validate_parsed_data(p, leaves)
     lq = sum(float(x["qty"]) for x in leaves)
     ls = sum(float(x["amount"]) for x in leaves)
@@ -502,6 +641,9 @@ def apply_import(
     ensure_schema(con)
     cur = con.cursor()
     cur.execute("PRAGMA busy_timeout=60000")
+
+    salon_registry = load_salon_registry(cur)
+    attribution_pending = unknown_buyers_in_slice(leaves, salon_registry)
 
     cur.execute("BEGIN IMMEDIATE")
     try:
@@ -527,7 +669,7 @@ def apply_import(
         inserted = 0
         for x in leaves:
             buyer = x["buyer"] or ""
-            buyer_type, salon = _buyer_type_and_salon(buyer)
+            buyer_type, salon, _, _ = classify_buyer(buyer, salon_registry)
             is_return = 1 if (x["qty"] or 0) < 0 or (x["amount"] or 0) < 0 else 0
             cur.execute(
                 ins,
@@ -577,13 +719,15 @@ def apply_import(
             """,
             (source_file, p["period_label"], inserted, lq, ls, stamp, report_filter),
         )
-        _recompute_buyers(cur, per_buyer, stamp)
+        _recompute_buyers(cur, per_buyer, stamp, salon_registry)
         con.commit()
     except Exception:
         con.rollback()
         raise
 
-    return inserted
+    print_attribution_warnings(attribution_pending)
+    print_buyer_type_summary(cur, month, report_filter)
+    return inserted, attribution_pending
 
 
 def normalize_source_name(path: str) -> str:
@@ -650,6 +794,15 @@ def main() -> None:
         for a in anomalies:
             print(f"  {a[0][:40]:40s} | {a[1][:44]:44s} | qty={a[2]} | {a[3]:.2f} ₽")
 
+    con_peek = sqlite3.connect(args.db, timeout=30) if os.path.isfile(args.db) else None
+    if con_peek is not None:
+        ensure_schema(con_peek)
+        reg = load_salon_registry(con_peek.cursor())
+        con_peek.close()
+        print_attribution_warnings(unknown_buyers_in_slice(leaves, reg))
+    else:
+        print_attribution_warnings(unknown_buyers_in_slice(leaves, {}))
+
     if not args.apply:
         print("\nDRY RUN — ничего не записано. Повтори с --apply.")
         return
@@ -665,6 +818,7 @@ def main() -> None:
     con.row_factory = sqlite3.Row
     try:
         apply_import(con, p, leaves, src_name)
+        # attribution list printed inside apply_import
     except SalesImportError as exc:
         con.close()
         raise SystemExit(str(exc)) from exc
