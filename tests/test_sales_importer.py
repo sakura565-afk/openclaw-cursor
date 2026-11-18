@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import re
 import shutil
 import sqlite3
 from pathlib import Path
@@ -196,19 +198,145 @@ def test_buyer_rollup_mismatch_blocks_apply(sample_db: Path) -> None:
     con.close()
 
 
-FIXTURE_SALONS_NOV = ("Салон Запад", "Салон Север", "Салон Центр")
 NOV_ROW_COUNT = 112
 NOV_QTY = 268.0
 NOV_AMOUNT = 5_766_389.0
 
-# Фрагменты реальных имён — в исходнике importer их быть не должно (тест, не данные).
-_FORBIDDEN_IN_IMPORTER_SOURCE = (
-    "Марьино",
-    "Румер",
-    "Гранд",
-    "Михайлов",
-    "Тюменцева",
+SALES_TOOLS_PKG = FIXTURE_DB.parent.parent
+_REGISTRY_VAR_RE = re.compile(
+    r"(KNOWN_|SUPPLIER_|_SALONS|_BUYERS|BUYER_REGISTRY)",
+    re.IGNORECASE,
 )
+_INLINE_BUYER_LITERAL_RE = re.compile(
+    r'(?:Салон\s+[А-Яа-яЁё«"\[]|ИП\s+[А-Яа-яЁё]|ООО\s+[«"\u00AB])'
+)
+
+
+def _sales_tools_py_sources() -> list[Path]:
+    return sorted(SALES_TOOLS_PKG.glob("*.py"))
+
+
+def _fixture_counterparty_names() -> set[str]:
+    con = sqlite3.connect(FIXTURE_DB)
+    names: set[str] = set()
+    for (name,) in con.execute("SELECT DISTINCT name FROM buyers"):
+        if name:
+            names.add(name)
+    for (buyer,) in con.execute("SELECT DISTINCT buyer FROM sales"):
+        if buyer:
+            names.add(buyer)
+    con.close()
+    return names
+
+
+def _literal_keys_from_dict_node(node: ast.Dict) -> list[str]:
+    keys: list[str] = []
+    for k in node.keys:
+        if isinstance(k, ast.Constant) and isinstance(k.value, str):
+            keys.append(k.value)
+    return keys
+
+
+def _looks_like_buyer_name_registry(keys: list[str]) -> bool:
+    if not keys or not all(isinstance(k, str) for k in keys):
+        return False
+    if len(keys) == 1:
+        k = keys[0]
+        return (" " in k and len(k) > 12) or any(m in k for m in ("Салон", "ИП ", "ООО"))
+    markers = sum(
+        1
+        for k in keys
+        if (" " in k and len(k) > 8)
+        or k.startswith("Салон")
+        or k.startswith("ИП")
+        or "ООО" in k
+        or "«" in k
+    )
+    return markers >= max(1, len(keys) // 2)
+
+
+def _module_level_buyer_registries(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    hits: list[str] = []
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Name):
+                continue
+            var_name = target.id
+            value = node.value
+            keys: list[str] = []
+            if isinstance(value, ast.Dict):
+                keys = _literal_keys_from_dict_node(value)
+            elif isinstance(value, ast.Set):
+                keys = [
+                    elt.value
+                    for elt in value.elts
+                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                ]
+            if not keys:
+                continue
+            if _REGISTRY_VAR_RE.search(var_name) or _looks_like_buyer_name_registry(keys):
+                hits.append(f"{var_name} ({len(keys)} entries)")
+    return hits
+
+
+def _hardcoded_buyer_literals_in_source(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    hits: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        s = node.value
+        if _INLINE_BUYER_LITERAL_RE.search(s) and len(s) < 120:
+            # Шаблоны юрформ без конкретного контрагента — ок.
+            if s.startswith("Общество с ограниченной") or s.startswith("ИНДИВИДУАЛЬНЫЙ"):
+                continue
+            if "предприниматель" in s.lower() and " " not in s[30:]:
+                continue
+            hits.append(s[:60])
+    return hits
+
+
+# analyzer.py: SUPPLIER_PARENTS — известный долг (задача 2), здесь не правим.
+_HYGIENE_SKIP_FILES = frozenset({"analyzer.py"})
+
+
+def test_no_hardcoded_buyer_registry() -> None:
+    """Пакет sales_tools: нет справочников покупателей в коде."""
+    for path in _sales_tools_py_sources():
+        if path.name in _HYGIENE_SKIP_FILES:
+            continue
+        registries = _module_level_buyer_registries(path)
+        assert not registries, f"{path.name}: module-level buyer registry {registries}"
+
+    fixture_names = _fixture_counterparty_names()
+    for path in _sales_tools_py_sources():
+        if path.name in _HYGIENE_SKIP_FILES:
+            continue
+        text = path.read_text(encoding="utf-8")
+        leaked = [n for n in fixture_names if n in text]
+        assert not leaked, f"{path.name}: fixture counterparty names in source: {leaked[:3]}"
+
+    for path in _sales_tools_py_sources():
+        if path.name in _HYGIENE_SKIP_FILES:
+            continue
+        literals = _hardcoded_buyer_literals_in_source(path)
+        assert not literals, f"{path.name}: hardcoded buyer literals {literals[:3]}"
+
+
+def _fixture_november_salon_buyers() -> set[str]:
+    con = sqlite3.connect(FIXTURE_DB)
+    names = {
+        r[0]
+        for r in con.execute(
+            "SELECT DISTINCT buyer FROM sales WHERE month=? AND buyer_type='salon'",
+            (MONTH,),
+        ).fetchall()
+    }
+    con.close()
+    return names
 
 
 def test_salons_backfill_from_fixture(sample_db: Path) -> None:
@@ -221,7 +349,7 @@ def test_salons_backfill_from_fixture(sample_db: Path) -> None:
         ).fetchall()
     }
     con.close()
-    for salon in FIXTURE_SALONS_NOV:
+    for salon in _fixture_november_salon_buyers():
         assert salon in names
 
 
@@ -247,6 +375,13 @@ def test_november_reimport_preserves_totals_and_types(sample_db: Path) -> None:
             (MONTH,),
         ).fetchall()
     ]
+    split_sum = 0.0
+    for bt in ("ip", "salon", "unknown"):
+        part = con.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM sales WHERE month=? AND buyer_type=?",
+            (MONTH, bt),
+        ).fetchone()[0]
+        split_sum += float(part)
     con.close()
 
     assert row_cnt == NOV_ROW_COUNT
@@ -254,7 +389,9 @@ def test_november_reimport_preserves_totals_and_types(sample_db: Path) -> None:
     assert float(amt) == NOV_AMOUNT
     assert by_type.get("salon") == 100
     assert by_type.get("ip") == 12
-    assert set(salon_buyers) == set(FIXTURE_SALONS_NOV)
+    assert by_type.get("unknown", 0) == 0
+    assert set(salon_buyers) == _fixture_november_salon_buyers()
+    assert abs(split_sum - float(amt)) < 0.01
 
 
 def test_classify_salon_from_registry() -> None:
@@ -303,9 +440,68 @@ def test_new_salon_in_registry_reclassifies_without_code_change(sample_db: Path)
     assert note is None
 
 
-def test_importer_source_has_no_forbidden_real_names() -> None:
-    source = (importer.__file__)
-    text = Path(source).read_text(encoding="utf-8")
-    lower = text.lower()
-    for fragment in _FORBIDDEN_IN_IMPORTER_SOURCE:
-        assert fragment.lower() not in lower, f"forbidden fragment in importer.py: {fragment!r}"
+@pytest.mark.parametrize(
+    "name",
+    [
+        'Общество с ограниченной ответственностью  "Прогресс"',
+        "ИНДИВИДУАЛЬНЫЙ ПРЕДПРИНИМАТЕЛЬ ПСЕВДОНИМ АННА СЕРГЕЕВНА",
+        'Акционерное общество "ХолдингТест"',
+        'ЗАО "Ромашка"',
+        "Город ИП Контрагент М.С.",
+        'ООО «Псевдоним»',
+    ],
+)
+def test_legal_name_forms_classify_as_ip(name: str) -> None:
+    bt, salon, channel, _ = importer.classify_buyer(name, {})
+    assert bt == "ip"
+    assert salon is None
+    assert channel == "b2b"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Торговый дом Альфа",
+        "БрендБезЮрФормы",
+        "ООО",
+    ],
+)
+def test_non_legal_names_classify_as_unknown_without_registry(name: str) -> None:
+    bt, _, _, note = importer.classify_buyer(name, {})
+    assert bt == "unknown"
+    assert note == importer.ATTRIBUTION_NOTE
+
+
+def test_november_no_unknown_buyers_in_slice(sample_db: Path) -> None:
+    con = sqlite3.connect(sample_db)
+    importer.ensure_schema(con)
+    reg = importer.load_salon_registry(con.cursor())
+    _, leaves, _ = _load_month_payload(con, MONTH)
+    buyers = {x["buyer"] for x in leaves}
+    unknown = [b for b in buyers if importer.classify_buyer(b, reg)[0] == "unknown"]
+    con.close()
+    assert unknown == []
+
+
+def test_buyer_type_totals_cover_slice_amount(sample_db: Path) -> None:
+    con = sqlite3.connect(sample_db)
+    parsed, leaves, source_file = _load_month_payload(con, MONTH)
+    importer.apply_import(con, parsed, leaves, source_file)
+    totals = importer.buyer_type_totals(con.cursor(), MONTH)
+    slice_amt = con.execute(
+        "SELECT SUM(amount) FROM sales WHERE month=?", (MONTH,)
+    ).fetchone()[0]
+    assert totals.get("unknown", (0, 0.0))[0] == 0
+    assert sum(amt for _c, amt in totals.values()) == pytest.approx(float(slice_amt))
+    con.close()
+
+
+def test_non_legal_salon_name_unknown_without_registry() -> None:
+    con = sqlite3.connect(FIXTURE_DB)
+    sample_salon = con.execute(
+        "SELECT buyer FROM sales WHERE month=? AND buyer_type='salon' LIMIT 1",
+        (MONTH,),
+    ).fetchone()[0]
+    con.close()
+    bt, _, _, _ = importer.classify_buyer(sample_salon, {})
+    assert bt == "unknown"
