@@ -1,0 +1,80 @@
+{
+  "task_slug": "best-of-n-runner",
+  "n": 3,
+  "judge_model": "MiniMax-M3.1-Flash",
+  "judge_mode": "llm",
+  "created_at": "2026-10-21T07:02:55.762105+00:00",
+  "winner": {
+    "index": 2,
+    "model": "gpt-5.6-sol-high",
+    "pr_url": "https://github.com/sakura565-afk/openclaw-cursor/pull/281"
+  },
+  "variants": [
+    {
+      "index": 1,
+      "model": "claude-opus-5-thinking-high",
+      "branch": "cursor/best-of-n-runner-variant-1",
+      "agent_id": "bc-9f21a4c0",
+      "pr_url": "https://github.com/sakura565-afk/openclaw-cursor/pull/280",
+      "score": 0.78,
+      "verdict": "All criteria met; judge/fallback split is clean but the report writer duplicates timestamp logic.",
+      "latency_s": 812.4,
+      "state": "completed",
+      "error": null,
+      "judge_mode": "llm",
+      "diff_stats": {
+        "files_changed": 4,
+        "insertions": 612,
+        "deletions": 18,
+        "test_files": 1,
+        "new_src_files": 1,
+        "available": true,
+        "error": null
+      }
+    },
+    {
+      "index": 2,
+      "model": "gpt-5.6-sol-high",
+      "branch": "cursor/best-of-n-runner-variant-2",
+      "agent_id": "bc-7d03ba18",
+      "pr_url": "https://github.com/sakura565-afk/openclaw-cursor/pull/281",
+      "score": 0.91,
+      "verdict": "Strongest variant: queue_manager batching reused as-is, judge parser handles all three JSON shapes, report schema exact.",
+      "latency_s": 643.1,
+      "state": "completed",
+      "error": null,
+      "judge_mode": "llm",
+      "diff_stats": {
+        "files_changed": 3,
+        "insertions": 548,
+        "deletions": 12,
+        "test_files": 1,
+        "new_src_files": 0,
+        "available": true,
+        "error": null
+      }
+    },
+    {
+      "index": 3,
+      "model": "gemini-3.7-flash-high",
+      "branch": "cursor/best-of-n-runner-variant-3",
+      "agent_id": "bc-2c55e9fd",
+      "pr_url": "https://github.com/sakura565-afk/openclaw-cursor/pull/282",
+      "score": 0.159,
+      "verdict": "fallback diff score 0.16: 2 file(s) changed, +214/-4 lines, 0 test file(s), 0 new src file(s)",
+      "latency_s": 391.7,
+      "state": "completed",
+      "error": "judge response contained no JSON object",
+      "judge_mode": "fallback",
+      "diff_stats": {
+        "files_changed": 2,
+        "insertions": 214,
+        "deletions": 4,
+        "test_files": 0,
+        "new_src_files": 0,
+        "available": true,
+        "error": null
+      }
+    }
+  ]
+}

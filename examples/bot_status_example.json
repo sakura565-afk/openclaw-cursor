@@ -1,0 +1,23 @@
+{
+  "bots": {
+    "main": {
+      "details": {
+        "branch": "cursor/cross-bot-sync-2e0e",
+        "progress": "Implementing memory synchronization"
+      },
+      "status": "working",
+      "task": "Build cross bot sync coordinator",
+      "updated_at": "2026-05-04T19:41:00+00:00"
+    },
+    "tasks": {
+      "details": {
+        "handoff_from": "main",
+        "queue_depth": 2
+      },
+      "status": "ready",
+      "task": "Review pending task claims",
+      "updated_at": "2026-05-04T19:42:00+00:00"
+    }
+  },
+  "updated_at": "2026-05-04T19:42:00+00:00"
+}

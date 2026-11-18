@@ -1,0 +1,36 @@
+pipeline:
+  topic: "OpenClaw remote execution workflow"
+  phases:
+    - research
+    - draft
+    - review
+    - pr
+  cli_examples:
+    - "python -m src.ideation.idea_pipeline research OpenClaw remote execution workflow"
+    - "python -m src.ideation.idea_pipeline draft OpenClaw remote execution workflow"
+    - "python -m src.ideation.idea_pipeline review OpenClaw remote execution workflow"
+    - "python -m src.ideation.idea_pipeline pr OpenClaw remote execution workflow"
+  log_file_pattern: "logs/idea_pipeline_YYYYMMDD.json"
+  expected_outputs:
+    research:
+      includes:
+        - summary
+        - questions
+        - gathered_info
+        - outline
+    draft:
+      includes:
+        - implementation_notes
+        - proposed_files
+        - draft_checklist
+    review:
+      includes:
+        - checks
+        - issues
+        - recommendations
+    pr:
+      includes:
+        - title
+        - description
+        - tests
+        - docs

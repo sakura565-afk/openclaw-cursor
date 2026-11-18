@@ -1,0 +1,167 @@
+# Auto-LoRA Stack presets for ComfyUI (FLUX.2 Klein 9B + Pony v6 XL)
+# Validated against project MEMORY empirical best-practices table (2026-07-07).
+# Paths for loras/checkpoints are relative to the ComfyUI models_root
+# (e.g. E:\AI\models\comfyui\).
+
+# Universal negative prompt shared by every preset (YAML anchor).
+_negative: &universal_negative |
+  clothes, denim, jeans, shirt, bra, panties, jewelry, watch, tattoos,
+  watermark, text, logo, censored, mosaic, plastic skin, doll-like,
+  extra fingers, deformed hands, mutated limbs, fused fingers, fused limbs,
+  third hand, extra hand, extra arm, extra leg, third leg, six fingers,
+  deformed toes, fused toes, six toes, extra toes, malformed feet,
+  hand-like feet, finger-like toes, bad feet, bad anatomy, disfigured,
+  blurry, low quality, cartoon, anime, painting, illustration,
+  overexposed, underexposed, giant, huge, oversized, extra-large, monstrous, enormous
+
+# Logical checkpoint name -> concrete file. `key` is the workflow-patch model
+# field name (unet for GGUF diffusion models, checkpoint for full safetensors).
+checkpoints:
+  klein:
+    key: unet
+    path: unet/flux-2-klein-9b-Q4_0.gguf
+  pony:
+    key: checkpoint
+    path: checkpoints/ponyV6XL_v6StartWithThisOne.safetensors
+  wan22:
+    key: unet
+    # Wan2.2 uses a dedicated diffusion checkpoint that is selected outside this
+    # tool; only the Lightning LoRAs are pinned here.
+    path: null
+
+presets:
+  nsfw_explicit:
+    description: "NSFW explicit (penetration, toys) on Klein 9B with full anatomy unlock stack."
+    checkpoint: klein
+    loras:
+      - path: loras/flux2klein_nsfw.safetensors
+        strength: 1.0
+      - path: loras/NSFW_master.safetensors
+        strength: 1.0
+      - path: loras/aidmaNSFWunlock-FLUX-V0.2.safetensors
+        strength: 0.6
+    sampler:
+      sampler: euler
+      scheduler: simple
+      steps: 24
+      cfg: 1.0
+    negative: *universal_negative
+    warnings:
+      - "Klein 9B does not draw anatomical penetration — fall back to Pony v6 XL (penetration_fallback) if the scene needs real penetration."
+      - "Klein deep squat + toy triggers a THREE ARMS artifact — avoid the deep_squat pose with toys."
+    approved_poses: [standing_water, kneel_water, shore_walk]
+    forbidden_poses: [deep_squat_toy]
+
+  nsfw_soft:
+    description: "NSFW soft (nude, no toys) on Klein 9B with light anatomy unlock."
+    checkpoint: klein
+    loras:
+      - path: loras/flux2klein_nsfw.safetensors
+        strength: 1.0
+    sampler:
+      sampler: euler
+      scheduler: simple
+      steps: 22
+      cfg: 1.0
+    negative: *universal_negative
+    warnings:
+      - "Soft nude only — add the nsfw_explicit stack (NSFW_master + aidmaNSFWunlock) for toys/anatomy."
+    approved_poses: [standing_water, kneel_water, shore_walk]
+    forbidden_poses: [deep_squat_toy]
+
+  editorial:
+    description: "Editorial portrait (Hegre-style) on Klein 9B — no LoRA, best composition."
+    checkpoint: klein
+    loras: []
+    sampler:
+      sampler: euler
+      scheduler: simple
+      steps: 24
+      cfg: 1.0
+    negative: *universal_negative
+    warnings: []
+    approved_poses: [standing_water, kneel_water, shore_walk]
+    forbidden_poses: []
+
+  furniture:
+    description: "Furniture / product render on Klein 9B — no LoRA."
+    checkpoint: klein
+    loras: []
+    sampler:
+      sampler: euler
+      scheduler: simple
+      steps: 20
+      cfg: 1.0
+    negative: *universal_negative
+    warnings: []
+    approved_poses: []
+    forbidden_poses: []
+
+  beach_safe:
+    description: "Beach safe pose (standing_water, kneel_water, shore_walk) on Klein 9B with light NSFW unlock."
+    checkpoint: klein
+    loras:
+      - path: loras/flux2klein_nsfw.safetensors
+        strength: 0.7
+    sampler:
+      sampler: euler
+      scheduler: simple
+      steps: 24
+      cfg: 1.0
+    negative: *universal_negative
+    warnings:
+      - "walking_water (side/back) pose fuses the arm with the thigh on Klein — use shore_walk (back-walking) instead."
+      - "lying_sand gives seed-dependent asymmetric breasts on Klein — reroll seed or avoid."
+      - "Klein foot/toe deformation is common in squat poses near water — keep to approved standing/kneel/walk poses."
+    approved_poses: [standing_water, kneel_water, shore_walk]
+    forbidden_poses: [deep_squat_toy, walking_water, lying_sand]
+
+  penetration_fallback:
+    description: "Penetration fallback on Pony v6 XL (built-in NSFW) when Klein 9B fails to draw penetration."
+    checkpoint: pony
+    loras: []
+    sampler:
+      sampler: euler_ancestral
+      scheduler: normal
+      steps: 28
+      cfg: 7.0
+    negative: *universal_negative
+    warnings:
+      - "Pony v6 XL has color-roulette on toys (purple/pink/black across seeds) — pin/curate the seed for toy color consistency."
+    approved_poses: []
+    forbidden_poses: []
+
+  face_swap:
+    description: "Face swap (BFS Head) on Klein 9B with the bfs_head rank128 LoRA."
+    checkpoint: klein
+    loras:
+      - path: loras/bfs_head_v1_flux-klein_9b_rank128.safetensors
+        strength: 1.0
+    sampler:
+      sampler: euler
+      scheduler: simple
+      steps: 24
+      cfg: 1.0
+    negative: *universal_negative
+    warnings: []
+    approved_poses: [standing_water, kneel_water, shore_walk]
+    forbidden_poses: []
+
+  wan22_video:
+    description: "Video (Wan2.2) with HIGH + LOW Lightning 4-step LoRAs."
+    checkpoint: wan22
+    loras:
+      - path: loras/wan22/Wan22_A14B_T2V_HIGH_Lightning_4steps_lora_250928_rank128_fp16.safetensors
+        strength: 1.0
+      - path: loras/wan22/Wan22_A14B_T2V_LOW_Lightning_4steps_lora_250928_rank64_fp16.safetensors
+        strength: 1.0
+    sampler:
+      sampler: euler
+      scheduler: simple
+      steps: 4
+      cfg: 1.0
+    negative: *universal_negative
+    warnings:
+      - "Lightning 4-step schedule — do not raise steps/cfg; the LoRAs are distilled for 4 steps at cfg 1.0."
+    approved_poses: []
+    forbidden_poses: []
