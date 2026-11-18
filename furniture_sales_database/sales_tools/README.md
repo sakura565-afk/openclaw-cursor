@@ -10,6 +10,26 @@
 |---|---|
 | `importer.py` | Импорт накопительного среза выгрузки 1С (TDSheet) в SQLite. Поддерживает вариант файла из 3 уровней (`По месяцам; Контрагент; Номенклатура` — без уровня «Номенклатура.Родитель»). |
 | `analyzer.py` | Анализ среза по номенклатуре: ассортиментные группы, кросс-таблица группа × точка, бренды, концентрация, возвраты, динамика к прошлому месяцу. |
+| `migration.py` | Миграция плоской `sales.db` в нормализованную схему (`schema_normalized.sql`) с обратной сверкой сумм. |
+
+## Нормализованная схема (`schema_normalized.sql`)
+
+Справочники `products`, `sellers`, `channels` (только точки продаж), `counterparties`,
+`sales` (FK + `parent_category` / `item_characteristic`), `suppliers`. Миграция
+идемпотентна (`source_flat_id`, get-or-create по именам).
+
+**`channels`** — салоны (`kind='salon'`) и платформы (`kind='platform'`), не контрагенты.
+В выручку салона (`kind='salon'`) попадают только строки, где в плоской базе заполнено
+поле `salon`. B2B без подтверждённой атрибуции, менеджеры и прочее без `salon` идут
+в канал-заглушку `(не атрибутировано)` (`kind='unattributed'`). Имя контрагента
+(`counterparties`) никогда не становится салоном.
+
+```bash
+python -m furniture_sales_database.sales_tools.migration \
+  --source furniture_sales_database/sales_tools/fixtures/sales_sample.db \
+  --target /tmp/normalized.db --verify
+python -m pytest tests/test_sales_migration.py -q
+```
 
 ## Схема таблицы `sales` (плоская, одна база — `sales.db`)
 
