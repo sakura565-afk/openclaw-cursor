@@ -43,11 +43,36 @@ MONTH_ROW_RE = re.compile(r"^[А-Яа-яЁё]+\s+\d{4}\s*г\.?$")
 DEFAULT_REPORT_FILTER = "buyer"
 QTY_AMOUNT_EPS = 0.01
 
-# Юрлица/ИП в выгрузке 1С — не салон, если нет в справочнике salons.
-LEGAL_COUNTERPARTY_RE = re.compile(
-    r"^\s*(ИП|ООО|АО|ЗАО|ПАО|ОАО)\b",
-    re.IGNORECASE,
+# Юрлица/ИП в выгрузке 1С — сокращённые и полные наименования (без угадывания
+# «голого» торгового названия без юридической формы).
+_LEGAL_COUNTERPARTY_PREFIX_RES: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"^\s*(?:ИП|ООО|АО|ЗАО|ПАО|ОАО)(?:\s+.+|\s*[\"«»'].+)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*индивидуальный\s+предприниматель\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*общество\s+с\s+ограниченной\s+ответственностью\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^\s*акционерное\s+общество\b", re.IGNORECASE),
+    re.compile(r"^\s*закрытое\s+акционерное\s+общество\b", re.IGNORECASE),
+    re.compile(r"^\s*публичное\s+акционерное\s+общество\b", re.IGNORECASE),
+    re.compile(r"^\s*открытое\s+акционерное\s+общество\b", re.IGNORECASE),
+    re.compile(
+        r"^\s*государственное\s+унитарное\s+предприятие\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*муниципальное\s+унитарное\s+предприятие\b",
+        re.IGNORECASE,
+    ),
 )
+# ИП в середине строки («Город ИП Фамилия И.О.»), не только в начале.
+_EMBEDDED_IP_RE = re.compile(r"(?<![\wА-Яа-яЁё])ИП(?![\wА-Яа-яЁё])", re.IGNORECASE)
 
 ATTRIBUTION_NOTE = (
     "Точка продажи и продавец не указаны в отчёте — атрибуция ожидается."
@@ -268,6 +293,16 @@ def backfill_salons_from_sales(con: sqlite3.Connection) -> None:
     con.commit()
 
 
+def is_legal_counterparty(buyer: str) -> bool:
+    """True, если в имени есть узнаваемая юридическая форма из выгрузки 1С."""
+    name = (buyer or "").strip()
+    if not name:
+        return False
+    if any(pat.match(name) for pat in _LEGAL_COUNTERPARTY_PREFIX_RES):
+        return True
+    return _EMBEDDED_IP_RE.search(name) is not None
+
+
 def load_salon_registry(cur: sqlite3.Cursor) -> dict[str, dict[str, Any]]:
     """Активные салоны: channel_type и пр. — только из таблицы salons."""
     return {
@@ -285,7 +320,7 @@ def classify_buyer(
     if buyer in salon_registry:
         ch = salon_registry[buyer]["channel_type"]
         return "salon", buyer, ch, None
-    if LEGAL_COUNTERPARTY_RE.match(buyer):
+    if is_legal_counterparty(buyer):
         return "ip", None, "b2b", ATTRIBUTION_NOTE
     return "unknown", None, None, ATTRIBUTION_NOTE
 
@@ -312,6 +347,39 @@ def print_attribution_warnings(unknown: list[str]) -> None:
     print("\nАТРИБУЦИЯ (buyer_type=unknown — не салон и не узнанный контрагент):")
     for name in unknown:
         print(f"  - {name}")
+
+
+def buyer_type_totals(
+    cur: sqlite3.Cursor,
+    month: str,
+    report_filter: str = DEFAULT_REPORT_FILTER,
+) -> dict[str, tuple[int, float]]:
+    """Число позиций (строк sales) и сумма amount по buyer_type."""
+    out: dict[str, tuple[int, float]] = {}
+    for bt, cnt, amt in cur.execute(
+        f"""
+        SELECT buyer_type, COUNT(*), COALESCE(SUM(amount), 0)
+        FROM sales WHERE {_month_filter_sql()}
+        GROUP BY buyer_type
+        """,
+        (month, report_filter),
+    ):
+        out[str(bt)] = (int(cnt), float(amt))
+    return out
+
+
+def print_buyer_type_summary(
+    cur: sqlite3.Cursor,
+    month: str,
+    report_filter: str = DEFAULT_REPORT_FILTER,
+) -> dict[str, tuple[int, float]]:
+    """Печатает сводку ip / salon / unknown и возвращает агрегаты."""
+    totals = buyer_type_totals(cur, month, report_filter)
+    print("\nПо buyer_type (позиции / сумма):")
+    for bt in ("ip", "salon", "unknown"):
+        cnt, amt = totals.get(bt, (0, 0.0))
+        print(f"    {bt:<7} {cnt:>4} позиций  {amt:>12,.0f} ₽")
+    return totals
 
 
 def backfill_slices_from_sales(con: sqlite3.Connection) -> None:
@@ -658,6 +726,7 @@ def apply_import(
         raise
 
     print_attribution_warnings(attribution_pending)
+    print_buyer_type_summary(cur, month, report_filter)
     return inserted, attribution_pending
 
 
