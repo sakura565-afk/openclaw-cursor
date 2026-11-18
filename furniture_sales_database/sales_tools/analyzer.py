@@ -9,15 +9,20 @@
 ПРОВЕРКА ПОКРЫТИЯ обязательна: новый товар может не попасть ни в одну
 группу и молча выпасть из оборота.
 """
+from __future__ import annotations
+
 import argparse
 import csv
+import datetime as dt
+import io
+import json
 import os
 import sqlite3
+import sys
 from collections import defaultdict
+from typing import Any
 
-SUPPLIER_PARENTS = {
-    'Поставщик Махачкала', 'Поставщик Цветы',
-}
+_SUPPLIER_GROUP = 'Прочее (поставщики/техника)'
 
 # --- расширения под ноябрьский срез 01-18.11.2026 -------------------------
 NEW_PREFIXES = {
@@ -36,12 +41,39 @@ NEW_PREFIXES = {
 }
 
 
-def group_of(item, parent=None):
+def _parent_suggests_supplier(parent: str | None) -> bool:
+    """Fallback для старых срезов без buyer_type на строке продажи."""
+    if not parent:
+        return False
+    low = parent.lower()
+    return 'поставщ' in low or low.startswith('техник')
+
+
+def is_supplier_sale(
+    buyer_type: str | None,
+    parent: str | None,
+    supplier_buyer_names: frozenset[str] | None = None,
+) -> bool:
+    """Поставщик определяется по buyer_type и справочнику buyers, не по захардкоженным именам."""
+    if buyer_type == 'supplier':
+        return True
+    if supplier_buyer_names and parent and parent in supplier_buyer_names:
+        return True
+    return _parent_suggests_supplier(parent)
+
+
+def group_of(
+    item: str,
+    parent: str | None = None,
+    *,
+    buyer_type: str | None = None,
+    supplier_buyer_names: frozenset[str] | None = None,
+) -> str:
     """Торговая классификация позиции по её названию."""
     s = item.strip()
     low = s.lower()
-    if parent in SUPPLIER_PARENTS:
-        return 'Прочее (поставщики/техника)'
+    if is_supplier_sale(buyer_type, parent, supplier_buyer_names):
+        return _SUPPLIER_GROUP
     if s == "Ткань, м":
         return 'Ткани'
     if '"Цветы"' in s or s.startswith('№'):
@@ -91,7 +123,7 @@ def group_of(item, parent=None):
     return 'ПРОЧЕЕ: ' + s[:40]
 
 
-def brand_of(item):
+def brand_of(item: str) -> str:
     """Бренд извлекается из названия товара."""
     low = item.lower()
     if 'амадей' in low:
@@ -139,47 +171,90 @@ def brand_of(item):
     return '(прочее)'
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default="sales.db")
-    ap.add_argument("--month", required=True)
-    ap.add_argument("--csv", default=None)
-    ap.add_argument("--compare-month", default=None)
-    args = ap.parse_args()
+def period_days(period: str) -> int:
+    """Число дней в периоде вида '01.11.2026-18.11.2026'.
 
-    con = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True, timeout=30)
-    cur = con.cursor()
+    У даты тоже есть дефис-разделитель — режем по '-' только один раз.
+    Короткий формат ``YYYY-MM`` — число дней в календарном месяце.
+    """
+    if "." in period and period.count(".") >= 4:
+        a, b = period.split("-", 1)
+        d1 = dt.date(*map(int, a.split(".")[::-1]))
+        d2 = dt.date(*map(int, b.split(".")[::-1]))
+        return (d2 - d1).days + 1
+    if len(period) == 7 and period[4] == "-":
+        year, month = map(int, period.split("-"))
+        start = dt.date(year, month, 1)
+        if month == 12:
+            end = dt.date(year + 1, 1, 1)
+        else:
+            end = dt.date(year, month + 1, 1)
+        return (end - start).days
+    raise ValueError(f"unrecognized period format: {period!r}")
 
-    # 1) ОДИН срез за месяц (не суммировать)
+
+def _prev_month(month: str) -> str:
+    year_s, mon_s = month.split("-", 1)
+    year, mon = int(year_s), int(mon_s)
+    if mon == 1:
+        return f"{year - 1}-12"
+    return f"{year}-{mon - 1:02d}"
+
+
+def _load_month_slice(
+    cur: sqlite3.Cursor, month: str
+) -> tuple[str, str, int, float, float, list[tuple[Any, ...]]]:
     slices = cur.execute(
         "SELECT source_file, period, COUNT(*), SUM(quantity), SUM(amount) FROM sales"
-        " WHERE month=? GROUP BY source_file, period ORDER BY SUM(amount) DESC", (args.month,)
+        " WHERE month=? GROUP BY source_file, period ORDER BY SUM(amount) DESC",
+        (month,),
     ).fetchall()
-    print(f"=== СРЕЗЫ за {args.month} ===")
-    for r in slices:
-        print(f"  {r[0]:<28} {r[1]:<24} строк={r[2]:<4} шт={r[3]:<8} ₽={r[4]:,.0f}")
     if not slices:
-        raise SystemExit("нет срезов за месяц")
-    src = slices[0][0]
-    period = slices[0][1]
-    slice_total = slices[0][4]
-    if len(slices) > 1:
-        print(f"  ВНИМАНИЕ: в базе {len(slices)} среза за месяц - берётся самый полный, они НЕ складываются")
-
+        raise ValueError(f"нет срезов за месяц {month}")
+    src, period, row_count, qty, amount = slices[0]
     rows = cur.execute(
         "SELECT item_name, COALESCE(parent_category,''), buyer, COALESCE(salon,''), "
         "buyer_type, quantity, amount, is_return FROM sales WHERE source_file=?",
-        (src,)).fetchall()
-    con.close()
+        (src,),
+    ).fetchall()
+    return src, period, row_count, qty or 0.0, amount or 0.0, rows
 
-    # 2) разбивка по группам
-    groups = defaultdict(lambda: {"items": {}, "qty": 0.0, "amt": 0.0, "pos": 0})
-    brands = defaultdict(lambda: {"qty": 0.0, "amt": 0.0, "pos": 0, "items": set()})
-    cross = defaultdict(lambda: defaultdict(float))   # группа -> точка -> ₽
-    cross_qty = defaultdict(lambda: defaultdict(float))
-    unassigned = []
-    for item, parent, buyer, salon, btype, q, a, is_ret in rows:
-        g = group_of(item, parent)
+
+def _load_supplier_buyer_names(cur: sqlite3.Cursor) -> frozenset[str]:
+    try:
+        rows = cur.execute(
+            "SELECT name FROM buyers WHERE buyer_type='supplier'",
+        ).fetchall()
+    except sqlite3.Error:
+        return frozenset()
+    return frozenset(r[0] for r in rows)
+
+
+def _group_totals_from_rows(
+    rows: list[tuple[Any, ...]],
+    supplier_buyer_names: frozenset[str],
+) -> tuple[
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, float]],
+    list[str],
+]:
+    groups: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"items": {}, "qty": 0.0, "amt": 0.0, "pos": 0}
+    )
+    brands: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"qty": 0.0, "amt": 0.0, "pos": 0, "items": set()}
+    )
+    cross: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    unassigned: list[str] = []
+
+    for item, parent, buyer, salon, btype, q, a, _is_ret in rows:
+        g = group_of(
+            item,
+            parent,
+            buyer_type=btype,
+            supplier_buyer_names=supplier_buyer_names,
+        )
         if g.startswith("ПРОЧЕЕ"):
             unassigned.append(item)
         d = groups[g]
@@ -194,127 +269,369 @@ def main():
         brands[b]["items"].add(item)
         ch = salon or buyer
         cross[g][ch] += a
-        cross_qty[g][ch] += q
 
-    # 3) ПРОВЕРКА ПОКРЫТИЯ
+    return groups, brands, cross, unassigned
+
+
+def analyze(
+    db_path: str,
+    month: str,
+    compare_month: str | None = None,
+) -> dict[str, Any]:
+    """Собрать структуру отчёта по номенклатуре за месяц."""
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=30)
+    cur = con.cursor()
+
+    supplier_buyer_names = _load_supplier_buyer_names(cur)
+    src, period, row_count, slice_qty, slice_total, rows = _load_month_slice(cur, month)
+    slice_info = {
+        "source_file": src,
+        "period": period,
+        "rows": row_count,
+        "qty": slice_qty,
+        "amount": slice_total,
+    }
+
+    groups, brands, cross, unassigned = _group_totals_from_rows(rows, supplier_buyer_names)
     n_unique = len({r[0] for r in rows})
-    assert not unassigned, f"НЕ РАСПРЕДЕЛЕНО: {unassigned}"
-    assert sum(len(v["items"]) for v in groups.values()) == n_unique, "не все товары распределены"
-    assert abs(sum(v["amt"] for v in groups.values()) - slice_total) < 0.01, "сумма групп != итог среза"
-    print(f"\nПокрытие OK: {n_unique} моделей, {len(groups)} групп, "
-          f"сумма {sum(v['amt'] for v in groups.values()):,.0f} ₽ == срез {slice_total:,.0f} ₽")
+    n_assigned = sum(len(v["items"]) for v in groups.values())
+    groups_sum = sum(v["amt"] for v in groups.values())
+    sum_ok = abs(groups_sum - slice_total) < 0.01 and not unassigned and n_assigned == n_unique
 
-    total_amt = sum(v["amt"] for v in groups.values())
-    total_qty = sum(v["qty"] for v in groups.values())
+    total_amt = groups_sum
 
-    # 4) сводка по группам
-    print("\n=== СВОДКА ПО АССОРТИМЕНТНЫМ ГРУППАМ ===")
-    print(f"{'группа':<28}{'поз':>5}{'мод':>5}{'шт':>7}{'₽':>13}{'доля':>8}{'₽/шт':>10}")
-    for g, v in sorted(groups.items(), key=lambda x: -x[1]["amt"]):
-        share = v["amt"] / total_amt * 100
-        per = v["amt"] / v["qty"] if v["qty"] else 0
-        print(f"{g:<28}{v['pos']:>5}{len(v['items']):>5}{v['qty']:>7.0f}"
-              f"{v['amt']:>13,.0f}{share:>7.1f}%{per:>10,.0f}")
+    group_list = []
+    for name, v in sorted(groups.items(), key=lambda x: -x[1]["amt"]):
+        share = v["amt"] / total_amt * 100 if total_amt else 0.0
+        avg = v["amt"] / v["qty"] if v["qty"] else 0.0
+        group_list.append({
+            "name": name,
+            "positions": v["pos"],
+            "models": len(v["items"]),
+            "qty": v["qty"],
+            "amount": v["amt"],
+            "share_pct": share,
+            "avg_per_unit": avg,
+        })
 
-    # 5) кросс-таблица группа x точка
-    chans = sorted({ch for g in cross for ch in cross[g]},
-                    key=lambda ch: -sum(cross[g][ch] for g in cross))
-    print("\n=== КРОСС-ТАБЛИЦА: ГРУППА x ТОЧКА (₽) ===")
-    print(f"{'группа':<28}" + "".join(f"{ch[:16]:>18}" for ch in chans) + f"{'ИТОГО':>13}")
-    for g in sorted(groups, key=lambda x: -groups[x]["amt"]):
-        line = f"{g:<28}"
-        for ch in chans:
-            v = cross[g].get(ch, 0.0)
-            line += f"{(f'{v:,.0f}' if v else '—'):>18}"
-        line += f"{groups[g]['amt']:>13,.0f}"
-        print(line)
-    print(f"{'ИТОГО':<28}" + "".join(
-        f"{sum(cross[g].get(ch,0) for g in cross):>18,.0f}" for ch in chans) + f"{total_amt:>13,.0f}")
+    cross_table: dict[str, dict[str, float]] = {
+        g: dict(channels) for g, channels in cross.items()
+    }
 
-    # 6) бренды
-    print("\n=== БРЕНДЫ ===")
-    for b, v in sorted(brands.items(), key=lambda x: -x[1]["amt"]):
-        print(f"  {b:<16} поз={v['pos']:>3} мод={len(v['items']):>3} "
-              f"шт={v['qty']:>6.0f} {v['amt']:>12,.0f} ₽ ({v['amt']/total_amt*100:>4.1f}%)")
+    brand_list = []
+    for name, v in sorted(brands.items(), key=lambda x: -x[1]["amt"]):
+        brand_list.append({
+            "name": name,
+            "positions": v["pos"],
+            "models": len(v["items"]),
+            "qty": v["qty"],
+            "amount": v["amt"],
+            "share_pct": v["amt"] / total_amt * 100 if total_amt else 0.0,
+        })
 
-    # 7) концентрация
-    items_sorted = sorted((v for g in groups.values() for v in g["items"].values()), reverse=True)
-    print("\n=== КОНЦЕНТРАЦИЯ ПО МОДЕЛЯМ ===")
+    items_sorted = sorted(
+        (amt for g in groups.values() for amt in g["items"].values()),
+        reverse=True,
+    )
+    concentration: dict[str, float] = {}
     for n in (1, 3, 5, 10):
         s = sum(items_sorted[:n])
-        print(f"  топ-{n:<3} {s:>12,.0f} ₽ = {s/total_amt*100:>5.1f}% оборота")
+        concentration[f"top{n}_pct"] = s / total_amt * 100 if total_amt else 0.0
 
-    # 8) возвраты
-    rets = [r for r in rows if r[7] == 1]
-    print(f"\n=== ВОЗВРАТЫ: {len(rets)} строк ===")
+    returns = [
+        {
+            "buyer": r[2],
+            "item": r[0],
+            "qty": r[5],
+            "amount": r[6],
+        }
+        for r in rows if r[7] == 1
+    ]
+
+    technical_rows = [
+        {
+            "buyer": r[2],
+            "item": r[0],
+            "qty": r[5],
+            "amount": r[6],
+        }
+        for r in rows if 0 < (r[6] or 0) <= 2
+    ]
+
+    positions = [
+        {
+            "group": group_of(
+                item,
+                parent,
+                buyer_type=btype,
+                supplier_buyer_names=supplier_buyer_names,
+            ),
+            "buyer": buyer,
+            "salon": salon or "",
+            "item": item,
+            "qty": q,
+            "amount": a,
+            "period": period,
+        }
+        for item, parent, buyer, salon, btype, q, a, _is_ret in rows
+    ]
+
+    dynamics: list[dict[str, Any]] = []
+    dynamics_meta: dict[str, Any] = {}
+    cmp_month = compare_month if compare_month is not None else _prev_month(month)
+    try:
+        _p_src, p_period, _p_rows, _p_qty, _p_amt, prev_rows = _load_month_slice(cur, cmp_month)
+        prev_groups, _, _, _ = _group_totals_from_rows(prev_rows, supplier_buyer_names)
+        days_new = period_days(period)
+        days_old = period_days(p_period)
+        dynamics_meta = {
+            "compare_month": cmp_month,
+            "compare_period": p_period,
+            "days_current": days_new,
+            "days_compare": days_old,
+        }
+        keys = set(groups) | set(prev_groups)
+        for g in sorted(keys, key=lambda x: -groups.get(x, {"amt": 0.0})["amt"]):
+            v = groups.get(g, {"qty": 0.0, "amt": 0.0})
+            o = prev_groups.get(g, {"qty": 0.0, "amt": 0.0})
+            per_day = v["amt"] / days_new if days_new else 0.0
+            pd_old = o["amt"] / days_old if days_old else 0.0
+            delta_pct = (per_day / pd_old - 1) * 100 if pd_old else None
+            dynamics.append({
+                "group": g,
+                "amount": v["amt"],
+                "per_day": per_day,
+                "delta_pct": delta_pct,
+            })
+    except ValueError:
+        pass
+
+    n_slices = cur.execute(
+        "SELECT COUNT(*) FROM ("
+        " SELECT 1 FROM sales WHERE month=? GROUP BY source_file, period)",
+        (month,),
+    ).fetchone()[0]
+    con.close()
+
+    slice_warnings: list[str] = []
+    if n_slices > 1:
+        slice_warnings.append(
+            f"в базе {n_slices} среза за месяц — берётся самый полный, они НЕ складываются"
+        )
+
+    return {
+        "month": month,
+        "slice": slice_info,
+        "slice_warnings": slice_warnings,
+        "groups": group_list,
+        "cross_table": cross_table,
+        "brands": brand_list,
+        "concentration": concentration,
+        "returns": returns,
+        "technical_rows": technical_rows,
+        "coverage": {
+            "models": n_unique,
+            "assigned": n_assigned,
+            "unassigned": unassigned,
+            "sum_ok": sum_ok,
+        },
+        "dynamics": dynamics,
+        "dynamics_meta": dynamics_meta,
+        "positions": positions,
+    }
+
+
+def render_text(data: dict[str, Any]) -> str:
+    """Человекочитаемый отчёт (прежний формат stdout)."""
+    out = io.StringIO()
+    month = data["month"]
+    sl = data["slice"]
+
+    print(f"=== СРЕЗЫ за {month} ===", file=out)
+    print(
+        f"  {sl['source_file']:<28} {sl['period']:<24} "
+        f"строк={sl['rows']:<4} шт={sl['qty']:<8} ₽={sl['amount']:,.0f}",
+        file=out,
+    )
+    for warn in data.get("slice_warnings", []):
+        print(f"  ВНИМАНИЕ: {warn}", file=out)
+
+    cov = data["coverage"]
+    groups_by_name = {g["name"]: g for g in data["groups"]}
+    total_amt = sl["amount"]
+    groups_sum = sum(g["amount"] for g in data["groups"])
+    print(
+        f"\nПокрытие OK: {cov['models']} моделей, {len(data['groups'])} групп, "
+        f"сумма {groups_sum:,.0f} ₽ == срез {total_amt:,.0f} ₽",
+        file=out,
+    )
+
+    print("\n=== СВОДКА ПО АССОРТИМЕНТНЫМ ГРУППАМ ===", file=out)
+    print(
+        f"{'группа':<28}{'поз':>5}{'мод':>5}{'шт':>7}{'₽':>13}{'доля':>8}{'₽/шт':>10}",
+        file=out,
+    )
+    for g in data["groups"]:
+        print(
+            f"{g['name']:<28}{g['positions']:>5}{g['models']:>5}{g['qty']:>7.0f}"
+            f"{g['amount']:>13,.0f}{g['share_pct']:>7.1f}%"
+            f"{g['avg_per_unit']:>10,.0f}",
+            file=out,
+        )
+
+    chans = sorted(
+        {ch for g in data["cross_table"] for ch in data["cross_table"][g]},
+        key=lambda ch: -sum(data["cross_table"][g].get(ch, 0) for g in data["cross_table"]),
+    )
+    print("\n=== КРОСС-ТАБЛИЦА: ГРУППА x ТОЧКА (₽) ===", file=out)
+    print(
+        f"{'группа':<28}" + "".join(f"{ch[:16]:>18}" for ch in chans) + f"{'ИТОГО':>13}",
+        file=out,
+    )
+    cross = data["cross_table"]
+    for g in data["groups"]:
+        name = g["name"]
+        line = f"{name:<28}"
+        for ch in chans:
+            v = cross.get(name, {}).get(ch, 0.0)
+            line += f"{(f'{v:,.0f}' if v else '—'):>18}"
+        line += f"{g['amount']:>13,.0f}"
+        print(line, file=out)
+    print(
+        f"{'ИТОГО':<28}"
+        + "".join(
+            f"{sum(cross.get(g, {}).get(ch, 0) for g in cross):>18,.0f}" for ch in chans
+        )
+        + f"{total_amt:>13,.0f}",
+        file=out,
+    )
+
+    print("\n=== БРЕНДЫ ===", file=out)
+    for b in data["brands"]:
+        print(
+            f"  {b['name']:<16} poz={b['positions']:>3} mod={b['models']:>3} "
+            f"шт={b['qty']:>6.0f} {b['amount']:>12,.0f} ₽ ({b['share_pct']:>4.1f}%)",
+            file=out,
+        )
+
+    print("\n=== КОНЦЕНТРАЦИЯ ПО МОДЕЛЯМ ===", file=out)
+    conc = data["concentration"]
+    for n in (1, 3, 5, 10):
+        pct = conc.get(f"top{n}_pct", 0.0)
+        s = total_amt * pct / 100
+        print(f"  топ-{n:<3} {s:>12,.0f} ₽ = {pct:>5.1f}% оборота", file=out)
+
+    rets = data["returns"]
+    print(f"\n=== ВОЗВРАТЫ: {len(rets)} строк ===", file=out)
     if rets:
         for r in rets:
-            print(f"  {r[2][:30]:30s} | {r[0][:44]:44s} | qty={r[5]} | {r[6]:,.0f} ₽")
+            print(
+                f"  {r['buyer'][:30]:30s} | {r['item'][:44]:44s} | "
+                f"qty={r['qty']} | {r['amount']:,.0f} ₽",
+                file=out,
+            )
     else:
-        print("  возвратов нет")
+        print("  возвратов нет", file=out)
 
-    # 9) технические позиции
-    tech = [(r[2], r[0], r[5], r[6]) for r in rows if 0 < (r[6] or 0) <= 2]
+    tech = data["technical_rows"]
     if tech:
-        print("\n=== ТЕХНИЧЕСКИЕ ПОЗИЦИИ (1-2 ₽) ===")
+        print("\n=== ТЕХНИЧЕСКИЕ ПОЗИЦИИ (1-2 ₽) ===", file=out)
         for t in tech:
-            print(f"  {t[0][:30]:30s} | {t[1][:44]:44s} | qty={t[2]} | {t[3]:.2f} ₽")
+            print(
+                f"  {t['buyer'][:30]:30s} | {t['item'][:44]:44s} | "
+                f"qty={t['qty']} | {t['amount']:.2f} ₽",
+                file=out,
+            )
 
-    # 10) сравнение с прошлым месяцем по группам
-    if args.compare_month:
-        con = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True, timeout=30)
-        c2 = con.cursor()
-        prev = c2.execute(
-            "SELECT source_file, period, SUM(amount), SUM(quantity) FROM sales WHERE month=?"
-            " GROUP BY source_file, period ORDER BY SUM(amount) DESC LIMIT 1", (args.compare_month,)
-        ).fetchone()
-        if prev:
-            pm, pp, pamt, pqty = prev
-            prows = c2.execute("SELECT item_name, COALESCE(parent_category,''), quantity, amount"
-                               " FROM sales WHERE source_file=?", (pm,)).fetchall()
-            pg = defaultdict(lambda: {"qty": 0.0, "amt": 0.0})
-            for item, parent, q, a in prows:
-                g = group_of(item, parent)
-                pg[g]["qty"] += q
-                pg[g]["amt"] += a
-            con.close()
-            import datetime as dt
+    dyn = data["dynamics"]
+    meta = data.get("dynamics_meta") or {}
+    if dyn and meta:
+        print(
+            f"\n=== ДИНАМИКА ПО ГРУППАМ: {month} ({meta['days_current']} дн) "
+            f"vs {meta['compare_month']} ({meta['days_compare']} дн) ===",
+            file=out,
+        )
+        print(f"{'группа':<28}{'шт':>6}{'₽':>12}{'₽/день':>11}{'Δ₽/день':>11}", file=out)
+        for row in dyn:
+            gname = row["group"]
+            gmeta = groups_by_name.get(gname)
+            qty = gmeta["qty"] if gmeta else 0.0
+            pd_new = row["per_day"]
+            d_pct = row.get("delta_pct")
+            d = f"{d_pct:>+10.1f}%" if d_pct is not None else "       —"
+            print(
+                f"{gname:<28}{qty:>6.0f}{row['amount']:>12,.0f}{pd_new:>11,.0f}{d:>11}",
+                file=out,
+            )
 
-            def _period_days(p):
-                """Число дней в периоде вида '01.11.2026-18.11.2026'.
+    return out.getvalue()
 
-                Внимание: у даты тоже есть дефис-разделитель, поэтому период
-                режем по '-' только один раз (maxsplit=1), а не split().
-                """
-                a, b = p.split("-", 1)
-                d1 = dt.date(*map(int, a.split(".")[::-1]))
-                d2 = dt.date(*map(int, b.split(".")[::-1]))
-                return (d2 - d1).days + 1
 
-            days_new = _period_days(period)
-            days_old = _period_days(pp)
-            print(f"\n=== ДИНАМИКА ПО ГРУППАМ: {args.month} ({days_new} дн) vs {args.compare_month} ({days_old} дн) ===")
-            print(f"{'группа':<28}{'шт':>6}{'₽':>12}{'₽/день':>11}{'Δ₽/день':>11}")
-            keys = set(groups) | set(pg)
-            for g in sorted(keys, key=lambda x: -groups.get(x, {"amt":0})["amt"]):
-                v = groups.get(g, {"qty": 0.0, "amt": 0.0})
-                o = pg.get(g, {"qty": 0.0, "amt": 0.0})
-                pd_new = v["amt"] / days_new
-                pd_old = o["amt"] / days_old
-                d = f"{(pd_new/pd_old-1)*100:>+10.1f}%" if pd_old else "       —"
-                print(f"{g:<28}{v['qty']:>6.0f}{v['amt']:>12,.0f}{pd_new:>11,.0f}{d:>11}")
-        else:
-            con.close()
+def render_json(data: dict[str, Any]) -> str:
+    """JSON без вспомогательного поля positions (для компактности)."""
+    payload = {
+        k: v for k, v in data.items()
+        if k not in ("positions", "slice_warnings")
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
-    # 11) CSV
+
+def render_csv(data: dict[str, Any]) -> str:
+    """Плоская таблица позиций."""
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";")
+    w.writerow(["группа", "покупатель", "точка", "позиция", "кол-во", "сумма", "период"])
+    for row in sorted(data.get("positions", []), key=lambda r: -r["amount"]):
+        w.writerow([
+            row["group"],
+            row["buyer"],
+            row["salon"],
+            row["item"],
+            row["qty"],
+            row["amount"],
+            row["period"],
+        ])
+    return buf.getvalue()
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--db", default="sales.db")
+    ap.add_argument("--month", required=True)
+    ap.add_argument("--format", choices=("text", "json", "csv"), default="text")
+    ap.add_argument("--output", "-o", default=None, help="Файл вывода (иначе stdout)")
+    ap.add_argument("--compare-month", default=None)
+    ap.add_argument("--csv", default=None, help="(устар.) путь к CSV, эквивалент --format csv -o")
+    args = ap.parse_args()
+
+    try:
+        report = analyze(args.db, args.month, compare_month=args.compare_month)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
     if args.csv:
+        csv_body = render_csv(report)
         with open(args.csv, "w", encoding="utf-8-sig", newline="") as f:
-            w = csv.writer(f, delimiter=";")
-            w.writerow(["группа", "покупатель", "точка", "позиция", "кол-во", "сумма", "период"])
-            for item, parent, buyer, salon, btype, q, a, is_ret in sorted(
-                    rows, key=lambda r: -r[6]):
-                w.writerow([group_of(item, parent), buyer, salon or "", item, q, a, period])
-        print(f"\nCSV: {args.csv} ({os.path.getsize(args.csv)} Б)")
+            f.write(csv_body)
+        if args.format == "text":
+            text = render_text(report)
+            sys.stdout.write(text)
+            print(f"\nCSV: {args.csv} ({os.path.getsize(args.csv)} Б)")
+            return
+
+    if args.format == "text":
+        body = render_text(report)
+    elif args.format == "json":
+        body = render_json(report)
+    else:
+        body = render_csv(report)
+
+    if args.output:
+        enc = "utf-8-sig" if args.format == "csv" else "utf-8"
+        with open(args.output, "w", encoding=enc, newline="") as f:
+            f.write(body)
+    else:
+        sys.stdout.write(body)
 
 
 if __name__ == "__main__":
