@@ -22,9 +22,7 @@ import sys
 from collections import defaultdict
 from typing import Any
 
-SUPPLIER_PARENTS = {
-    'Поставщик Махачкала', 'Поставщик Цветы',
-}
+_SUPPLIER_GROUP = 'Прочее (поставщики/техника)'
 
 # --- расширения под ноябрьский срез 01-18.11.2026 -------------------------
 NEW_PREFIXES = {
@@ -43,12 +41,39 @@ NEW_PREFIXES = {
 }
 
 
-def group_of(item: str, parent: str | None = None) -> str:
+def _parent_suggests_supplier(parent: str | None) -> bool:
+    """Fallback для старых срезов без buyer_type на строке продажи."""
+    if not parent:
+        return False
+    low = parent.lower()
+    return 'поставщ' in low or low.startswith('техник')
+
+
+def is_supplier_sale(
+    buyer_type: str | None,
+    parent: str | None,
+    supplier_buyer_names: frozenset[str] | None = None,
+) -> bool:
+    """Поставщик определяется по buyer_type и справочнику buyers, не по захардкоженным именам."""
+    if buyer_type == 'supplier':
+        return True
+    if supplier_buyer_names and parent and parent in supplier_buyer_names:
+        return True
+    return _parent_suggests_supplier(parent)
+
+
+def group_of(
+    item: str,
+    parent: str | None = None,
+    *,
+    buyer_type: str | None = None,
+    supplier_buyer_names: frozenset[str] | None = None,
+) -> str:
     """Торговая классификация позиции по её названию."""
     s = item.strip()
     low = s.lower()
-    if parent in SUPPLIER_PARENTS:
-        return 'Прочее (поставщики/техника)'
+    if is_supplier_sale(buyer_type, parent, supplier_buyer_names):
+        return _SUPPLIER_GROUP
     if s == "Ткань, м":
         return 'Ткани'
     if '"Цветы"' in s or s.startswith('№'):
@@ -150,11 +175,22 @@ def period_days(period: str) -> int:
     """Число дней в периоде вида '01.11.2026-18.11.2026'.
 
     У даты тоже есть дефис-разделитель — режем по '-' только один раз.
+    Короткий формат ``YYYY-MM`` — число дней в календарном месяце.
     """
-    a, b = period.split("-", 1)
-    d1 = dt.date(*map(int, a.split(".")[::-1]))
-    d2 = dt.date(*map(int, b.split(".")[::-1]))
-    return (d2 - d1).days + 1
+    if "." in period and period.count(".") >= 4:
+        a, b = period.split("-", 1)
+        d1 = dt.date(*map(int, a.split(".")[::-1]))
+        d2 = dt.date(*map(int, b.split(".")[::-1]))
+        return (d2 - d1).days + 1
+    if len(period) == 7 and period[4] == "-":
+        year, month = map(int, period.split("-"))
+        start = dt.date(year, month, 1)
+        if month == 12:
+            end = dt.date(year + 1, 1, 1)
+        else:
+            end = dt.date(year, month + 1, 1)
+        return (end - start).days
+    raise ValueError(f"unrecognized period format: {period!r}")
 
 
 def _prev_month(month: str) -> str:
@@ -184,8 +220,19 @@ def _load_month_slice(
     return src, period, row_count, qty or 0.0, amount or 0.0, rows
 
 
+def _load_supplier_buyer_names(cur: sqlite3.Cursor) -> frozenset[str]:
+    try:
+        rows = cur.execute(
+            "SELECT name FROM buyers WHERE buyer_type='supplier'",
+        ).fetchall()
+    except sqlite3.Error:
+        return frozenset()
+    return frozenset(r[0] for r in rows)
+
+
 def _group_totals_from_rows(
     rows: list[tuple[Any, ...]],
+    supplier_buyer_names: frozenset[str],
 ) -> tuple[
     dict[str, dict[str, Any]],
     dict[str, dict[str, Any]],
@@ -201,8 +248,13 @@ def _group_totals_from_rows(
     cross: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     unassigned: list[str] = []
 
-    for item, parent, buyer, salon, _btype, q, a, _is_ret in rows:
-        g = group_of(item, parent)
+    for item, parent, buyer, salon, btype, q, a, _is_ret in rows:
+        g = group_of(
+            item,
+            parent,
+            buyer_type=btype,
+            supplier_buyer_names=supplier_buyer_names,
+        )
         if g.startswith("ПРОЧЕЕ"):
             unassigned.append(item)
         d = groups[g]
@@ -230,6 +282,7 @@ def analyze(
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=30)
     cur = con.cursor()
 
+    supplier_buyer_names = _load_supplier_buyer_names(cur)
     src, period, row_count, slice_qty, slice_total, rows = _load_month_slice(cur, month)
     slice_info = {
         "source_file": src,
@@ -239,7 +292,7 @@ def analyze(
         "amount": slice_total,
     }
 
-    groups, brands, cross, unassigned = _group_totals_from_rows(rows)
+    groups, brands, cross, unassigned = _group_totals_from_rows(rows, supplier_buyer_names)
     n_unique = len({r[0] for r in rows})
     n_assigned = sum(len(v["items"]) for v in groups.values())
     groups_sum = sum(v["amt"] for v in groups.values())
@@ -307,7 +360,12 @@ def analyze(
 
     positions = [
         {
-            "group": group_of(item, parent),
+            "group": group_of(
+                item,
+                parent,
+                buyer_type=btype,
+                supplier_buyer_names=supplier_buyer_names,
+            ),
             "buyer": buyer,
             "salon": salon or "",
             "item": item,
@@ -315,7 +373,7 @@ def analyze(
             "amount": a,
             "period": period,
         }
-        for item, parent, buyer, salon, _btype, q, a, _is_ret in rows
+        for item, parent, buyer, salon, btype, q, a, _is_ret in rows
     ]
 
     dynamics: list[dict[str, Any]] = []
@@ -323,7 +381,7 @@ def analyze(
     cmp_month = compare_month if compare_month is not None else _prev_month(month)
     try:
         _p_src, p_period, _p_rows, _p_qty, _p_amt, prev_rows = _load_month_slice(cur, cmp_month)
-        prev_groups, _, _, _ = _group_totals_from_rows(prev_rows)
+        prev_groups, _, _, _ = _group_totals_from_rows(prev_rows, supplier_buyer_names)
         days_new = period_days(period)
         days_old = period_days(p_period)
         dynamics_meta = {
