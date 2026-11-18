@@ -39,3 +39,7 @@ data/worktrees.json
 data/cron_registry_last.json
 data/cron_registry_last.json.tmp
 trash_report_[0-9]*.json
+
+# SQLite sidecar-файлы (WAL/SHM) не коммитить
+*.db-wal
+*.db-shm
