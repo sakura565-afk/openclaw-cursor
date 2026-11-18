@@ -56,6 +56,19 @@ CREATE TABLE imports (
     imported_at TEXT NOT NULL,
     report_filter TEXT
 );
+CREATE TABLE slices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_file TEXT NOT NULL,
+    period TEXT NOT NULL,
+    month TEXT NOT NULL,
+    report_filter TEXT NOT NULL,
+    rows INTEGER NOT NULL,
+    qty REAL NOT NULL,
+    amount REAL NOT NULL,
+    imported_at TEXT NOT NULL,
+    supersedes INTEGER,
+    is_current INTEGER NOT NULL DEFAULT 1
+);
 ```
 
 ## Ключевые правила (проверены на реальных выгрузках)
