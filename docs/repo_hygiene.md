@@ -56,6 +56,27 @@ python scripts/repo_hygiene.py --include-merged --json
 and used to protect their head branches. Operations are performed in PR-number
 order, then branch-name order; `--max` caps both kinds together.
 
+## Squash/cherry-pick merges
+
+When a pull request was integrated via squash or cherry-pick, the head branch
+often keeps `ahead_by > 0` because the commit SHAs differ from `main`. In a local
+git checkout the tool also runs `git cherry origin/main origin/<branch>`; when
+every commit is patch-equivalent (`-` lines only), the PR is a close candidate
+even though `ahead_by` is positive. The dry-run reason cites the matching main
+commit when found in `git log` (for example `abfe2f0 … Closes PR #271`).
+
+## Unmerged paths still absent on `main`
+
+Files newly introduced on the branch (`added` in the three-dot compare) that do
+not exist on `main` block auto-close. The PR stays open and the comment lists
+those paths (for example `scripts/daily_brief.py` on PR #249).
+
+## Stale superseded drafts
+
+When `behind_by` is large (default threshold: 50), the branch is only slightly
+ahead, and no paths are missing on `main`, the pull request is treated as
+superseded: the same paths evolved on `main` while the branch was idle.
+
 ## Why `ahead_by` matters
 
 For each remote branch, the tool requests:
