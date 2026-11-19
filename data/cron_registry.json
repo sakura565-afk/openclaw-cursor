@@ -47,7 +47,7 @@
       "state_file": "",
       "log_file": "logs/metrika_daily_task.log",
       "alert": "telegram",
-      "notes": "19.11.2026: ежедневный отчёт по Яндекс.Метрике. Last Result: 0. Токен берётся из YANDEX_METRIKA_TOKEN/YANDEX_METRIKA_OAUTH_TOKEN, иначе из локальных скриптов metrika_daily.py/metrika_landings.py (пути относительные, OPENCLAW_WORKSPACE)."
+      "notes": "19.11.2026: ежедневный отчёт по Яндекс.Метрике, 09:00 MSK. Обёртка scripts/_metrika_daily_task.cmd -> scripts/metrika_telegram_daily.py, который вызывает репозиторный scripts/metrika_costs_margin.py (--skip-telegram). Last Result: 0, Telegram-доставка подтверждена. После перехода на пакет metrika_tools отчёт содержит ВСЕ 10 счётчиков (было 7): добавлены AMADEY | Кресла, AMADEY | Предметы мебели, DIV Диваны-кровати."
     },
     {
       "name": "Ollama-Health-Daily",
