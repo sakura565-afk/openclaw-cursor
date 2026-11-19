@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from src.coordination.cross_bot_sync import FileLock, LockTimeoutError, atomic_write_json, utc_now
+from .cross_bot_sync import FileLock, LockTimeoutError, atomic_write_json, utc_now
 
 QUEUE_VERSION = 1
 RESULTS_BASENAME = "iskra_kara_results.json"
