@@ -39,6 +39,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -80,7 +81,10 @@ DEFAULT_TELEGRAM_SCRIPT = Path(
 DEFAULT_COSTS_DIR = REPO_ROOT / "data" / "costs"
 DEFAULT_SALES_FILE = REPO_ROOT / "scripts" / "parsed_sales_v20.json"
 
-VAT_MULTIPLIER = 1.20
+VAT_MULTIPLIER = 1.2
+# Пауза между запросами к Метрике. API режет по квоте параллельных запросов
+# на один OAuth-токен (HTTP 429 quota_parallel_requests_by_uid).
+REQUEST_PACE_SECONDS = 1.50
 SALES_LOOKBACK_DAYS = 30
 
 # Category overrides applied after the data-driven category lookup. Each entry
@@ -156,8 +160,15 @@ def fetch_day_stats(
     *,
     proxy_url: str | None,
     timeout: int = 60,
+    max_retries: int = 4,
+    retry_base_delay: float = 2.0,
 ) -> DayStats:
-    """GET /stat/v1/data for a single calendar day (accuracy=full)."""
+    """GET /stat/v1/data for a single calendar day (accuracy=full).
+
+    Yandex.Metrika limits parallel requests per OAuth token
+    (HTTP 429 quota_parallel_requests_by_uid) and returns HTTP 503 under
+    load. Both are transient: retry with exponential backoff before giving up.
+    """
     params = {
         "ids": counter_id,
         "date1": day.isoformat(),
@@ -176,8 +187,27 @@ def fetch_day_stats(
         method="GET",
     )
     opener = _build_opener(proxy_url)
-    with opener.open(request, timeout=timeout) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    last_error: urllib.error.HTTPError | None = None
+    for attempt in range(max_retries):
+        try:
+            with opener.open(request, timeout=timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if exc.code not in (429, 503) or attempt == max_retries - 1:
+                raise
+            delay = retry_base_delay * (2**attempt)
+            # Retry-After wins when the server provides it.
+            retry_after = exc.headers.get("Retry-After") if exc.headers else None
+            if retry_after:
+                try:
+                    delay = max(delay, float(retry_after))
+                except ValueError:
+                    pass
+            time.sleep(delay)
+    else:  # pragma: no cover - loop always breaks or raises
+        raise last_error  # type: ignore[misc]
 
     # API may return totals as a flat list [v0, v1, v2] (single-day or week group)
     # OR as a nested list [[d0], [d1], ...] (multi-day with day group). Handle both.
@@ -214,6 +244,9 @@ def collect_metrika_rows(
             rows.append((counter_id, label, None, f"HTTP {exc.code}: {body[:200]}"))
         except (urllib.error.URLError, OSError, ValueError) as exc:
             rows.append((counter_id, label, None, str(exc)))
+        # Metrika quotas concurrent requests per OAuth token. Pace the calls
+        # so a full counter sweep does not trip the 429 quota.
+        time.sleep(REQUEST_PACE_SECONDS)
     return rows
 
 
