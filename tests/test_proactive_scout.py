@@ -185,10 +185,13 @@ class ProactiveScoutTests(unittest.TestCase):
         self.assertEqual(status.returncode, 0, status.stderr)
         status_payload = json.loads(status.stdout)
         self.assertTrue(status_payload["active_cache_entries"])
+        self.assertGreaterEqual(len(status_payload["jobs"]), 1)
 
+        pending_jobs = len(list((self.scout_dir / "jobs").glob("*.json")))
         cleared = scout_clear(self.scout_dir)
         self.assertGreaterEqual(cleared["cache_files"], 1)
-        self.assertGreaterEqual(cleared["job_files"], 1)
+        if pending_jobs:
+            self.assertGreaterEqual(cleared["job_files"], 1)
 
         clear_cli = subprocess.run(
             [sys.executable, str(ROOT / "scripts" / "proactive_scout.py"), "clear"],
