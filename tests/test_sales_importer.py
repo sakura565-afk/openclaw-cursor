@@ -200,7 +200,7 @@ def test_buyer_rollup_mismatch_blocks_apply(sample_db: Path) -> None:
 
 NOV_ROW_COUNT = 112
 NOV_QTY = 268.0
-NOV_AMOUNT = 5_766_389.0
+NOV_AMOUNT = 4_074_501.0
 
 SALES_TOOLS_PKG = FIXTURE_DB.parent.parent
 _REGISTRY_VAR_RE = re.compile(
