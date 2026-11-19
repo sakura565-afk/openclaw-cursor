@@ -300,7 +300,16 @@ class OllamaDailySmokeTests(unittest.TestCase):
         cloud = smoke.probe_model("gpt-oss:20b:cloud", runner=runner, time_fn=lambda: 0.0)
         local = smoke.probe_model("gemma4:e4b", runner=runner, time_fn=lambda: 0.0)
 
-        self.assertEqual(seen, [25.0, 120.0])
+        # Проба обязана брать персональный таймаут модели из справочника,
+        # а не из литерала в тесте: таймауты меняются по мере замеров
+        # холодного старта на конкретной машине (см. MODEL_TIMEOUTS).
+        self.assertEqual(
+            seen,
+            [
+                ollama_chain.model_timeout("gpt-oss:20b:cloud"),
+                ollama_chain.model_timeout("gemma4:e4b"),
+            ],
+        )
         self.assertTrue(cloud["cloud"])
         self.assertFalse(local["cloud"])
 
