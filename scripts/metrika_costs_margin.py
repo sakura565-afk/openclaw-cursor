@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -136,10 +137,51 @@ class DayStats:
 
 
 def _metrika_token() -> str:
-    return (
+    """Resolve the Metrika OAuth token.
+
+    Order: environment first, then the sibling daily script, which is where
+    the token is actually stored on this machine. Without the fallback the
+    scheduled report silently produced "YANDEX_METRIKA_TOKEN not set" for
+    every counter while still exiting 0.
+    """
+    token = (
         os.environ.get("YANDEX_METRIKA_TOKEN", "").strip()
         or os.environ.get("YANDEX_METRIKA_OAUTH_TOKEN", "").strip()
     )
+    if token:
+        return token
+
+    for candidate in _token_source_files():
+        try:
+            text = candidate.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        match = re.search(
+            r"""^\s*TOKEN\s*=\s*['"]([^'"]+)['"]""", text, re.MULTILINE
+        )
+        if match:
+            return match.group(1).strip()
+    return ""
+
+
+def _token_source_files() -> list[Path]:
+    """Places the Metrika token may live, most specific first.
+
+    Resolved relative to the repo checkout, not hardcoded to this machine:
+    the workspace lives next to the repo clone.
+    """
+    candidates = [
+        REPO_ROOT.parent / "scripts" / "metrika_daily.py",
+        REPO_ROOT.parent / "scripts" / "metrika_landings.py",
+    ]
+    env_home = os.environ.get("OPENCLAW_WORKSPACE", "").strip()
+    if env_home:
+        base = Path(env_home)
+        candidates = [
+            base / "scripts" / "metrika_daily.py",
+            base / "scripts" / "metrika_landings.py",
+        ] + candidates
+    return candidates
 
 
 def _default_proxy_url() -> str | None:
