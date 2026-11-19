@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
-"""A/B/C test for a trained identity LoRA on Qwen-Image 2.1.
+"""Manual A/B/C measurement for a trained identity LoRA on Qwen-Image 2.1.
+
+Not a pytest module (run explicitly). Pytest does not collect scripts/ (testpaths = tests/).
 
 The question this answers: does the LoRA actually encode the identity, or is
 it just another set of weights that changes the picture?
@@ -18,7 +20,7 @@ Everything else - the model, the VAE, the text encoder, the sampler - is
 identical, so a difference in the output is attributable to the LoRA.
 
 Usage:
-  python scripts/test_identity_lora.py --lora katya_identity_qwen21.safetensors \
+  python scripts/measure_identity_lora.py --lora katya_identity_qwen21.safetensors \
       --source <validation image> --trigger katya_person --out-dir <dir>
 """
 from __future__ import annotations
