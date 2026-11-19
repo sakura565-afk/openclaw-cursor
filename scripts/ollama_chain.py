@@ -93,9 +93,23 @@ MODEL_TIMEOUTS: dict[str, float] = {
     "gpt-oss:20b:cloud": CLOUD_TIMEOUT_SECONDS,
     "gemma4:31b-cloud": CLOUD_TIMEOUT_SECONDS,
     "nemotron-3-nano:30b-cloud": CLOUD_TIMEOUT_SECONDS,
+    # Локальные: замерено 19.11.2026 на RTX 3060 последовательным прогоном
+    # (модели вытесняют друг друга из VRAM, каждая стартует с холодного
+    # чтения весов с диска): lfm2.5-thinking 13 c, gemma4:e4b 77 c,
+    # deepcoder:1.5b 18 c. Запас ~1.5x на колебания холодного старта —
+    # прежние 120 c у gemma4:e4b не выдерживали, и задача падала с кодом 1.
     "lfm2.5-thinking:latest": 90.0,
-    "gemma4:e4b": LOCAL_TIMEOUT_SECONDS,
+    "gemma4:e4b": 150.0,
     "deepcoder:1.5b": 60.0,
+    # Остальные локальные модели цепочки на этой машине (замерено 19.11.2026
+    # на RTX 3060 последовательным прогоном — модели вытесняют друг друга из
+    # VRAM, и каждая стартует с холодного чтения весов с диска):
+    #   gemma4:e2b  57 c, llama3:latest  64 c, deepseek-r1:14b  141 c.
+    # Старые 60 c и 120 c не выдерживали: ежедневный смоук падал с кодом 1,
+    # хотя сами модели живы и отвечают. Запас ~1.5x на колебания.
+    "gemma4:e2b": 120.0,
+    "llama3:latest": 120.0,
+    "deepseek-r1:14b": 240.0,
 }
 
 # xAI идёт не через ollama, а через HTTP API и требует ключ.
