@@ -58,7 +58,7 @@
       "state_file": "data/ollama_health_*.json",
       "log_file": "logs/ollama_health_*.out.log",
       "alert": "telegram",
-      "notes": "state_file проверен: workspace/data/ollama_health_YYYY-MM-DD.json. 21.10.2026 исправлено: (1) ollama_chain.py потерял публичную run_model() -> ollama_daily_smoke.py падал с ImportError каждую ночь; (2) DEFAULT_CHAIN целиком устарел (402 Payment Required + retired 15.07/25.09.2026) -> заменён на 6 проверенных моделей; (3) таймаут 15s -> 30s (локальные модели на RTX 3060 отвечают 15-22s); (4) ps1 ищет python по абсолютному пути. Проверено: 6/6 ok, exit=0."
+      "notes": "21.10.2026: (1) ollama_chain.py потерял публичную run_model() -> ImportError каждую ночь; (2) DEFAULT_CHAIN целиком устарел (402 Payment Required + retired 15.07/25.09.2026) -> заменён на 6 проверенных моделей; (3) таймаут 15s -> 30s. 19.11.2026: правка цепочки от 21.10 была сделана только на хосте, в репозиторий не попала — исправлено (4d623e8). Таймауты подняты по замерам холодного старта 19.11.2026 (gemma4:e4b 77c -> 150c, gemma4:e2b 57c -> 120c, llama3 64c -> 120c, deepseek-r1:14b 141c -> 240c): модели вытесняют друг друга из VRAM, каждая стартует с холодного чтения весов, прежние 60/120c не выдерживали и задача падала с кодом 1."
     },
     {
       "name": "Ollama-Upgrade",
@@ -96,13 +96,13 @@
     {
       "name": "QMD-Embed-Nightly",
       "enabled": true,
-      "command": "\"C:\\Program Files\\nodejs\\node.exe\" C:\\openclaw\\node_modules\\@tobilu\\qmd\\bin\\qmd-embed.js",
+      "command": "cmd /c \"C:\\Users\\user\\.openclaw\\workspace\\scripts\\_qmd_embed_nightly.cmd\"",
       "schedule": "daily 04:00",
       "period_hours": 24.0,
       "state_file": "",
-      "log_file": "",
+      "log_file": "logs/qmd_embed_nightly.log",
       "alert": "telegram",
-      "notes": "21.10.2026: rc=-2147024894 (0x80070002, файл не найден) — команда указывает на несуществующий путь. Нужно проверить фактическое имя entrypoint-скрипта qmd."
+      "notes": "21.10.2026: rc=-2147024894 (0x80070002, файл не найден) — команда указывала на несуществующий путь. 19.11.2026 исправлено: обёртка scripts/_qmd_embed_nightly.cmd восстановлена, правильный entrypoint — лаунчер `qmd` с подкомандой `embed` (bin\\qmd-embed.js не существует). PATH pin на nvm4w node обязателен: better-sqlite3 собран под Node 24 ABI. Проверено: 303 чанка из 49 документов за 19 c, индекс QMD обновлён (до правки не обновлялся 70 дней)."
     },
     {
       "name": "Exec-Health-Watchdog",
