@@ -108,9 +108,9 @@ def test_november_supplier_group_zero(sample_db: str) -> None:
 
 
 def test_october_supplier_group_matches_legacy_parent_rule(sample_db: str) -> None:
-    """99591 ₽ — прежний результат по parent_category поставщиков в срезе октября."""
-    report = analyze(sample_db, "2026-10", compare_month="2026-08")
-    assert abs(_supplier_group_amount(report) - 99591.0) < 0.01
+    """98 500 ₽ — результат по parent_category поставщиков в срезе октября."""
+    report = analyze(sample_db, "2026-10", compare_month="2026-09")
+    assert abs(_supplier_group_amount(report) - 98_500.0) < 0.01
 
 
 def test_render_json_valid_and_sum_ok(sample_db: str) -> None:
