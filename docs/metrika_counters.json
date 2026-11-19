@@ -1,0 +1,64 @@
+{
+  "counters": [
+    {
+      "id": 63403,
+      "name": "amadey.ru",
+      "type": "main",
+      "domain": "amadey.ru"
+    },
+    {
+      "id": 94834593,
+      "name": "divaninfo.ru",
+      "type": "main",
+      "domain": "divaninfo.ru"
+    },
+    {
+      "id": 110795180,
+      "name": "AMADEY | Распродажа",
+      "type": "landing",
+      "domain": "amadey.ru"
+    },
+    {
+      "id": 112584784,
+      "name": "AMADEY | Кресла",
+      "type": "landing",
+      "domain": "amadey.ru"
+    },
+    {
+      "id": 114091411,
+      "name": "AMADEY | Предметы мебели",
+      "type": "landing",
+      "domain": "amadey.ru"
+    },
+    {
+      "id": 110992850,
+      "name": "DIV Arizona",
+      "type": "landing",
+      "domain": "divaninfo.ru"
+    },
+    {
+      "id": 111303025,
+      "name": "DIV Бескаркасные",
+      "type": "landing",
+      "domain": "divaninfo.ru"
+    },
+    {
+      "id": 113522944,
+      "name": "DIV Диваны-кровати",
+      "type": "landing",
+      "domain": "divaninfo.ru"
+    },
+    {
+      "id": 111529130,
+      "name": "DIV Кровати-матрасы",
+      "type": "landing",
+      "domain": "divaninfo.ru"
+    },
+    {
+      "id": 111602665,
+      "name": "DIV Матрасы",
+      "type": "landing",
+      "domain": "divaninfo.ru"
+    }
+  ]
+}

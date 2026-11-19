@@ -42,8 +42,6 @@ import sys
 import tempfile
 import time
 import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -53,26 +51,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-# --------------------------------------------------------------------------- #
-# Metrika counters (id, display label)
-# --------------------------------------------------------------------------- #
-
-COUNTERS: tuple[tuple[int, str], ...] = (
-    (63403, "amadey.ru"),
-    (94834593, "divaninfo.ru"),
-    (110795180, "AMADEY | Распродажа"),
-    (110992850, "DIVANINFO | Arizona"),
-    (111303025, "DIVANINFO | Бескаркасные диваны"),
-    (111529130, "DIVANINFO | Кровати и матрасы"),
-    (111602665, "DIVANINFO | Матрасы Лендинг"),
+from metrika_tools.client import (  # noqa: E402
+    COSTS_MARGIN_DAY_METRICS,
+    DayStats,
+    MetrikaClient,
+    MetrikaHTTPError,
 )
-
-METRIKA_API_BASE = "https://api-metrika.yandex.net"
-STAT_METRICS = (
-    "ym:s:visits",
-    "ym:s:pageviews",
-    "ym:s:avgVisitDurationSeconds",
-)
+from metrika_tools.counters import counter_id_label_pairs  # noqa: E402
 
 DEFAULT_CHAT_ID = "25979298"
 DEFAULT_TELEGRAM_SCRIPT = Path(
@@ -119,21 +104,6 @@ _STANDARD_SUFFIXES = ("-STANDART", "-STANDARD", "-STD", " STANDART", " STANDARD"
 # --------------------------------------------------------------------------- #
 # Metrika fetch (same request shape as scripts/metrika_daily.py)
 # --------------------------------------------------------------------------- #
-
-
-@dataclass(frozen=True)
-class DayStats:
-    visits: float
-    pageviews: float
-    avg_duration_seconds: float
-
-    @classmethod
-    def from_totals(cls, values: list[float]) -> "DayStats":
-        return cls(
-            visits=values[0] if len(values) > 0 else 0.0,
-            pageviews=values[1] if len(values) > 1 else 0.0,
-            avg_duration_seconds=values[2] if len(values) > 2 else 0.0,
-        )
 
 
 def _metrika_token() -> str:
@@ -188,76 +158,6 @@ def _default_proxy_url() -> str | None:
     return os.environ.get("METRIKA_HTTP_PROXY", "http://127.0.0.1:3067")
 
 
-def _build_opener(proxy_url: str | None) -> urllib.request.OpenerDirector:
-    if not proxy_url:
-        return urllib.request.build_opener()
-    handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
-    return urllib.request.build_opener(handler)
-
-
-def fetch_day_stats(
-    oauth_token: str,
-    counter_id: int,
-    day: date,
-    *,
-    proxy_url: str | None,
-    timeout: int = 60,
-    max_retries: int = 4,
-    retry_base_delay: float = 2.0,
-) -> DayStats:
-    """GET /stat/v1/data for a single calendar day (accuracy=full).
-
-    Yandex.Metrika limits parallel requests per OAuth token
-    (HTTP 429 quota_parallel_requests_by_uid) and returns HTTP 503 under
-    load. Both are transient: retry with exponential backoff before giving up.
-    """
-    params = {
-        "ids": counter_id,
-        "date1": day.isoformat(),
-        "date2": day.isoformat(),
-        "metrics": ",".join(STAT_METRICS),
-        "accuracy": "full",
-    }
-    query = urllib.parse.urlencode(params)
-    url = f"{METRIKA_API_BASE}/stat/v1/data?{query}"
-    request = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"OAuth {oauth_token}",
-            "Accept": "application/json",
-        },
-        method="GET",
-    )
-    opener = _build_opener(proxy_url)
-    last_error: urllib.error.HTTPError | None = None
-    for attempt in range(max_retries):
-        try:
-            with opener.open(request, timeout=timeout) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            break
-        except urllib.error.HTTPError as exc:
-            last_error = exc
-            if exc.code not in (429, 503) or attempt == max_retries - 1:
-                raise
-            delay = retry_base_delay * (2**attempt)
-            # Retry-After wins when the server provides it.
-            retry_after = exc.headers.get("Retry-After") if exc.headers else None
-            if retry_after:
-                try:
-                    delay = max(delay, float(retry_after))
-                except ValueError:
-                    pass
-            time.sleep(delay)
-    else:  # pragma: no cover - loop always breaks or raises
-        raise last_error  # type: ignore[misc]
-
-    # API may return totals as a flat list [v0, v1, v2] (single-day or week group)
-    # OR as a nested list [[d0], [d1], ...] (multi-day with day group). Handle both.
-    totals = payload.get("totals", [])
-    row = totals[0] if totals and isinstance(totals[0], list) else totals
-    return DayStats.from_totals([float(x) for x in row])
-
-
 def format_duration(seconds: float) -> str:
     if seconds < 0:
         seconds = 0.0
@@ -272,18 +172,28 @@ def collect_metrika_rows(
     """Return (counter_id, label, stats_or_None, error_or_None) per counter."""
     token = _metrika_token()
     rows: list[tuple[int, str, DayStats | None, str | None]] = []
+    counters = counter_id_label_pairs()
     if not token:
-        for counter_id, label in COUNTERS:
+        for counter_id, label in counters:
             rows.append((counter_id, label, None, "YANDEX_METRIKA_TOKEN not set"))
         return rows
 
-    for counter_id, label in COUNTERS:
+    client = MetrikaClient(
+        token=token,
+        proxy_url=proxy_url,
+        max_retries=4,
+        retry_base_delay=2.0,
+    )
+    for counter_id, label in counters:
         try:
-            stats = fetch_day_stats(token, counter_id, report_day, proxy_url=proxy_url)
+            stats = client.fetch_day_stats(
+                counter_id,
+                report_day,
+                metrics=COSTS_MARGIN_DAY_METRICS,
+            )
             rows.append((counter_id, label, stats, None))
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            rows.append((counter_id, label, None, f"HTTP {exc.code}: {body[:200]}"))
+        except MetrikaHTTPError as exc:
+            rows.append((counter_id, label, None, f"HTTP {exc.code}: {exc.body[:200]}"))
         except (urllib.error.URLError, OSError, ValueError) as exc:
             rows.append((counter_id, label, None, str(exc)))
         # Metrika quotas concurrent requests per OAuth token. Pace the calls
