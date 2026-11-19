@@ -19,7 +19,7 @@ import signal
 import subprocess
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -39,6 +39,11 @@ def _strip_artifacts(text: str) -> str:
 
 LOG_FILE = Path(__file__).parent.parent / "logs" / "nightly_pipeline.log"
 LOG_FILE.parent.mkdir(exist_ok=True)
+
+# Moscow Standard Time — UTC+3, no DST since 2014.
+# Use this instead of datetime.now() so the time-window check is correct
+# regardless of the host/cron environment's system timezone.
+MSK_TZ = timezone(timedelta(hours=3))
 
 STATUS_PENDING = "PENDING"
 STATUS_RUNNING = "RUNNING"
@@ -467,12 +472,12 @@ def run_pipeline(
 
 def main() -> None:
     log("=== NIGHTLY PIPELINE START ===")
-    log("Time window: 1:00 - 8:00 AM")
+    log("Time window: 1:00 - 8:00 AM MSK")
 
-    hour = datetime.now().hour
+    hour = datetime.now(MSK_TZ).hour
     force = os.environ.get("NIGHTLY_FORCE") == "1"
     if not force and (hour < 1 or hour >= 8):
-        log(f"Outside time window (hour={hour}), exiting")
+        log(f"Outside time window (msk_hour={hour}), exiting")
         return
 
     summary = run_pipeline(register_signal_handlers=True)
