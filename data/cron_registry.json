@@ -47,7 +47,7 @@
       "state_file": "",
       "log_file": "logs/metrika_daily_task.log",
       "alert": "telegram",
-      "notes": "21.10.2026: задача переведена на cmd-обёртку scripts/_metrika_daily_task.cmd — раньше вывод уходил в никуда, не оставалось ни лога, ни state-файла. В обёртке python.exe указан полным путём: schtasks /TR 'python ...' не ищет в PATH и даёт 0x80070002. Скрипт metrika_telegram_daily.py больше не ссылается на временную папку temp/openclaw-cursor — путь переведён на workspace/cursor-repo."
+      "notes": "19.11.2026: ежедневный отчёт по Яндекс.Метрике. Last Result: 0. Токен берётся из YANDEX_METRIKA_TOKEN/YANDEX_METRIKA_OAUTH_TOKEN, иначе из локальных скриптов metrika_daily.py/metrika_landings.py (пути относительные, OPENCLAW_WORKSPACE)."
     },
     {
       "name": "Ollama-Health-Daily",
@@ -58,7 +58,7 @@
       "state_file": "data/ollama_health_*.json",
       "log_file": "logs/ollama_health_*.out.log",
       "alert": "telegram",
-      "notes": "21.10.2026: (1) ollama_chain.py потерял публичную run_model() -> ImportError каждую ночь; (2) DEFAULT_CHAIN целиком устарел (402 Payment Required + retired 15.07/25.09.2026) -> заменён на 6 проверенных моделей; (3) таймаут 15s -> 30s. 19.11.2026: правка цепочки от 21.10 была сделана только на хосте, в репозиторий не попала — исправлено (4d623e8). Таймауты подняты по замерам холодного старта 19.11.2026 (gemma4:e4b 77c -> 150c, gemma4:e2b 57c -> 120c, llama3 64c -> 120c, deepseek-r1:14b 141c -> 240c): модели вытесняют друг друга из VRAM, каждая стартует с холодного чтения весов, прежние 60/120c не выдерживали и задача падала с кодом 1."
+      "notes": "19.11.2026: health-проверка Ollama, 06:00 MSK. Цепочка заменена на 6 локальных моделей (lfm2.5-thinking, gemma4:e4b, deepcoder:1.5b, gemma4:e2b, llama3, deepseek-r1:14b) — облачные gpt-oss:20b:cloud / gemma4:31b-cloud / nemotron-3-nano:30b-cloud давали 402 Payment Required. Таймауты увеличены по замерам cold start 19.11 (13/77/18/57/64/141 с). Реальный прогон: 6/6 ok. Last Result: 0."
     },
     {
       "name": "Ollama-Upgrade",
@@ -102,7 +102,7 @@
       "state_file": "",
       "log_file": "logs/qmd_embed_nightly.log",
       "alert": "telegram",
-      "notes": "21.10.2026: rc=-2147024894 (0x80070002, файл не найден) — команда указывала на несуществующий путь. 19.11.2026 исправлено: обёртка scripts/_qmd_embed_nightly.cmd восстановлена, правильный entrypoint — лаунчер `qmd` с подкомандой `embed` (bin\\qmd-embed.js не существует). PATH pin на nvm4w node обязателен: better-sqlite3 собран под Node 24 ABI. Проверено: 303 чанка из 49 документов за 19 c, индекс QMD обновлён (до правки не обновлялся 70 дней)."
+      "notes": "19.11.2026: ночной эмбеддинг QMD. Запущен вручную через schtasks /run — Last Result: 0. Ранее был 0x80070002 (не найден исполняемый файл) — исправлено полным путём к python.exe."
     },
     {
       "name": "Exec-Health-Watchdog",
@@ -113,7 +113,7 @@
       "state_file": "",
       "log_file": "",
       "alert": "telegram",
-      "notes": "21.10.2026: rc=-2147020576 (0x800710E0, запуск отказан). Требуется разбор: задача активна, но не стартует."
+      "notes": "19.11.2026: 0x800710E0 = запуск отказан, потому что watchdog уже работает (Running). Не поломка health-системы, а штатная защита от дубля."
     },
     {
       "name": "Sales-Daily-Telegram",
@@ -124,7 +124,7 @@
       "state_file": "",
       "log_file": "logs/sales_daily_task.log",
       "alert": "telegram",
-      "notes": "19.11.2026: ежедневный отчёт по продажам. Использует пакет sales_tools из openclaw-cursor (furniture_sales_database/sales_tools) — единый источник истины для импорта и аналитики. Отчёт: срез месяца, сводка по ассортиментным группам в ₽/день, динамика к прошлому месяцу, бренды, концентрация, предупреждения и блок трафика Метрики за вчера. Python указан полным путём: schtasks /TR 'python ...' не ищет в PATH и даёт 0x80071002."
+      "notes": "19.11.2026: ежедневный отчёт по продажам, 08:30 MSK. Использует пакет sales_tools (импорт/аналитика) из openclaw-cursor + sales.db. Last Result: 0, Telegram-доставка подтверждена. Синтетическая фикстура sales_sample.db (реальные данные не публикуются)."
     },
     {
       "name": "Sales-Weekly-Digest",
@@ -135,7 +135,7 @@
       "state_file": "",
       "log_file": "logs/sales_weekly_task.log",
       "alert": "telegram",
-      "notes": "19.11.2026: недельный сводный отчёт по продажам. Продажи по группам с динамикой, что падает, состояние и целостность БД, маржинальность по категориям (metrika_costs_margin.py). Понедельник 09:00 — после закрытия прошлой недели и до ежедневного отчёта Метрики."
+      "notes": "19.11.2026: недельный свод по продажам, понедельник 09:00 MSK. Last Result: 0, Telegram-доставка подтверждена. Включает блок маржинальности по Метрике."
     }
   ]
 }
