@@ -114,6 +114,28 @@
       "log_file": "",
       "alert": "telegram",
       "notes": "21.10.2026: rc=-2147020576 (0x800710E0, запуск отказан). Требуется разбор: задача активна, но не стартует."
+    },
+    {
+      "name": "Sales-Daily-Telegram",
+      "enabled": true,
+      "command": "cmd /c \"C:\\Users\\user\\.openclaw\\workspace\\scripts\\_sales_daily_task.cmd\"",
+      "schedule": "daily 08:30 MSK",
+      "period_hours": 24,
+      "state_file": "",
+      "log_file": "logs/sales_daily_task.log",
+      "alert": "telegram",
+      "notes": "19.11.2026: ежедневный отчёт по продажам. Использует пакет sales_tools из openclaw-cursor (furniture_sales_database/sales_tools) — единый источник истины для импорта и аналитики. Отчёт: срез месяца, сводка по ассортиментным группам в ₽/день, динамика к прошлому месяцу, бренды, концентрация, предупреждения и блок трафика Метрики за вчера. Python указан полным путём: schtasks /TR 'python ...' не ищет в PATH и даёт 0x80071002."
+    },
+    {
+      "name": "Sales-Weekly-Digest",
+      "enabled": true,
+      "command": "cmd /c \"C:\\Users\\user\\.openclaw\\workspace\\scripts\\_sales_weekly_task.cmd\"",
+      "schedule": "weekly, Monday 09:00 MSK",
+      "period_hours": 168,
+      "state_file": "",
+      "log_file": "logs/sales_weekly_task.log",
+      "alert": "telegram",
+      "notes": "19.11.2026: недельный сводный отчёт по продажам. Продажи по группам с динамикой, что падает, состояние и целостность БД, маржинальность по категориям (metrika_costs_margin.py). Понедельник 09:00 — после закрытия прошлой недели и до ежедневного отчёта Метрики."
     }
   ]
 }
