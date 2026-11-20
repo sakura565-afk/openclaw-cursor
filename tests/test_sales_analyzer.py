@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from furniture_sales_database.sales_tools.analyzer import (
     period_days,
     render_json,
 )
+from furniture_sales_database.sales_tools.analyzer import _ensure_utf8_stdout
 
 FIXTURE_DB = (
     Path(__file__).resolve().parents[1]
@@ -93,6 +95,37 @@ def test_no_cyrillic_buyer_name_literals_in_analyzer_module() -> None:
                     offenders.append(text)
     assert offenders == []
     assert "SUPPLIER_PARENTS" not in src
+
+
+def test_group_names_survive_cp1251_roundtrip() -> None:
+    """Названия групп не должны схлопываться при cp1251 -> utf-8.
+
+    Реальная поломка: под планировщиком Windows дочерний процесс печатал
+    JSON в cp1251, родитель декодировал utf-8. «Стулья», «Кресла» и
+    «Диваны» превращались в три ОДИНАКОВЫЕ строки из «�», из-за чего
+    словарь динамики отдавал разным группам одно и то же значение
+    (в отчёте у всех трёх было «41 025/дн +43%»), а читателю уходили
+    нечитаемые названия.
+    """
+    groups = ["Стулья", "Кресла", "Диваны", "Кровати", "Столы"]
+    broken = [g.encode("cp1251").decode("utf-8", errors="replace") for g in groups]
+    assert len(set(broken)) < len(groups), (
+        "фикстура перестала воспроизводить поломку — тест больше не проверяет"
+    )
+
+    # Анализатор обязан отдавать группы различимыми и без U+FFFD.
+    report = analyze(FIXTURE_DB.as_posix(), "2026-11")
+    names = [g["name"] for g in report["groups"]]
+    assert names, "анализатор не вернул групп"
+    assert len(set(names)) == len(names), "названия групп схлопнулись"
+    for name in names:
+        assert "\ufffd" not in name, f"искажённое название группы: {name!r}"
+
+
+def test_ensure_utf8_stdout_is_callable_and_safe() -> None:
+    """Хелпер переключает stdout на UTF-8 и не падает на потоках без reconfigure."""
+    _ensure_utf8_stdout()  # не должно бросать исключение
+    assert sys.stdout is not None
 
 
 def _supplier_group_amount(report: dict) -> float:

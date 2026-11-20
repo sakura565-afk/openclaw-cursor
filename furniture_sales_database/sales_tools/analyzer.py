@@ -594,7 +594,26 @@ def render_csv(data: dict[str, Any]) -> str:
     return buf.getvalue()
 
 
+def _ensure_utf8_stdout() -> None:
+    """Best-effort UTF-8 stdout so Cyrillic names survive a cp1251 console.
+
+    Под планировщиком Windows нет LANG, и stdout кодируется по кодовой
+    странице (cp1251). Родительский процесс, который читает вывод как
+    utf-8, получает «�» вместо кириллицы — и одинаковые по длине
+    названия групп схлопываются в одну строку.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main() -> None:
+    _ensure_utf8_stdout()
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default="sales.db")
     ap.add_argument("--month", required=True)
