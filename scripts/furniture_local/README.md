@@ -117,6 +117,18 @@ python -m scripts.furniture_local.pipeline task.json --qa-only -o out/
 }
 ```
 
+### Правила промпта и negative (обеспечивают смену цвета)
+
+Две независимые причины, по которым модель не перекрашивает обивку, смотрятся
+одинаково — «цвет не изменился». Проверено на диване (метрика B−R: бежевый −29,
+тёмно-синий +40):
+
+| Ошибка | Симптом | Лечение |
+|---|---|---|
+| В промпте два цвета (например «deep **burgundy-navy** blue velvet») | модель усредняет, B−R −17.2 | один целевой цвет: «deep navy midnight blue velvet» |
+| В negative нет исходного цвета | модель сохраняет исходный, B−R −13.3 | negative с «grey, black, white, monochrome, beige, tan, cream» |
+| Дробная маска вместо сплошной | B−R −12.0…−16.9 | сплошная маска на весь кроп |
+
 ### Эталон SDXL (рецепт из ТЗ FURN-SRC-20261122)
 
 ```json
@@ -125,6 +137,17 @@ python -m scripts.furniture_local.pipeline task.json --qa-only -o out/
 "sdxl_denoise": 0.85, "sdxl_cfg": 7.0, "sdxl_steps": 32,
 "sdxl_sampler": "dpmpp_2m", "sdxl_scheduler": "karras", "sdxl_grow_mask_by": 16
 ```
+
+### Сравнение движков (замеры, диван, кроп 768×768)
+
+| Движок | B−R | корреляция градиентов | когда брать |
+|---|---|---|---|
+| Flux Fill GGUF, denoise 1.0 | +34.4 | 0.13 | цвет важнее текстуры |
+| SDXL Inpaint, denoise 0.85 | +21.0 | 0.66 | швы важнее цвета |
+| SDXL Inpaint, denoise 1.00 | +46.3 | 0.53 | компромисс (по умолчанию) |
+
+Проверка burgundy: R−B = +37 у обоих движков против +35 у эталона M2,
+Flux Fill в 10.8 Lab от эталона.
 
 ### Пороги приёмки под тип задачи
 
