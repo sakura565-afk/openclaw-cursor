@@ -147,9 +147,16 @@ def run_comfy_stage(
             positive=task.get("prompt"),
             seed=task.get("seed"),
         )
-        # Маска на генерацию: сплошная для fill-моделей (Flux Fill), точная
-        # для SDXL-инпейнта — тот сам recolours внутри маски сам.
-        gen_mask = mask_file if choice.kind == "sdxl_inpaint" else fill_file
+        # Маска на генерацию выбирается явно:
+        #   "solid"   — весь кроп белый. Нужно fill-моделям (Flux Fill) и,
+        #                судя по замерам, SDXL-инпейнту с дробной маской:
+        #                точные границы всё равно ставит paste-back.
+        #   "precise" — точная маска ткани (по умолчанию для SDXL).
+        #   "auto"    — solid для fill-моделей, precise для остальных.
+        gen_mode = str(task.get("gen_mask", "auto")).lower()
+        if gen_mode == "auto":
+            gen_mode = "solid" if choice.kind == "flux_fill_gguf" else "precise"
+        gen_mask = fill_file if gen_mode == "solid" else mask_file
         client.upload_image(Path(gen_mask).read_bytes(), mask_name)
         if idx == 0:
             (output_dir / "comfy_workflow_choice.json").write_text(
