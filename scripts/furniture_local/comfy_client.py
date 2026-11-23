@@ -268,6 +268,7 @@ def pick_workflow(
             denoise=float(task.get("flux_denoise", 1.0)),
             steps=int(task.get("flux_steps", 20)),
             cfg=float(task.get("flux_cfg", 3.5)),
+            negative=task.get("negative"),
             filename_prefix=f"furniture_{furniture}_{operation}",
         )
         return WorkflowChoice(

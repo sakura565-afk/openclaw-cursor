@@ -180,6 +180,7 @@ def build_flux_fill_gguf_graph(
     denoise: float = 1.0,
     steps: int = 20,
     cfg: float = 3.5,
+    negative: str | None = None,
     filename_prefix: str = "furniture_flux_fill",
 ) -> dict[str, Any]:
     """Flux Fill через UnetLoaderGGUF (нужны ComfyUI-GGUF и x-flux на хосте).
@@ -197,7 +198,11 @@ def build_flux_fill_gguf_graph(
             "class_type": "DualCLIPLoader",
             "inputs": {
                 "clip_name1": os.environ.get("FLUX_CLIP_L", "clip_l.safetensors"),
-                "clip_name2": os.environ.get("FLUX_CLIP_T5", "t5xxl_fp16.safetensors"),
+                # Имя T5 должно существовать в models ComfyUI: t5xxl_fp16 на
+                # M1 нет, лежит только t5xxl_fp8_e4m3fn_scaled.
+                "clip_name2": os.environ.get(
+                    "FLUX_CLIP_T5", "t5xxl_fp8_e4m3fn_scaled.safetensors"
+                ),
                 "type": "flux",
             },
         },
@@ -219,7 +224,10 @@ def build_flux_fill_gguf_graph(
             },
         },
         "9": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": positive}},
-        "10": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": NEG_FURNITURE}},
+        "10": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"clip": ["2", 0], "text": negative or NEG_RECOLOR},
+        },
         "11": {
             "class_type": "KSampler",
             "inputs": {
