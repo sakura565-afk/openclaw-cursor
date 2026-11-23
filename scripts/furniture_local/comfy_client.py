@@ -49,12 +49,16 @@ class ComfyUIClient:
         poll_interval: float = 1.0,
         client_id: str | None = None,
         opener: Callable[..., Any] | None = None,
+        token: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_sec = timeout_sec
         self.poll_interval = poll_interval
         self.client_id = client_id or str(uuid.uuid4())
         self._opener = opener or urllib.request.urlopen
+        # Токен guard'а перед ComfyUI (нужен, когда ComfyUI выставлен в интернет
+        # через tailscale serve: сам ComfyUI аутентификации не имеет).
+        self.token = token or os.environ.get("FURNITURE_COMFY_M2_TOKEN", "").strip()
 
     def _request(
         self,
@@ -72,6 +76,8 @@ class ComfyUIClient:
             url = f"{url}?{qs}"
         data = raw_body
         headers: dict[str, str] = {}
+        if self.token:
+            headers["X-Furniture-Token"] = self.token
         if payload is not None:
             data = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = content_type
@@ -148,10 +154,13 @@ class ComfyUIClient:
         body.write(b"\r\n")
         body.write(f"--{boundary}--\r\n".encode())
         raw = body.getvalue()
+        upload_headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+        if self.token:
+            upload_headers["X-Furniture-Token"] = self.token
         req = urllib.request.Request(
             f"{self.base_url}/upload/image",
             data=raw,
-            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            headers=upload_headers,
             method="POST",
         )
         try:
