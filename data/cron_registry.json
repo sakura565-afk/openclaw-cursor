@@ -47,7 +47,7 @@
       "state_file": "",
       "log_file": "logs/metrika_daily_task.log",
       "alert": "telegram",
-      "notes": "19.11.2026: ежедневный отчёт по Яндекс.Метрике, 09:00 MSK. Обёртка scripts/_metrika_daily_task.cmd -> scripts/metrika_telegram_daily.py, который вызывает репозиторный scripts/metrika_costs_margin.py (--skip-telegram). Last Result: 0, Telegram-доставка подтверждена. После перехода на пакет metrika_tools отчёт содержит ВСЕ 10 счётчиков (было 7): добавлены AMADEY | Кресла, AMADEY | Предметы мебели, DIV Диваны-кровати."
+      "notes": "21.10.2026: задача переведена на cmd-обёртку scripts/_metrika_daily_task.cmd — раньше вывод уходил в никуда, не оставалось ни лога, ни state-файла. В обёртке python.exe указан полным путём: schtasks /TR 'python ...' не ищет в PATH и даёт 0x80070002. Скрипт metrika_telegram_daily.py больше не ссылается на временную папку temp/openclaw-cursor — путь переведён на workspace/cursor-repo."
     },
     {
       "name": "Ollama-Health-Daily",
@@ -58,7 +58,7 @@
       "state_file": "data/ollama_health_*.json",
       "log_file": "logs/ollama_health_*.out.log",
       "alert": "telegram",
-      "notes": "19.11.2026: health-проверка Ollama, 06:00 MSK. Цепочка заменена на 6 локальных моделей (lfm2.5-thinking, gemma4:e4b, deepcoder:1.5b, gemma4:e2b, llama3, deepseek-r1:14b) — облачные gpt-oss:20b:cloud / gemma4:31b-cloud / nemotron-3-nano:30b-cloud давали 402 Payment Required. Таймауты увеличены по замерам cold start 19.11 (13/77/18/57/64/141 с). Реальный прогон: 6/6 ok. Last Result: 0."
+      "notes": "state_file проверен: workspace/data/ollama_health_YYYY-MM-DD.json. 21.10.2026 исправлено: (1) ollama_chain.py потерял публичную run_model() -> ollama_daily_smoke.py падал с ImportError каждую ночь; (2) DEFAULT_CHAIN целиком устарел (402 Payment Required + retired 15.07/25.09.2026) -> заменён на 6 проверенных моделей; (3) таймаут 15s -> 30s (локальные модели на RTX 3060 отвечают 15-22s); (4) ps1 ищет python по абсолютному пути. Проверено: 6/6 ok, exit=0."
     },
     {
       "name": "Ollama-Upgrade",
@@ -96,13 +96,13 @@
     {
       "name": "QMD-Embed-Nightly",
       "enabled": true,
-      "command": "cmd /c \"C:\\Users\\user\\.openclaw\\workspace\\scripts\\_qmd_embed_nightly.cmd\"",
+      "command": "\"C:\\Program Files\\nodejs\\node.exe\" C:\\openclaw\\node_modules\\@tobilu\\qmd\\bin\\qmd-embed.js",
       "schedule": "daily 04:00",
       "period_hours": 24.0,
       "state_file": "",
-      "log_file": "logs/qmd_embed_nightly.log",
+      "log_file": "",
       "alert": "telegram",
-      "notes": "19.11.2026: ночной эмбеддинг QMD. Запущен вручную через schtasks /run — Last Result: 0. Ранее был 0x80070002 (не найден исполняемый файл) — исправлено полным путём к python.exe."
+      "notes": "21.10.2026: rc=-2147024894 (0x80070002, файл не найден) — команда указывает на несуществующий путь. Нужно проверить фактическое имя entrypoint-скрипта qmd."
     },
     {
       "name": "Exec-Health-Watchdog",
@@ -113,29 +113,7 @@
       "state_file": "",
       "log_file": "",
       "alert": "telegram",
-      "notes": "19.11.2026: 0x800710E0 = запуск отказан, потому что watchdog уже работает (Running). Не поломка health-системы, а штатная защита от дубля."
-    },
-    {
-      "name": "Sales-Daily-Telegram",
-      "enabled": true,
-      "command": "cmd /c \"C:\\Users\\user\\.openclaw\\workspace\\scripts\\_sales_daily_task.cmd\"",
-      "schedule": "daily 08:30 MSK",
-      "period_hours": 24,
-      "state_file": "",
-      "log_file": "logs/sales_daily_task.log",
-      "alert": "telegram",
-      "notes": "19.11.2026: ежедневный отчёт по продажам, 08:30 MSK. Использует пакет sales_tools (импорт/аналитика) из openclaw-cursor + sales.db. Last Result: 0, Telegram-доставка подтверждена. Синтетическая фикстура sales_sample.db (реальные данные не публикуются)."
-    },
-    {
-      "name": "Sales-Weekly-Digest",
-      "enabled": true,
-      "command": "cmd /c \"C:\\Users\\user\\.openclaw\\workspace\\scripts\\_sales_weekly_task.cmd\"",
-      "schedule": "weekly, Monday 09:00 MSK",
-      "period_hours": 168,
-      "state_file": "",
-      "log_file": "logs/sales_weekly_task.log",
-      "alert": "telegram",
-      "notes": "19.11.2026: недельный свод по продажам, понедельник 09:00 MSK. Last Result: 0, Telegram-доставка подтверждена. Включает блок маржинальности по Метрике."
+      "notes": "21.10.2026: rc=-2147020576 (0x800710E0, запуск отказан). Требуется разбор: задача активна, но не стартует."
     }
   ]
 }
