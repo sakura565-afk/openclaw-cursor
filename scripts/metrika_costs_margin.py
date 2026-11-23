@@ -36,12 +36,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
-import time
 import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -51,13 +51,26 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from metrika_tools.client import (  # noqa: E402
-    COSTS_MARGIN_DAY_METRICS,
-    DayStats,
-    MetrikaClient,
-    MetrikaHTTPError,
+# --------------------------------------------------------------------------- #
+# Metrika counters (id, display label)
+# --------------------------------------------------------------------------- #
+
+COUNTERS: tuple[tuple[int, str], ...] = (
+    (63403, "amadey.ru"),
+    (94834593, "divaninfo.ru"),
+    (110795180, "AMADEY | Распродажа"),
+    (110992850, "DIVANINFO | Arizona"),
+    (111303025, "DIVANINFO | Бескаркасные диваны"),
+    (111529130, "DIVANINFO | Кровати и матрасы"),
+    (111602665, "DIVANINFO | Матрасы Лендинг"),
 )
-from metrika_tools.counters import counter_id_label_pairs  # noqa: E402
+
+METRIKA_API_BASE = "https://api-metrika.yandex.net"
+STAT_METRICS = (
+    "ym:s:visits",
+    "ym:s:pageviews",
+    "ym:s:avgVisitDurationSeconds",
+)
 
 DEFAULT_CHAT_ID = "25979298"
 DEFAULT_TELEGRAM_SCRIPT = Path(
@@ -67,10 +80,7 @@ DEFAULT_TELEGRAM_SCRIPT = Path(
 DEFAULT_COSTS_DIR = REPO_ROOT / "data" / "costs"
 DEFAULT_SALES_FILE = REPO_ROOT / "scripts" / "parsed_sales_v20.json"
 
-VAT_MULTIPLIER = 1.2
-# Пауза между запросами к Метрике. API режет по квоте параллельных запросов
-# на один OAuth-токен (HTTP 429 quota_parallel_requests_by_uid).
-REQUEST_PACE_SECONDS = 1.50
+VAT_MULTIPLIER = 1.20
 SALES_LOOKBACK_DAYS = 30
 
 # Category overrides applied after the data-driven category lookup. Each entry
@@ -106,56 +116,74 @@ _STANDARD_SUFFIXES = ("-STANDART", "-STANDARD", "-STD", " STANDART", " STANDARD"
 # --------------------------------------------------------------------------- #
 
 
-def _metrika_token() -> str:
-    """Resolve the Metrika OAuth token.
+@dataclass(frozen=True)
+class DayStats:
+    visits: float
+    pageviews: float
+    avg_duration_seconds: float
 
-    Order: environment first, then the sibling daily script, which is where
-    the token is actually stored on this machine. Without the fallback the
-    scheduled report silently produced "YANDEX_METRIKA_TOKEN not set" for
-    every counter while still exiting 0.
-    """
-    token = (
+    @classmethod
+    def from_totals(cls, values: list[float]) -> "DayStats":
+        return cls(
+            visits=values[0] if len(values) > 0 else 0.0,
+            pageviews=values[1] if len(values) > 1 else 0.0,
+            avg_duration_seconds=values[2] if len(values) > 2 else 0.0,
+        )
+
+
+def _metrika_token() -> str:
+    return (
         os.environ.get("YANDEX_METRIKA_TOKEN", "").strip()
         or os.environ.get("YANDEX_METRIKA_OAUTH_TOKEN", "").strip()
     )
-    if token:
-        return token
-
-    for candidate in _token_source_files():
-        try:
-            text = candidate.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        match = re.search(
-            r"""^\s*TOKEN\s*=\s*['"]([^'"]+)['"]""", text, re.MULTILINE
-        )
-        if match:
-            return match.group(1).strip()
-    return ""
-
-
-def _token_source_files() -> list[Path]:
-    """Places the Metrika token may live, most specific first.
-
-    Resolved relative to the repo checkout, not hardcoded to this machine:
-    the workspace lives next to the repo clone.
-    """
-    candidates = [
-        REPO_ROOT.parent / "scripts" / "metrika_daily.py",
-        REPO_ROOT.parent / "scripts" / "metrika_landings.py",
-    ]
-    env_home = os.environ.get("OPENCLAW_WORKSPACE", "").strip()
-    if env_home:
-        base = Path(env_home)
-        candidates = [
-            base / "scripts" / "metrika_daily.py",
-            base / "scripts" / "metrika_landings.py",
-        ] + candidates
-    return candidates
 
 
 def _default_proxy_url() -> str | None:
     return os.environ.get("METRIKA_HTTP_PROXY", "http://127.0.0.1:3067")
+
+
+def _build_opener(proxy_url: str | None) -> urllib.request.OpenerDirector:
+    if not proxy_url:
+        return urllib.request.build_opener()
+    handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+    return urllib.request.build_opener(handler)
+
+
+def fetch_day_stats(
+    oauth_token: str,
+    counter_id: int,
+    day: date,
+    *,
+    proxy_url: str | None,
+    timeout: int = 60,
+) -> DayStats:
+    """GET /stat/v1/data for a single calendar day (accuracy=full)."""
+    params = {
+        "ids": counter_id,
+        "date1": day.isoformat(),
+        "date2": day.isoformat(),
+        "metrics": ",".join(STAT_METRICS),
+        "accuracy": "full",
+    }
+    query = urllib.parse.urlencode(params)
+    url = f"{METRIKA_API_BASE}/stat/v1/data?{query}"
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"OAuth {oauth_token}",
+            "Accept": "application/json",
+        },
+        method="GET",
+    )
+    opener = _build_opener(proxy_url)
+    with opener.open(request, timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+
+    # API may return totals as a flat list [v0, v1, v2] (single-day or week group)
+    # OR as a nested list [[d0], [d1], ...] (multi-day with day group). Handle both.
+    totals = payload.get("totals", [])
+    row = totals[0] if totals and isinstance(totals[0], list) else totals
+    return DayStats.from_totals([float(x) for x in row])
 
 
 def format_duration(seconds: float) -> str:
@@ -172,33 +200,20 @@ def collect_metrika_rows(
     """Return (counter_id, label, stats_or_None, error_or_None) per counter."""
     token = _metrika_token()
     rows: list[tuple[int, str, DayStats | None, str | None]] = []
-    counters = counter_id_label_pairs()
     if not token:
-        for counter_id, label in counters:
+        for counter_id, label in COUNTERS:
             rows.append((counter_id, label, None, "YANDEX_METRIKA_TOKEN not set"))
         return rows
 
-    client = MetrikaClient(
-        token=token,
-        proxy_url=proxy_url,
-        max_retries=4,
-        retry_base_delay=2.0,
-    )
-    for counter_id, label in counters:
+    for counter_id, label in COUNTERS:
         try:
-            stats = client.fetch_day_stats(
-                counter_id,
-                report_day,
-                metrics=COSTS_MARGIN_DAY_METRICS,
-            )
+            stats = fetch_day_stats(token, counter_id, report_day, proxy_url=proxy_url)
             rows.append((counter_id, label, stats, None))
-        except MetrikaHTTPError as exc:
-            rows.append((counter_id, label, None, f"HTTP {exc.code}: {exc.body[:200]}"))
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            rows.append((counter_id, label, None, f"HTTP {exc.code}: {body[:200]}"))
         except (urllib.error.URLError, OSError, ValueError) as exc:
             rows.append((counter_id, label, None, str(exc)))
-        # Metrika quotas concurrent requests per OAuth token. Pace the calls
-        # so a full counter sweep does not trip the 429 quota.
-        time.sleep(REQUEST_PACE_SECONDS)
     return rows
 
 
