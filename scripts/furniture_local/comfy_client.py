@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import json
 import time
 import urllib.error
@@ -157,7 +158,26 @@ class ComfyUIClient:
             with self._opener(req, timeout=self.timeout_sec) as response:
                 return json.loads(response.read().decode("utf-8"))
         except Exception as exc:  # noqa: BLE001
+            # Запасной путь: некоторые сборки ComfyUI отдают 500 на /upload/image
+            # (asset_manager/БД), но LoadImage умеет брать файлы прямо из input/.
+            fallback = self._upload_via_input_dir(image_bytes, filename)
+            if fallback is not None:
+                return fallback
             raise ComfyUIError(f"upload/image failed: {exc}") from exc
+
+    def _upload_via_input_dir(self, image_bytes: bytes, filename: str) -> dict[str, Any] | None:
+        """Положить файл прямо в input/ ComfyUI (обход сломанного /upload/image)."""
+        input_dir = os.environ.get("FURNITURE_COMFY_INPUT_DIR", "").strip()
+        if not input_dir:
+            return None
+        try:
+            os.makedirs(input_dir, exist_ok=True)
+            target = os.path.join(input_dir, filename)
+            with open(target, "wb") as fh:
+                fh.write(image_bytes)
+        except OSError:
+            return None
+        return {"name": filename, "subfolder": "", "type": "input"}
 
     @staticmethod
     def first_output_image(history_entry: dict[str, Any]) -> dict[str, str] | None:
@@ -233,8 +253,9 @@ def pick_workflow(
             positive=prompt,
             profile=profile,
             seed=seed_val,
-            denoise=float(task.get("flux_denoise", 0.82)),
+            denoise=float(task.get("flux_denoise", 1.0)),
             steps=int(task.get("flux_steps", 20)),
+            cfg=float(task.get("flux_cfg", 3.5)),
             filename_prefix=f"furniture_{furniture}_{operation}",
         )
         return WorkflowChoice(

@@ -12,7 +12,9 @@ from typing import Any
 from .comfy_client import ComfyUIClient, ComfyUIError, WorkflowChoice, pick_workflow
 from .config import resolve_profile
 from .mask import MaskBuildResult, build_mask
+from .paste_back import paste_back
 from .qa import QAThresholds, evaluate_acceptance, write_qa_artifacts
+from .triptych import build_triptych, describe_task
 
 
 @dataclass
@@ -198,11 +200,55 @@ def run_pipeline(cfg: FurniturePipelineConfig) -> dict[str, Any]:
             else:
                 raise
 
+    # Paste-back: Flux Fill и другие полнокадровые движки перерисовывают весь кадр.
+    # Склеиваем результат с референсом по маске: внутри — генерация, снаружи — оригинал.
+    if not task.get("skip_paste_back", False) and mask_result.path.is_file():
+        try:
+            pb = paste_back(
+                ref,
+                result_path,
+                mask_result.path,
+                cfg.output_dir / "comfy_result_pasteback.png",
+                feather=float(task.get("paste_back_feather", 6.0)),
+                erode_px=int(task.get("paste_back_erode", 2)),
+            )
+            summary["paste_back"] = pb
+            result_path = cfg.output_dir / "comfy_result_pasteback.png"
+        except Exception as exc:  # noqa: BLE001
+            summary["paste_back_error"] = str(exc)
+
     summary["result_image"] = str(result_path)
     summary["qa"] = run_qa_stage(task, ref, result_path, mask_result, cfg.output_dir)
 
+    # Триптих приёмки: вход | что делаем | выход
+    try:
+        choice_kind = str((summary.get("workflow_kind") or "") or "")
+        choice_notes = str((summary.get("workflow_notes") or "") or "")
+        meta_p = cfg.output_dir / "comfy_workflow_choice.json"
+        if meta_p.is_file():
+            meta = json.loads(meta_p.read_text(encoding="utf-8"))
+            choice_kind = str(meta.get("kind") or choice_kind)
+            choice_notes = str(meta.get("notes") or choice_notes)
+        if not choice_kind:
+            choice_kind = "flux_fill"
+        desc = describe_task(task, choice_kind, choice_notes)
+        metrics = [f"{k}: {round(float(v), 4)}" for k, v in ((summary["qa"].get("metrics") or {}).items())]
+        tri = cfg.output_dir / "triptych_input_description_output.png"
+        build_triptych(
+            ref,
+            result_path,
+            tri,
+            title=f"Мебельный inpaint: {task.get('id', 'task')}",
+            description_lines=desc,
+            metrics_lines=metrics,
+            verdict=str(summary["qa"].get("verdict") or ""),
+        )
+        summary["triptych"] = str(tri)
+    except Exception as exc:  # noqa: BLE001
+        summary["triptych_error"] = str(exc)
+
     report_path = cfg.output_dir / "pipeline_report.json"
-    report_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    report_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     summary["report_path"] = str(report_path)
     return summary
 
@@ -245,7 +291,8 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError, ComfyUIError) as exc:
         print(f"Ошибка: {exc}", file=sys.stderr)
         return 1
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    # пути в сводке - Path, их нужно привести к строке для JSON
+    print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
     verdict = (summary.get("qa") or {}).get("verdict")
     if verdict == "FAIL":
         return 2

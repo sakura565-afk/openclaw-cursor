@@ -140,11 +140,19 @@ def build_flux_fill_gguf_graph(
     positive: str,
     profile: MachineProfile,
     seed: int = 0,
-    denoise: float = 0.85,
+    denoise: float = 1.0,
     steps: int = 20,
+    cfg: float = 3.5,
     filename_prefix: str = "furniture_flux_fill",
 ) -> dict[str, Any]:
-    """Flux Fill через UnetLoaderGGUF (нужны ComfyUI-GGUF и x-flux на хосте)."""
+    """Flux Fill через UnetLoaderGGUF (нужны ComfyUI-GGUF и x-flux на хосте).
+
+    ВАЖНО: используется нативный для Flux Fill пайплайн ComfyUI
+    InpaintConditionEncode -> InpaintConditionApply. Старый InpaintModelConditioning
+    с этой моделью даёт пустой результат: обивка не меняется (B-R в маске
+    -37.6 против -38.5 у референса) при любом denoise.
+    Маска: белое = перекрашить, чёрное = сохранить.
+    """
     gguf = profile.models.flux_fill_gguf or "flux1-fill-dev-Q8_0.gguf"
     return {
         "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": gguf}},
@@ -160,14 +168,17 @@ def build_flux_fill_gguf_graph(
         "5": {"class_type": "LoadImage", "inputs": {"image": src_name}},
         "6": {"class_type": "LoadImage", "inputs": {"image": mask_name}},
         "7": {"class_type": "ImageToMask", "inputs": {"image": ["6", 0], "channel": "red"}},
+        "14": {
+            "class_type": "InpaintConditionEncode",
+            "inputs": {"vae": ["3", 0], "pixels": ["5", 0], "mask": ["7", 0]},
+        },
         "8": {
-            "class_type": "InpaintModelConditioning",
+            "class_type": "InpaintConditionApply",
             "inputs": {
                 "positive": ["9", 0],
                 "negative": ["10", 0],
-                "vae": ["3", 0],
-                "pixels": ["5", 0],
-                "mask": ["7", 0],
+                "inpaint_condition": ["14", 0],
+                "noise_mask": True,
             },
         },
         "9": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": positive}},
@@ -178,7 +189,7 @@ def build_flux_fill_gguf_graph(
                 "model": ["1", 0],
                 "seed": seed,
                 "steps": steps,
-                "cfg": 1.0,
+                "cfg": cfg,
                 "sampler_name": "euler",
                 "scheduler": "simple",
                 "denoise": denoise,
