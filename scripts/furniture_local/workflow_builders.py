@@ -93,12 +93,25 @@ def build_checkpoint_inpaint_graph(
     positive: str,
     profile: MachineProfile,
     seed: int = 0,
-    denoise: float = 0.45,
-    steps: int = 28,
+    denoise: float = 0.85,
+    steps: int = 32,
+    cfg: float = 7.0,
+    sampler_name: str = "dpmpp_2m",
+    scheduler: str = "karras",
+    grow_mask_by: int = 16,
+    ckpt_override: str | None = None,
     filename_prefix: str = "furniture_sdxl_inpaint",
 ) -> dict[str, Any]:
-    """Классический SDXL inpaint (Juggernaut XL Inpaint на M2)."""
-    ckpt = profile.models.checkpoint or "juggernautXL_versionXInpaint.safetensors"
+    """Классический SDXL inpaint (Juggernaut XL Inpaint).
+
+    Рецепт-эталон из ТЗ FURN-SRC-20261122 (замерено на M2, RTX 3060 12 ГБ):
+      checkpoint juggernautXL_versionXInpaint.safetensors (SDXL)
+      sampler dpmpp_2m / karras, steps 32, cfg 7.0, denoise 0.85
+      VAEEncodeForInpaint + ImageCompositeMasked(destination=source)
+    ImageCompositeMasked склеивает сгенерированное с оригиналом по маске —
+    вне маски остаётся исходный пиксель.
+    """
+    ckpt = ckpt_override or profile.models.checkpoint or "juggernautXL_versionXInpaint.safetensors"
     return {
         "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": ckpt}},
         "5": {"class_type": "LoadImage", "inputs": {"image": src_name}},
@@ -106,7 +119,7 @@ def build_checkpoint_inpaint_graph(
         "7": {"class_type": "ImageToMask", "inputs": {"image": ["6", 0], "channel": "red"}},
         "8": {
             "class_type": "VAEEncodeForInpaint",
-            "inputs": {"pixels": ["5", 0], "vae": ["1", 2], "mask": ["7", 0], "grow_mask_by": 8},
+            "inputs": {"pixels": ["5", 0], "vae": ["1", 2], "mask": ["7", 0], "grow_mask_by": grow_mask_by},
         },
         "9": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["1", 1], "text": positive}},
         "10": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["1", 1], "text": NEG_FURNITURE}},
@@ -116,9 +129,9 @@ def build_checkpoint_inpaint_graph(
                 "model": ["1", 0],
                 "seed": seed,
                 "steps": steps,
-                "cfg": 6.0,
-                "sampler_name": "dpmpp_2m",
-                "scheduler": "karras",
+                "cfg": cfg,
+                "sampler_name": sampler_name,
+                "scheduler": scheduler,
                 "denoise": denoise,
                 "positive": ["9", 0],
                 "negative": ["10", 0],
@@ -126,9 +139,20 @@ def build_checkpoint_inpaint_graph(
             },
         },
         "12": {"class_type": "VAEDecode", "inputs": {"samples": ["11", 0], "vae": ["1", 2]}},
+        # Склейка с оригиналом по маске: вне маски остаётся исходный пиксель.
+        "14": {
+            "class_type": "ImageCompositeMasked",
+            "inputs": {
+                "destination": ["5", 0],
+                "source": ["12", 0],
+                "x": 0,
+                "y": 0,
+                "resize_source": False,
+            },
+        },
         "13": {
             "class_type": "SaveImage",
-            "inputs": {"images": ["12", 0], "filename_prefix": filename_prefix},
+            "inputs": {"images": ["14", 0], "filename_prefix": filename_prefix},
         },
     }
 

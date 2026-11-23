@@ -79,9 +79,13 @@ def default_profiles() -> dict[str, MachineProfile]:
         ),
         "m2": MachineProfile(
             name="m2",
+            # Проброшено через tailscale serve на M2: /comfy -> 127.0.0.1:8188
             comfy_url=_env(
                 "FURNITURE_COMFY_M2_URL",
-                _env("COMFYUI_M2_URL", "https://DESKTOP-6ECJBT6.example:8188"),
+                _env(
+                    "COMFYUI_M2_URL",
+                    "https://desktop-6ecjbt6.tailcaa609.ts.net/comfy",
+                ),
             ),
             models=M2_MODELS,
             extra={"peer": "hermes_funnel"},

@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Any
 
 from .comfy_client import ComfyUIClient, ComfyUIError, WorkflowChoice, pick_workflow
+from .crop_mode import compute_tiles, prepare_crop, restore_crop
+from PIL import Image
+
 from .config import resolve_profile
 from .mask import MaskBuildResult, build_mask
 from .paste_back import paste_back
@@ -61,6 +64,20 @@ def run_mask_stage(task: dict[str, Any], output_dir: Path) -> MaskBuildResult:
     )
 
 
+
+def _crop_mask_file(mask_path: Path, box: list[int], output_dir: Path) -> Path:
+    """Обрезать маску под тот же кроп, что и исходник."""
+    from PIL import Image
+
+    with Image.open(mask_path) as im:
+        m = im.convert("L")
+    x0, y0, x1, y1 = box
+    cropped = m.crop((x0, y0, x1, y1))
+    out = output_dir / (mask_path.stem + "_cropped.png")
+    cropped.save(out)
+    return out
+
+
 def run_comfy_stage(
     task: dict[str, Any],
     reference_image: Path,
@@ -69,45 +86,117 @@ def run_comfy_stage(
     *,
     timeout_sec: float,
 ) -> Path:
+    """Отрендерить и вернуть ПОЛНЫЙ кадр результата.
+
+    Порядок (проверен на реальных фото, замеры в crop_mode.py):
+      1. нативные кропы 768x768 (рецепт-эталон из ТЗ, без апскейла);
+         если область шире 768 — режется на перекрывающиеся тайлы;
+      2. СПЛОШНАЯ маска на весь кроп — fill-модель перекрашивает только
+         при цельной большой области (на дробной маске не перекрашивает);
+      3. рендер каждого тайла;
+      4. paste-back по ТОЧНОЙ маске ткани внутри тайла — вклеивает
+         сгенерированное только в пиксели обивки (подушки/ножки/стол не тронуты);
+      5. возврат тайлов в полный кадр.
+    """
     profile = resolve_profile(str(task.get("comfy_host", task.get("host", "local"))))
     client = ComfyUIClient(profile.comfy_url, timeout_sec=min(timeout_sec, 180.0))
 
-    src_bytes = reference_image.read_bytes()
-    mask_bytes = mask_result.path.read_bytes()
-    src_name = f"furniture_{task.get('id', 'src')}_ref.png"
-    mask_name = f"furniture_{task.get('id', 'src')}_mask.png"
-    client.upload_image(src_bytes, src_name)
-    client.upload_image(mask_bytes, mask_name)
+    crop_spec = task.get("crop") or {}
+    target = int(crop_spec.get("target", 768))
+    bbox = tuple(crop_spec["bbox"]) if crop_spec.get("bbox") else None
+    if bbox is None:
+        import numpy as np
 
-    choice: WorkflowChoice = pick_workflow(
-        task,
-        profile,
-        src_name=src_name,
-        mask_name=mask_name,
-        positive=task.get("prompt"),
-        seed=task.get("seed"),
+        arr = np.asarray(Image.open(mask_result.path).convert("L"))
+        ys, xs = np.nonzero(arr > 127)
+        bbox = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1) if xs.size else (0, 0, 1, 1)
+    with Image.open(reference_image) as im:
+        ref_size = im.size
+    tiles = compute_tiles(bbox, ref_size, target, overlap=int(crop_spec.get("overlap", 96)))
+
+    task_id = str(task.get("id", "src"))
+    full_result = output_dir / "comfy_result_full.png"
+    full_result = reference_image  # база для вклейки тайлов
+    tiles_meta = []
+
+    for idx, box in enumerate(tiles):
+        info = prepare_crop(
+            reference_image,
+            mask_result.path,
+            output_dir,
+            target=target,
+            bbox=box,
+            stem=f"tile{idx}",
+        )
+        src_file = Path(info["ref"])
+        mask_file = Path(info["mask"])
+
+        # СПЛОШНАЯ fill-маска на весь кроп: fill-модели нужна цельная область.
+        fill_file = output_dir / f"tile{idx}_fill.png"
+        Image.new("L", Image.open(src_file).size, 255).save(fill_file)
+
+        src_name = f"furniture_{task_id}_ref{idx}.png"
+        mask_name = f"furniture_{task_id}_mask{idx}.png"
+        client.upload_image(src_file.read_bytes(), src_name)
+        client.upload_image(fill_file.read_bytes(), mask_name)
+
+        choice: WorkflowChoice = pick_workflow(
+            task,
+            profile,
+            src_name=src_name,
+            mask_name=mask_name,
+            positive=task.get("prompt"),
+            seed=task.get("seed"),
+        )
+        if idx == 0:
+            (output_dir / "comfy_workflow_choice.json").write_text(
+                json.dumps(
+                    {"kind": choice.kind, "workflow_file": choice.workflow_file, "notes": choice.notes},
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+        prompt_id = client.submit_workflow(choice.prompt)
+        history = client.wait_for_result(prompt_id, timeout_sec=timeout_sec)
+        ref_img = client.first_output_image(history)
+        if not ref_img:
+            raise ComfyUIError(f"В history нет output images: {history}")
+        data = client.download_view(ref_img)
+        raw_path = output_dir / f"comfy_result_raw_{idx}.png"
+        raw_path.write_bytes(data)
+        (output_dir / "comfy_prompt_id.txt").write_text(prompt_id, encoding="utf-8")
+
+        # Склейка по точной маске ткани ВНУТРИ кропа.
+        clean_path = output_dir / f"comfy_result_clean_{idx}.png"
+        clean_metrics = paste_back(
+            src_file,
+            raw_path,
+            mask_file,
+            clean_path,
+            feather=float(task.get("paste_back_feather", 6.0)),
+            erode_px=int(task.get("paste_back_erode", 2)),
+        )
+        tiles_meta.append({**info, "paste_back": clean_metrics, "prompt_id": prompt_id})
+
+        # Вклейка тайла в полный кадр.
+        full_result = restore_crop(
+            clean_path, full_result if Path(full_result).is_file() else reference_image,
+            info["box"], output_dir / f"comfy_result_full_{idx}.png",
+        )
+
+    # Накопленный кадр после всех тайлов — это и есть результат.
+    final = output_dir / "comfy_result_full.png"
+    accumulated = Path(str(full_result))
+    if accumulated.exists() and accumulated != final:
+        import shutil
+
+        shutil.copy2(accumulated, final)
+    (output_dir / "crop_info.json").write_text(
+        json.dumps({"tiles": tiles_meta}, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    meta_path = output_dir / "comfy_workflow_choice.json"
-    meta_path.write_text(
-        json.dumps(
-            {"kind": choice.kind, "workflow_file": choice.workflow_file, "notes": choice.notes},
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-
-    prompt_id = client.submit_workflow(choice.prompt)
-    history = client.wait_for_result(prompt_id, timeout_sec=timeout_sec)
-    ref_img = client.first_output_image(history)
-    if not ref_img:
-        raise ComfyUIError(f"В history нет output images: {history}")
-    data = client.download_view(ref_img)
-    result_path = output_dir / "comfy_result.png"
-    result_path.write_bytes(data)
-    (output_dir / "comfy_prompt_id.txt").write_text(prompt_id, encoding="utf-8")
-    return result_path
-
+    return final
 
 def run_qa_stage(
     task: dict[str, Any],
@@ -200,9 +289,14 @@ def run_pipeline(cfg: FurniturePipelineConfig) -> dict[str, Any]:
             else:
                 raise
 
-    # Paste-back: Flux Fill и другие полнокадровые движки перерисовывают весь кадр.
-    # Склеиваем результат с референсом по маске: внутри — генерация, снаружи — оригинал.
-    if not task.get("skip_paste_back", False) and mask_result.path.is_file():
+    # Paste-back: fill-модели перерисовывают весь кадр, поэтому результат
+    # склеивается с референсом по точной маске. При crop-режиме склейка уже
+    # выполнена внутри кропа (run_comfy_stage) — здесь только без crop.
+    if (
+        not task.get("skip_paste_back", False)
+        and mask_result.path.is_file()
+        and not (task.get("crop") or {})
+    ):
         try:
             pb = paste_back(
                 ref,

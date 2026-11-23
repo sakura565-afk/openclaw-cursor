@@ -245,6 +245,9 @@ def pick_workflow(
     use_sdxl = workflow_hint in ("sdxl", "juggernaut", "checkpoint") or (
         profile.name in ("m2", "remote-peer") and operation in ("color", "цвет")
     )
+    if workflow_hint == "sdxl" and task.get("sdxl_ckpt"):
+        # явный чекпоинт из задачи перекрывает профиль
+        use_flux = False
 
     if use_flux and profile.models.flux_fill_gguf:
         graph = build_flux_fill_gguf_graph(
@@ -271,8 +274,13 @@ def pick_workflow(
             positive=prompt,
             profile=profile,
             seed=seed_val,
-            denoise=float(task.get("sdxl_denoise", 0.45)),
-            steps=int(task.get("sdxl_steps", 28)),
+            denoise=float(task.get("sdxl_denoise", 0.85)),
+            steps=int(task.get("sdxl_steps", 32)),
+            cfg=float(task.get("sdxl_cfg", 7.0)),
+            sampler_name=str(task.get("sdxl_sampler", "dpmpp_2m")),
+            scheduler=str(task.get("sdxl_scheduler", "karras")),
+            grow_mask_by=int(task.get("sdxl_grow_mask_by", 16)),
+            ckpt_override=task.get("sdxl_ckpt"),
             filename_prefix=f"furniture_{furniture}_{operation}",
         )
         return WorkflowChoice(
