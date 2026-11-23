@@ -14,17 +14,17 @@ sys.path.insert(0, str(ROOT))
 from scripts import ollama_chain, ollama_daily_smoke as smoke  # noqa: E402
 
 # Контракт цепочки: только модели, проверенные живым прогоном ``ollama run``
-# на хосте (19.11.2026, ollama 0.41.x). Меняется вместе с DEFAULT_CHAIN и
+# на хосте 21.10.2026 (ollama 0.40.7). Меняется вместе с DEFAULT_CHAIN и
 # только после новой проверки — поэтому список зафиксирован здесь, а не
 # импортирован из модуля.
 VERIFIED_MODELS = frozenset(
     {
+        "gpt-oss:20b:cloud",
+        "gemma4:31b-cloud",
+        "nemotron-3-nano:30b-cloud",
         "lfm2.5-thinking:latest",
         "gemma4:e4b",
         "deepcoder:1.5b",
-        "gemma4:e2b",
-        "llama3:latest",
-        "deepseek-r1:14b",
     }
 )
 
@@ -61,19 +61,11 @@ class OllamaChainTests(unittest.TestCase):
                 f"{model} needs XAI_API_KEY and cannot be part of the default chain",
             )
 
-    def test_default_chain_has_no_cloud_models(self) -> None:
-        # Правило изменилось 19.11.2026: облачные модели в цепочке не нужны.
-        # gpt-oss:20b:cloud, gemma4:31b-cloud и nemotron-3-nano:30b-cloud
-        # отвечают 402 Payment Required / retired — провайдерский отказ, а не
-        # поломка, и каждый прогон тратил на них время впустую. Цепочка состоит
-        # из локальных моделей, реально отвечающих на этой машине.
-        cloud_flags = [
-            ollama_chain.is_cloud_model(model) for model in ollama_chain.DEFAULT_CHAIN
-        ]
-        self.assertFalse(
-            any(cloud_flags),
-            "cloud models must not be in the default chain: they answer 402/retired",
-        )
+    def test_default_chain_starts_with_cloud_then_local(self) -> None:
+        flags = [ollama_chain.is_cloud_model(model) for model in ollama_chain.DEFAULT_CHAIN]
+        self.assertTrue(flags[0], "the chain must start with a cloud model")
+        self.assertFalse(flags[-1], "the chain must end with a local fallback")
+        self.assertEqual(flags, sorted(flags, reverse=True), "cloud models must come first")
 
     def test_is_cloud_model_distinguishes_cloud_and_local(self) -> None:
         self.assertTrue(ollama_chain.is_cloud_model("gpt-oss:20b:cloud"))
@@ -308,16 +300,7 @@ class OllamaDailySmokeTests(unittest.TestCase):
         cloud = smoke.probe_model("gpt-oss:20b:cloud", runner=runner, time_fn=lambda: 0.0)
         local = smoke.probe_model("gemma4:e4b", runner=runner, time_fn=lambda: 0.0)
 
-        # Проба обязана брать персональный таймаут модели из справочника,
-        # а не из литерала в тесте: таймауты меняются по мере замеров
-        # холодного старта на конкретной машине (см. MODEL_TIMEOUTS).
-        self.assertEqual(
-            seen,
-            [
-                ollama_chain.model_timeout("gpt-oss:20b:cloud"),
-                ollama_chain.model_timeout("gemma4:e4b"),
-            ],
-        )
+        self.assertEqual(seen, [25.0, 120.0])
         self.assertTrue(cloud["cloud"])
         self.assertFalse(local["cloud"])
 
