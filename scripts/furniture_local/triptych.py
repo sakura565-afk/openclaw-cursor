@@ -20,22 +20,39 @@ _DIM = (170, 170, 180)
 _GOOD = (90, 210, 130)
 _BAD = (240, 100, 100)
 
-_FONT_CANDIDATES = (
-    r"C:\Windows\Fonts\segoeui.ttf",
-    r"C:\Windows\Fonts\arial.ttf",
-    r"C:\Windows\Fonts\tahoma.ttf",
-    "DejaVuSans.ttf",
-)
-_FONT_BOLD_CANDIDATES = (
-    r"C:\Windows\Fonts\segoeuib.ttf",
-    r"C:\Windows\Fonts\arialbd.ttf",
-    r"C:\Windows\Fonts\tahomabd.ttf",
-    "DejaVuSans-Bold.ttf",
-)
+def _font_dirs() -> list[str]:
+    """Каталоги системных шрифтов.
+
+    Абсолютный путь не зашит в исходник: берётся из окружения или из
+    системной папки Fonts текущей ОС — иначе guard-тест CI
+    (tests/test_no_absolute_paths.py) ломает сборку на других хостах.
+    """
+    dirs: list[str] = []
+    for var in ("SystemRoot", "WINDIR"):
+        root = os.environ.get(var)
+        if root:
+            dirs.append(os.path.join(root, "Fonts"))
+    dirs.append("/usr/share/fonts/truetype/dejavu")
+    dirs.append("/usr/share/fonts")
+    dirs.append("Fonts")
+    return dirs
+
+
+_FONT_NAMES = ("segoeui.ttf", "arial.ttf", "tahoma.ttf", "DejaVuSans.ttf")
+_FONT_BOLD_NAMES = ("segoeuib.ttf", "arialbd.ttf", "tahomabd.ttf", "DejaVuSans-Bold.ttf")
+
+
+def _font_candidates(bold: bool) -> list[str]:
+    names = _FONT_BOLD_NAMES if bold else _FONT_NAMES
+    out: list[str] = []
+    for d in _font_dirs():
+        for n in names:
+            out.append(os.path.join(d, n))
+    return out
 
 
 def _font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont:
-    paths = _FONT_BOLD_CANDIDATES if bold else _FONT_CANDIDATES
+    paths = _font_candidates(bold)
     for path in paths:
         if os.path.exists(path):
             try:

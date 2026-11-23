@@ -78,6 +78,30 @@ def _crop_mask_file(mask_path: Path, box: list[int], output_dir: Path) -> Path:
     return out
 
 
+def _build_region_mask(mask_path: Path, out_path: Path, dilate_px: int) -> Path:
+    """Сплошная область по обивке: точная маска + расширение + заливка дыр.
+
+    Нужна fill-моделям, когда со сплошной маской на весь кроп они
+    перерисовывают сцену целиком и сдвигают силуэт предмета: тогда
+    в маску попадает фон вместо ткани. Область по обивке держит генерацию
+    внутри ткани, а фон вокруг остаётся исходным.
+    """
+    import numpy as np
+    from PIL import Image, ImageFilter
+
+    from scipy import ndimage
+
+    with Image.open(mask_path) as im:
+        arr = np.asarray(im.convert("L"))
+    binary = arr > 127
+    if dilate_px > 0:
+        binary = ndimage.binary_dilation(binary, iterations=int(dilate_px))
+    filled = ndimage.binary_fill_holes(binary)
+    out = Image.fromarray((filled * 255).astype(np.uint8))
+    out.save(out_path)
+    return out_path
+
+
 def run_comfy_stage(
     task: dict[str, Any],
     reference_image: Path,
@@ -131,10 +155,6 @@ def run_comfy_stage(
         src_file = Path(info["ref"])
         mask_file = Path(info["mask"])
 
-        # СПЛОШНАЯ fill-маска на весь кроп: fill-модели нужна цельная область.
-        fill_file = output_dir / f"tile{idx}_fill.png"
-        Image.new("L", Image.open(src_file).size, 255).save(fill_file)
-
         src_name = f"furniture_{task_id}_ref{idx}.png"
         mask_name = f"furniture_{task_id}_mask{idx}.png"
         client.upload_image(src_file.read_bytes(), src_name)
@@ -147,16 +167,33 @@ def run_comfy_stage(
             positive=task.get("prompt"),
             seed=task.get("seed"),
         )
-        # Маска на генерацию выбирается явно:
+        # Маска на ГЕНЕРАЦИЮ выбирается явно:
         #   "solid"   — весь кроп белый. Нужно fill-моделям (Flux Fill) и,
         #                судя по замерам, SDXL-инпейнту с дробной маской:
         #                точные границы всё равно ставит paste-back.
+        #   "region"  — сплошная область ПО ОБИВКЕ: точная маска, расширенная
+        #                на gen_mask_dilate px и с залитыми внутренними дырами.
+        #                Нужно, когда fill-модель со сплошной маской на весь кроп
+        #                перерисовывает сцену и сдвигает силуэт предмета: тогда
+        #                в маску попадает фон вместо ткани (замерено на диване:
+        #                кромка спинки уехала на ~109 px, 19.5% маски стало
+        #                белым фоном). С областью обивки фон вокруг остаётся
+        #                исходным, а перекрашивается только ткань.
         #   "precise" — точная маска ткани (по умолчанию для SDXL).
         #   "auto"    — solid для fill-моделей, precise для остальных.
         gen_mode = str(task.get("gen_mask", "auto")).lower()
         if gen_mode == "auto":
             gen_mode = "solid" if choice.kind == "flux_fill_gguf" else "precise"
-        gen_mask = fill_file if gen_mode == "solid" else mask_file
+        if gen_mode == "region":
+            region_file = output_dir / f"tile{idx}_region.png"
+            _build_region_mask(mask_file, region_file, int(task.get("gen_mask_dilate", 24)))
+            gen_mask = region_file
+        elif gen_mode == "solid":
+            fill_file = output_dir / f"tile{idx}_fill.png"
+            Image.new("L", Image.open(src_file).size, 255).save(fill_file)
+            gen_mask = fill_file
+        else:
+            gen_mask = mask_file
         client.upload_image(Path(gen_mask).read_bytes(), mask_name)
         if idx == 0:
             (output_dir / "comfy_workflow_choice.json").write_text(
