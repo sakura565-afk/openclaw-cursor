@@ -154,3 +154,68 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv))
+
+def auto_detect_regions(
+    source: Path,
+    *,
+    band: tuple[float, float] = (0.35, 0.85),
+    lum_lo: float = 120.0,
+    lum_hi: float = 245.0,
+    sat_max: float = 0.30,
+    min_component_frac: float = 0.04,
+    min_hue_band_frac: float = 0.45,
+) -> dict:
+    """Автопоиск зоны обивки: крупнейшая связная область ткани в горизонтальной полосе.
+
+    Нужен, когда исходник меняется: bbox вручную не переносится, а обивка
+    всегда самая большая однотонная область в нижней-central части кадра.
+    Возвращает bbox в координатах кадра и параметры цветового отбора.
+    """
+    from PIL import Image as _Image
+
+    with _Image.open(source) as im:
+        rgb_im = im.convert("RGB")
+    a = np.asarray(rgb_im).astype(np.float32)
+    h, w, _ = a.shape
+    mx = a.max(axis=2)
+    mn = a.min(axis=2)
+    sat = np.where(mx > 0, (mx - mn) / np.maximum(mx, 1), 0)
+    lum = 0.299 * a[:, :, 0] + 0.587 * a[:, :, 1] + 0.114 * a[:, :, 2]
+
+    y0, y1 = int(h * band[0]), int(h * band[1])
+    sel = np.zeros((h, w), dtype=bool)
+    sel[y0:y1, :] = (lum[y0:y1] >= lum_lo) & (lum[y0:y1] <= lum_hi) & (sat[y0:y1] <= sat_max)
+
+    try:
+        from scipy import ndimage
+
+        lab, n = ndimage.label(sel)
+        if n:
+            sizes = ndimage.sum(sel, lab, range(1, n + 1))
+            best = int(np.argmax(sizes)) + 1
+            comp = lab == best
+            if sizes.max() >= min_component_frac * sel.size:
+                ys, xs = np.nonzero(comp)
+                return {
+                    "bbox": [int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1],
+                    "lum_lo": lum_lo,
+                    "lum_hi": lum_hi,
+                    "sat_max": sat_max,
+                    "coverage": round(float(sizes.max() / sel.size), 3),
+                    "method": "largest_component_in_band",
+                }
+    except ImportError:
+        pass
+
+    ys, xs = np.nonzero(sel)
+    if xs.size == 0:
+        raise ValueError(f"Не найдено зоны ткани в {source}")
+    return {
+        "bbox": [int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1],
+        "lum_lo": lum_lo,
+        "lum_hi": lum_hi,
+        "sat_max": sat_max,
+        "coverage": round(float(sel.sum() / sel.size), 3),
+        "method": "band_fallback",
+    }
+
