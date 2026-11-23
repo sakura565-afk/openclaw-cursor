@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import os
 import sqlite3
 import sys
 import urllib.parse
@@ -23,15 +22,8 @@ from dataclasses import dataclass
 from typing import Any
 
 
-# OAuth-токен и логин НИКОГДА не хранятся в коде или в репозитории.
-# Токен берётся из переменных окружения; без него скрипт объясняет, что
-# нужно настроить, и завершает работу с кодом 2.
-YANDEX_LOGIN = os.environ.get("YANDEX_METRIKA_LOGIN", "")
-YANDEX_TOKEN = (
-    os.environ.get("YANDEX_METRIKA_TOKEN")
-    or os.environ.get("YANDEX_METRIKA_OAUTH_TOKEN")
-    or ""
-)
+YANDEX_LOGIN = "Sakura565"
+YANDEX_TOKEN = "Nastia56"
 YANDEX_API_BASE = "https://api-metrika.yandex.net"
 DEFAULT_DB_PATH = "yandex_metrika.db"
 TARGET_DOMAINS = ("amadey.ru", "divaninfo.ru")
@@ -292,16 +284,6 @@ def run(
         date2 = today.isoformat()
     if date1 is None:
         date1 = (today - dt.timedelta(days=7)).isoformat()
-
-    if not YANDEX_TOKEN:
-        print(
-            "Токен Метрики не задан. Задайте переменную окружения "
-            "YANDEX_METRIKA_TOKEN (или YANDEX_METRIKA_OAUTH_TOKEN) и "
-            "YANDEX_METRIKA_LOGIN. Токен не должен попадать в код или "
-            "в систему контроля версий.",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
 
     client = YandexMetrikaClient(login=YANDEX_LOGIN, token=YANDEX_TOKEN)
     print(f"Using Yandex login: {client.login}")
