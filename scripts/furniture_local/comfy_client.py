@@ -281,6 +281,7 @@ def pick_workflow(
             scheduler=str(task.get("sdxl_scheduler", "karras")),
             grow_mask_by=int(task.get("sdxl_grow_mask_by", 16)),
             ckpt_override=task.get("sdxl_ckpt"),
+            negative=task.get("negative"),
             filename_prefix=f"furniture_{furniture}_{operation}",
         )
         return WorkflowChoice(

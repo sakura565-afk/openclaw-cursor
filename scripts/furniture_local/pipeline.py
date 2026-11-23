@@ -138,7 +138,6 @@ def run_comfy_stage(
         src_name = f"furniture_{task_id}_ref{idx}.png"
         mask_name = f"furniture_{task_id}_mask{idx}.png"
         client.upload_image(src_file.read_bytes(), src_name)
-        client.upload_image(fill_file.read_bytes(), mask_name)
 
         choice: WorkflowChoice = pick_workflow(
             task,
@@ -148,6 +147,10 @@ def run_comfy_stage(
             positive=task.get("prompt"),
             seed=task.get("seed"),
         )
+        # Маска на генерацию: сплошная для fill-моделей (Flux Fill), точная
+        # для SDXL-инпейнта — тот сам recolours внутри маски сам.
+        gen_mask = mask_file if choice.kind == "sdxl_inpaint" else fill_file
+        client.upload_image(Path(gen_mask).read_bytes(), mask_name)
         if idx == 0:
             (output_dir / "comfy_workflow_choice.json").write_text(
                 json.dumps(

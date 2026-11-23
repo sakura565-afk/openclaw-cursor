@@ -18,6 +18,15 @@ NEG_FURNITURE = (
     "wrong proportions, floating cushions"
 )
 
+# Negative для перекраски ткани (рецепт-эталон из ТЗ FURN-SRC-20261122).
+# Без слов "beige/grey/white" модель оставляет исходный бежевый цвет обивки —
+# замерено: SDXL Inpaint при denoise 0.85 дал B-R -17.2 вместо ожидаемого +40.
+NEG_RECOLOR = (
+    "glossy, shiny, plastic, leather, latex, grey, black, white, monochrome, "
+    "beige, tan, cream, floral print, pillows, blurry, distorted, watermark, "
+    "text, wooden legs, lowres"
+)
+
 
 def _qwen_edit_names(models: ModelBundle) -> tuple[str, str, str]:
     return (
@@ -100,6 +109,7 @@ def build_checkpoint_inpaint_graph(
     scheduler: str = "karras",
     grow_mask_by: int = 16,
     ckpt_override: str | None = None,
+    negative: str | None = None,
     filename_prefix: str = "furniture_sdxl_inpaint",
 ) -> dict[str, Any]:
     """Классический SDXL inpaint (Juggernaut XL Inpaint).
@@ -122,7 +132,10 @@ def build_checkpoint_inpaint_graph(
             "inputs": {"pixels": ["5", 0], "vae": ["1", 2], "mask": ["7", 0], "grow_mask_by": grow_mask_by},
         },
         "9": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["1", 1], "text": positive}},
-        "10": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["1", 1], "text": NEG_FURNITURE}},
+        "10": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"clip": ["1", 1], "text": negative or NEG_RECOLOR},
+        },
         "11": {
             "class_type": "KSampler",
             "inputs": {

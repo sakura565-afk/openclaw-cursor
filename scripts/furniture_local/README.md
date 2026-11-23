@@ -68,12 +68,83 @@ python -m scripts.furniture_local.pipeline task.json --qa-only -o out/
 
 | Задача | Движок |
 |--------|--------|
+| `workflow`: flux_fill | Flux Fill GGUF |
+| `workflow`: sdxl + `sdxl_ckpt` | SDXL inpaint checkpoint |
 | Смена обивки/цвета по умолчанию | `qwen_masked_inpaint` |
-| `operation`: texture, hardware или `workflow`: flux_fill | Flux Fill GGUF |
-| M2 + `workflow`: juggernaut / color | SDXL inpaint checkpoint |
+| `operation`: texture, hardware | Flux Fill GGUF |
 | JSON в `comfyui_workflows/` (klein/face) | Только при явном `workflow: flux_klein_*` (не для мебели) |
 
 Графы собираются в `workflow_builders.py` (API-формат), по аналогии с `scripts/qwen_masked_fix.py`.
+
+## Рабочий рецепт (проверен на реальных фото)
+
+Метрика ниже — B-R (blue minus red) в среднем по маске ткани: бежевая обивка ≈ −29, тёмно-синяя ≈ +40.
+
+| Схема | Результат | Время |
+|---|---|---|
+| кроп 768×768 + **сплошная** маска | B-R **+41.7** — перекрасило | 30 с |
+| кроп 768×768 + дробная маска | B-R −12.0 — осталось бежевым | 27 с |
+| полный кадр 1264×848 + маска-полоса | B-R −16.9 — осталось бежевым | 300 с |
+
+**Fill-модель перекрашивает только при сплошной большой маске.** Точные границы
+обеспечивает не она, а paste-back по отдельной точной маске.
+
+Порядок работы конвейера (`pipeline.py`):
+
+1. `prepare_assets.py` — кроп 768×768 (нативно, без апскейла) + **точная** маска
+   ткани по цвету (`upholstery_mask.py`: низкая насыщенность + тёплый тон +
+   диапазон яркости, с отбрасыванием мелких компонент) + **сплошная** fill-маска.
+2. Рендер каждого тайла: в ComfyUI уходит сплошная маска (для Flux Fill).
+   SDXL-инпейнт получает точную маску — он перекрашивает внутри маски сам.
+3. `paste_back.py` — сгенерированное вклеивается обратно по **точной** маске
+   внутри кропа. Подушки, ножки, мрамор и стол остаются оригинальными.
+4. `restore_crop` — тайлы возвращаются в полный кадр.
+5. QA по полному кадру + триптих «вход | что делаем | выход» (`triptych.py`).
+
+Если область шире 768 px (диван 955 px), `compute_tiles` режет её на
+перекрывающиеся тайлы 768×768 — по одному кропу не покрыть.
+
+```json
+{
+  "id": "sofa_navy",
+  "reference_image": "sofa_beige_source.jpg",
+  "prompt": "a modern L-shaped sectional sofa upholstered in deep navy midnight blue velvet, matte dense pile with visible nap",
+  "mask": {"file": "sofa_precise_full.png"},
+  "crop": {"target": 768, "bbox": [150, 445, 1105, 618], "overlap": 96},
+  "seed": 11,
+  "workflow": "flux_fill",
+  "flux_denoise": 1.0, "flux_cfg": 3.5, "flux_steps": 20
+}
+```
+
+### Эталон SDXL (рецепт из ТЗ FURN-SRC-20261122)
+
+```json
+"workflow": "sdxl",
+"sdxl_ckpt": "juggernautXL_versionXInpaint.safetensors",
+"sdxl_denoise": 0.85, "sdxl_cfg": 7.0, "sdxl_steps": 32,
+"sdxl_sampler": "dpmpp_2m", "sdxl_scheduler": "karras", "sdxl_grow_mask_by": 16
+```
+
+### Пороги приёмки под тип задачи
+
+Для смены обивки дефолтные пороги дают ложный FAIL: намеренная смена цвета
+сдвигает Lab на 70–90 (дефолт `max_inside_lab_shift` = 18), а новая фактура
+ткани даёт корреляцию градиентов ~0.15 (дефолт `min_gradient_correlation` = 0.55).
+Поднимайте `max_inside_lab_shift`, опускайте `min_gradient_correlation`,
+`max_outside_change_fraction` держите строгим — это настоящая проверка силуэта
+(после paste-back вне маски меняется 0 пикселей).
+
+## Машины
+
+| Профиль | ComfyUI |
+|---|---|
+| `local` / `m1` | `http://127.0.0.1:8188` (RTX 4070 Ti SUPER 16 ГБ) |
+| `m2` | `https://desktop-6ecjbt6.tailcaa609.ts.net/comfy` (RTX 3060 12 ГБ, tailscale serve) |
+
+На M2 нет нод `InpaintConditionEncode` / `InpaintConditionApply` (в сборке
+0.45.3 они называются `InpaintModelConditioning`), поэтому Flux Fill там
+не перекрашивает — используйте SDXL-рецепт.
 
 ## Приёмка (QA)
 
