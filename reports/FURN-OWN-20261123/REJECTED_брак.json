@@ -1,0 +1,91 @@
+{
+  "status": "REJECTED",
+  "verdict": "БРАК",
+  "decided_at": "2026-11-24 09:08",
+  "decided_by": "владелец задачи",
+  "summary": "Артефакты при генерации в виде полос старой обивки и пятен остались. Брак.",
+  "owner_statement": "Артефакта при генерации в виде полос старой обивки и пятен остались. Брак. Запиши как неудачу и стоп.",
+  "task": "FURN-OWN-20261123 — перекраска серо-таупового дивана в глубокий винно-бордовый бархат",
+  "source": {
+    "file": "E:/tmp/furn_new/sofa_grey_chaise_source.jpg",
+    "format": "JPEG 1280x960",
+    "exif": "отсутствует",
+    "blockiness": 15.31,
+    "note": "исходник принят владельцем, претензия не к нему"
+  },
+  "etalon": {
+    "file": "C:/Users/user/furniture_runs/FURN-SRC-20261122/example_inpaint_result.png",
+    "median_rgb": [
+      72,
+      26,
+      44
+    ],
+    "note": "использовался только как цветовой/material reference, геометрия чужого предмета"
+  },
+  "method": "детерминированная перекраска в Lab (кривая по медианному RGB эталона + модель блика бархата), БЕЗ генерации; маска обивки по текстуре/теплоте оттенка/сатигурации",
+  "rejected_results": {
+    "FURN-OWN-20261123/FINAL_burgundy.png": "полосы старой обивки и пятна — дефект, видимый владельцем",
+    "FURN-OWN-20261123/RES_v91.png": "то же (предыдущий кандидат)",
+    "FURN-OWN-20261123/triptych_input_description_output.png": "триптих с тем же дефектом",
+    "FURN-OWN-20261123/REFERENCE_vs_RESULT.png": "коллаж с тем же дефектом"
+  },
+  "root_cause": {
+    "summary": "Остаточные артефакты в виде полос старой обивки и пятен на перекрашенной обивке.",
+    "owner_statement": "Артефакта при генерации в виде полос старой обивки и пятен остались.",
+    "what_was_fixed_before_rejection": [
+      "нижняя граница светлой подушки: y=553 -> y=600 (бордо лежало на подушке 1004 px); подтверждено контактной тенью y=601..605 и hue/sat материала",
+      "край пледа: порог по локальной текстуре tex>=16 вместо frac8 (frac8 брал окно 8x8 и захватывал гладкую обивку, 153 px уходили в protect)",
+      "правило «солнечная обивка» перенесено ПОСЛЕ фильтра компонент >=400 px (полоса 153 px выбрасывалась как мусор)",
+      "низ дивана: запрет с y=782 -> y=792; 47 px бордо в левом нижнем углу подушки"
+    ],
+    "why_numeric_qa_missed_it": "Метрики считались по маске обивки (серых остатков 0 px, бордо на protect 0 px, ступенчатость 1.0%) и по картам материалов, но не по тому, что видит глаз на самой перекрашенной ткани. Полосы и пятна — на самой обивке, поэтому в счётчики не попали."
+  },
+  "measured_metrics_at_rejection": {
+    "burgundy_on_protected_objects_px": 0,
+    "burgundy_on_real_knit_px": 39,
+    "burgundy_on_real_knit_note": "швы обивки, tex 64..65 в линии шириной 1 px",
+    "grey_remnants_in_upholstery_mask_px": 0,
+    "contour_staircase_pct": 1.0,
+    "result_median_rgb": [
+      83,
+      31,
+      45
+    ],
+    "result_hue_deg": 343.4,
+    "result_sat_p50": 0.63,
+    "changed_outside_mask_px": 4536,
+    "changed_outside_mask_note": "1-пиксельная полоса сглаживания"
+  },
+  "generative_path_comparison": {
+    "note": "12 генеративных прогонов Flux/SDXL (очередь от 23.11) на вашей маске обивки — все хуже, но их PASS считался по чужой маске prep/sofa_precise_full.png",
+    "flux": {
+      "grey_remnants_px": 33178,
+      "changed_outside_mask_px": 31258,
+      "burgundy_on_pillows_px": 5742
+    },
+    "sdxl": {
+      "grey_remnants_px": 96676,
+      "changed_outside_mask_px": 28314,
+      "burgundy_on_pillows_px": 5495
+    },
+    "deterministic": {
+      "grey_remnants_px": 0,
+      "changed_outside_mask_px": 4536,
+      "burgundy_on_pillows_px": 0
+    }
+  },
+  "kept_as_tooling": [
+    "scripts/furniture_local/sofa_mask.py — маска обивки, защита пледа и подушек, субпиксельный край (commit c7131d3)",
+    "scripts/furniture_local/sofa_render.py — перекраска в Lab по эталону + блик бархата",
+    "scripts/furniture_local/velvet_recolor.py — консолидированная перекраска",
+    "scripts/furniture_local/triptych.py — триптич ВХОД | ЧТО ДЕЛАЕМ | ВЫХОД",
+    "tests/test_furniture_local_sofa_mask.py — 12 unit-тестов",
+    "уроки: skill comfyui -> references/deterministic-upholstery-recolor.md"
+  ],
+  "lesson": {
+    "summary": "Технические метрики по маске обивки не заменяют визуальную приёмку: полосы и пятна были на самой перекрашенной ткани и в счётчики не попадали.",
+    "also": "Vision на кропах 3-5x галлюцинирует (путает подушку с обивкой, выдумывает кота) — решения о границах принимать по численным профилям, вердикт Vision проверять попиксельно."
+  },
+  "stopped": true,
+  "stopped_note": "Работа по задаче прекращена по решению владельца. Активных процессов нет, фоновые прогоны очереди завершены, task-файлы старого пути удалены."
+}
